@@ -15,7 +15,7 @@ services:
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_MODEL
-        value: gemini-2.5-flash
+        value: gemini-flash-latest
       - key: GEMINI_EMBEDDING_MODEL
         value: gemini-embedding-001
       - key: NOTION_TOKEN
