@@ -1,0 +1,40 @@
+# Render Blueprint — free-tier web service for ReelBrain.
+# Values for the env vars are NOT stored here (this file is committed) — paste
+# them into the Render dashboard; see DEPLOYMENT.md for the click-by-click steps.
+services:
+  - type: web
+    name: reelbrain
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.0"
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: GEMINI_EMBEDDING_MODEL
+        value: gemini-embedding-001
+      - key: NOTION_TOKEN
+        sync: false
+      - key: NOTION_DB_ID
+        sync: false
+      - key: NOTION_CREATORS_DB_ID
+        sync: false
+      - key: BURNER_COOKIES_FILE
+        value: ./cookies.txt
+      - key: BURNER_ACCOUNT_USERNAME
+        sync: false
+      - key: REAL_ACCOUNT_GUARD
+        sync: false
+      - key: CAPTURE_SECRET
+        sync: false
+      - key: DB_PATH
+        value: ./data/reelbrain.db
+      - key: MAX_FETCHES_PER_DAY
+        value: "25"
+      - key: MIN_FETCH_SPACING_SECONDS
+        value: "20"

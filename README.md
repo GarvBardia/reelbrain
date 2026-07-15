@@ -1,0 +1,304 @@
+# ReelBrain
+
+Instagram Reel → Notion knowledge-base capture pipeline, ₹0/month. Share a reel from the
+iOS share sheet → backend fetches it (yt-dlp + burner cookies), one Gemini free-tier call
+transcribes + extracts structured takeaways, and a Notion page appears with the main
+point, steps, quotes, transcript, topic tags, related-saves links, and comment-gate
+handling. Notion is the whole UI. Design docs: `BUILD_SPEC.md`, `CLAUDE.md`,
+`DATA_SCHEMA.md`, `OPEN_QUESTIONS.md`.
+
+- **Phase 1:** `/capture`, `/retry`, fetch → transcribe+extract → Notion page, all fail-soft.
+- **Phase 2:** iOS Shortcuts, `/attach` (comment-gate loop), nightly cleanup (`/nightly` + script).
+- **Phase 3:** embeddings (sqlite-vec) + near-dup detection + related-saves, low-signal
+  filter, creator "Core source" flag.
+- **Ops:** `/health`, `/ping` keep-alive, rate limiting, `render.yaml` — see
+  `DEPLOYMENT.md` (Render setup) and `SCHEDULING.md` (keep-alive + nightly cron).
+
+## Quickstart
+
+```bash
+# 1. install (Python 3.12; ffmpeg must be on PATH)
+python -m venv .venv && source .venv/bin/activate   # .venv\Scripts\activate on Windows
+pip install -r requirements.txt
+
+# 2. configure
+cp .env.example .env    # then fill it in — see "Configure" below
+
+# 3. create the Notion databases (one-time)
+python scripts/setup_notion.py    # paste the two printed IDs into .env
+
+# 4. run
+uvicorn app.main:app --reload
+
+# 5. capture a reel
+curl -X POST http://localhost:8000/capture \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://www.instagram.com/reel/XXXXXXXX/", "note": null, "secret": "<CAPTURE_SECRET>"}'
+```
+
+Everything in `scripts/` works both as `python scripts/x.py` (preferred, used throughout
+these docs) and `python -m scripts.x` — each script bootstraps `sys.path` itself.
+
+**Models:** defaults are `gemini-2.5-flash` (extraction+transcription) and
+`gemini-embedding-001` pinned to 768-dim output (embeddings) — both free-tier, both
+overridable via `GEMINI_MODEL` / `GEMINI_EMBEDDING_MODEL`. These defaults exist because
+the originally-specced models died in practice: see Troubleshooting.
+
+**Notion API:** `app/notion_writer.py` and the setup scripts target the 2025-09-03+
+"data source" API (databases wrap data sources; pages are created under a
+`data_source_id`, never a `database_id`; new DBs use the `initial_data_source` wrapper).
+notion-client is pinned accordingly in requirements.txt.
+
+**Deploying:** point Render at the repo — `render.yaml` does the rest. Click-by-click
+steps, env-var placement, burner-cookie handling, and the SQLite-ephemeral-disk
+tradeoffs are all in `DEPLOYMENT.md`.
+
+## Validate yt-dlp first (before anything else)
+
+Confirm the burner account works at all (OPEN_QUESTIONS.md item 1):
+
+```bash
+yt-dlp --cookies cookies.txt --dump-json <a_real_reel_url>
+```
+
+Try 3 reels. If it works locally but fails after deploying, that's an IG datacenter-IP
+block — see `BUILD_SPEC.md` §1.2 fallbacks.
+
+## Configure
+
+- **Gemini:** free API key at aistudio.google.com → `GEMINI_API_KEY`.
+- **Notion:** internal integration at notion.so/my-integrations → `NOTION_TOKEN`. Share a
+  parent page with the integration, put its ID in `NOTION_PARENT_PAGE_ID`, run the setup
+  script, paste `NOTION_DB_ID` / `NOTION_CREATORS_DB_ID` back into `.env`.
+- **Burner account:** export `cookies.txt` (cookies.txt browser extension) →
+  `BURNER_COOKIES_FILE`. Set `BURNER_ACCOUNT_USERNAME` (burner) and `REAL_ACCOUNT_GUARD`
+  (your REAL username) — the app refuses to fetch if they ever match.
+- **Capture secret:** any string → `CAPTURE_SECRET`; the iOS Shortcut sends it back.
+
+## Test
+
+```bash
+pytest
+```
+
+Fully mocked — no network, no API keys needed. Live end-to-end run (real APIs):
+
+```bash
+python scripts/smoke.py https://www.instagram.com/reel/XXXXXXXX/
+```
+
+To re-run a smoke test cleanly, delete the Notion page by hand, then
+`python scripts/delete_row.py <shortcode>`.
+
+## Troubleshooting — errors we actually hit, and their fixes
+
+| Error | Cause | Fix |
+|---|---|---|
+| `ModuleNotFoundError: No module named 'app'` running a script | script run from outside repo root, or an old checkout without the sys.path bootstrap | run from repo root; both `python scripts/x.py` and `python -m scripts.x` work now |
+| `FileNotFoundError: [WinError 2]` during extraction | ffmpeg not installed / not on PATH | install ffmpeg (`winget install ffmpeg` / `brew install ffmpeg`), reopen the shell |
+| Gemini `429 RESOURCE_EXHAUSTED` immediately, on the very first call | `gemini-2.0-flash` no longer reliably on the free tier | default moved to `gemini-2.5-flash`; override via `GEMINI_MODEL` |
+| Gemini `404 NOT_FOUND: models/text-embedding-004` | Google shut that model down Jan 14, 2026 | default moved to `gemini-embedding-001` with `output_dimensionality=768` (keeps the existing FLOAT[768] sqlite-vec schema) |
+| Notion `body failed validation: body.properties should be defined` (or data_source errors) | Notion's 2025-09-03 API split databases into data sources | code migrated: pages are created under `data_source_id`, DBs created with `initial_data_source` — pinned notion-client handles it |
+| `sqlite_vec: false` in `/health` | sqlite-vec extension failed to load in that environment | captures still work; embeddings/related-saves silently disabled — check install logs for the `sqlite-vec unavailable` warning |
+
+## Phase 1 acceptance check
+
+Paste 3 real reel URLs (1 comment-gated, ideally 1 music-only) through `/capture`:
+- Each produces a correct Notion page within ~90s.
+- Pasting a duplicate URL returns `{"status": "duplicate"}` with the existing page's URL
+  instead of re-processing.
+- Killing the fetch/Gemini step mid-run still produces a Notion page with status
+  `⚠️ Failed — retry`, never a dropped capture.
+- The music-only reel gets an honest "no speech detected" entry, not invented takeaways.
+
+Retry a failed row:
+```bash
+curl -X POST http://localhost:8000/retry/<shortcode>
+```
+
+Attach a DM'd resource to a gated row (see Phase 2 below):
+```bash
+curl -X POST http://localhost:8000/attach \
+  -H "Content-Type: application/json" \
+  -d '{"shortcode_or_note": null, "resource_url": "https://instagram.com/direct/t/...", "secret": "change-me"}'
+```
+
+## Phase 2 acceptance check
+
+- Sharing a comment-gated reel, waiting for the pipeline to finish, then re-sharing the
+  same link returns `capture_status: "awaiting_dm"` and the real `gate_keyword`.
+- `/attach`-ing a DM'd link flips that entry to `📥 Inbox` in Notion and records the link
+  under **Gate resource**; the SQLite row shows `status: "done"`.
+- Manually backdating a `processing` row's `updated_at` by >1h and running
+  `scripts/run_nightly.py` flips it to `⚠️ Failed — retry` (and creates a Notion page for
+  it if one somehow never existed). Backdating an `awaiting_dm` row by >7 days flips it to
+  `🕳 Gate expired`.
+- A row just reset via `/retry` is *not* touched by the nightly job even if its original
+  `created_at` is old.
+
+## Phase 3 acceptance check
+
+- Saving two similar reels back to back: the second gets a **Related** relation to the
+  first in Notion (visible on both pages — it's a two-way relation).
+- Saving a near-duplicate (basically the same takeaway restated) tags the entry
+  `near-duplicate` in **Topics**, in addition to the Related relation.
+- A reel Gemini scores `value_score <= 2` (and isn't comment-gated) lands in
+  `🗑 Low signal`, not `📥 Inbox`.
+- A low-value *and* comment-gated reel still lands in `⏳ Awaiting DM` — the gate takes
+  priority, since you still need to act on (or knowingly skip) it.
+- After your 5th save from the same creator, that creator's row in the Creators DB gets
+  **Core source** checked.
+- Pulling your Gemini API key or hitting a quota error doesn't break capture — the reel
+  still saves normally, just without a Related relation or near-dup tag for that one.
+
+## Deploying (Render free tier)
+
+See **DEPLOYMENT.md** for the full click-by-click setup (`render.yaml` Blueprint, env-var
+placement, burner cookies via Secret Files, SQLite persistence tradeoffs) and
+**SCHEDULING.md** for the keep-alive ping + nightly cron recipes. Expect ~30-50s cold
+starts after ~15min idle unless the keep-alive is on — acceptable at <20 captures/day.
+
+## Phase 2 — iOS Shortcuts, comment-gate assist, nightly cleanup
+
+### Shortcut 1: "Save to ReelBrain" (BUILD_SPEC §2.1)
+
+Trigger: Share Sheet, accepts URLs and Instagram's share text.
+
+1. **Receive input** from Share Sheet (`Reel`, `URL`, or `Instagram` as accepted types).
+2. **Get URLs from Input** — pulls the link out whether you shared a raw URL or IG's
+   share-text blob (e.g. "Check this out! https://instagram.com/reel/XXXX/?igsh=...").
+3. **Get Contents of URL**:
+   - Method: `POST`
+   - URL: `https://<your-render-app>/capture`
+   - Headers: `Content-Type: application/json`
+   - Request body (JSON): `{"url": <the URL from step 2>, "note": null, "secret": "<CAPTURE_SECRET>"}`
+4. **Get Dictionary from Input** on the response, then **Show Notification** with a
+   text built from the dictionary's `status` field:
+   - `processing` → "Saving reel..." (fetch+extraction is still running in the background)
+   - `duplicate` → "Already saved" — see the comment-gate assist step below for what
+     else this response carries once the pipeline has finished.
+
+Optionally add a "Note" text-entry step before the API call and pass its value instead
+of `null`, if you want to attach a quick note at capture time.
+
+### Comment-gate assist (BUILD_SPEC §2.2)
+
+`/capture` responds in under a second (`202 processing`) — long before fetch+extraction
+(which can take up to ~90s) has actually figured out whether the reel is comment-gated.
+So there's no keyword to show on the *first* share. Instead:
+
+- **Re-share the same link** (same Shortcut, same Share Sheet action) once you'd expect
+  the pipeline to have finished — that hits `/capture`'s dedupe path, which now returns:
+  ```json
+  {
+    "status": "duplicate",
+    "url": "<notion page url>",
+    "capture_status": "awaiting_dm",
+    "gate_keyword": "SEND",
+    "permalink": "https://www.instagram.com/reel/XXXX/"
+  }
+  ```
+- Extend the Shortcut: if `capture_status == "awaiting_dm"`, **Copy to Clipboard** the
+  `gate_keyword`, then show a notification with an **Open reel** button that opens
+  `permalink` (deep-links into the Instagram app if it's installed) — comment the
+  keyword (already on your clipboard) and wait for the creator's DM.
+- If `capture_status` is anything else (`done`, `failed`, etc.), just show that instead.
+
+### Shortcut 2: "Attach to ReelBrain" (BUILD_SPEC §2.2)
+
+For once the creator's DM arrives with the promised link. Trigger: Share Sheet from the
+Instagram DM (or Messages/any app), accepting URLs.
+
+1. **Get URLs from Input.**
+2. **Get Contents of URL**:
+   - Method: `POST`
+   - URL: `https://<your-render-app>/attach`
+   - Headers: `Content-Type: application/json`
+   - Request body (JSON): `{"shortcode_or_note": null, "resource_url": <the URL from step 1>, "secret": "<CAPTURE_SECRET>"}`
+   - Leaving `shortcode_or_note` as `null` matches the most-recently-gated entry — fine
+     if you only ever have one reel waiting on a DM at a time. If you might have several,
+     add a text-entry step asking for a word from the original caption/note and pass that
+     instead (matched as a substring against the note you attached at capture time).
+3. **Show Notification** confirming `{"status": "attached", ...}` (or the 404 if nothing
+   matched — check the Notion "Awaiting DM" view for what's actually still pending).
+
+Successfully attaching flips the entry `⏳ Awaiting DM → 📥 Inbox` and records the DM'd
+link on the Notion page's **Gate resource** field.
+
+### Nightly cleanup job (BUILD_SPEC §2.3)
+
+`scripts/run_nightly.py` marks rows stuck in `processing` for over an hour as failed, and
+expires `Awaiting DM` rows nobody ever attached a resource to after 7 days — both still
+get a Notion status update, never a silent drop:
+
+```bash
+python scripts/run_nightly.py
+```
+
+Schedule it once a day, however's easiest for you:
+- **Render Cron Job** (separate from the web service) running the same command against
+  the same env vars.
+- **GitHub Actions** on a `schedule:` cron trigger, checking out the repo and running the
+  script (needs the same secrets configured as repo secrets).
+- A plain OS cron entry / Task Scheduler job if you'd rather run it from your own machine.
+
+## Phase 3 — embeddings, near-dup, related saves, low-signal filter, Core source
+
+All of this happens automatically inside the existing `/capture` → `run_pipeline` flow —
+nothing new to trigger by hand.
+
+### Embeddings + near-duplicate + related saves (BUILD_SPEC §3.1)
+
+After extraction, `main_point + "\n" + joined(supporting_points)` gets embedded via
+Gemini's embedding free tier (768-dim, `GEMINI_EMBEDDING_MODEL` in `.env`) and stored in
+a `sqlite-vec` virtual table keyed by shortcode. Before storing the new save's own vector,
+it's used to look up nearest neighbors:
+
+- **Top-3 neighbors with cosine similarity > 0.75** become a two-way **Related** relation
+  in Notion (it's a `dual_property` self-relation — set it on the new page and Notion
+  automatically shows the reverse link on the older page too, no extra write needed).
+- **If the single nearest neighbor is > 0.92 similar**, the save is also tagged
+  `near-duplicate` in Topics — still saved in full, just flagged.
+- This is an enhancement, not the critical path: a quota error, network failure, or
+  sqlite-vec being unavailable in some environment just skips embeddings for that row
+  (logged as a warning) — capture still succeeds normally.
+- A neighbor that never got its own Notion page (e.g. it failed outright) is silently
+  excluded from Related rather than producing a broken relation reference.
+
+### Tag taxonomy convergence (BUILD_SPEC §3.2)
+
+Already fully wired since Phase 1 — every extraction call injects the top-40 most-used
+tags from SQLite (`store.get_taxonomy()`) as preferred candidates, so the taxonomy
+naturally converges as you save more. Nothing new needed for Phase 3 here.
+
+### Low-signal filter + Core source (BUILD_SPEC §3.3)
+
+- `value_score <= 2` (and not comment-gated) → status `🗑 Low signal` instead of
+  `📥 Inbox`. A comment-gated reel always lands in `⏳ Awaiting DM` regardless of its
+  value score — the gate is a required action, not a triage signal.
+- Once a creator has **5 or more saves**, their row in the Creators DB gets **Core
+  source** checked. This only ever gets set, never unset (nothing in this system deletes
+  saves, so the count only grows).
+
+## Repo layout
+
+```
+app/main.py               FastAPI: /capture /retry /attach /nightly /ping /health
+app/fetcher.py            yt-dlp burner fetch + safety caps
+app/gemini_pipe.py        audio+caption -> Gemini -> validated JSON (transcript + extraction)
+app/notion_writer.py      Notion page creation/update (data_source_id API)
+app/store.py              SQLite: saves, tags, embeddings (sqlite-vec), dedupe, rate counter
+app/nightly.py            stuck-row + expired-gate cleanup
+app/digest.py             weekly digest: group, render markdown, Notion page
+app/models.py             pydantic schemas (strict request models)
+prompts/extraction.md     system prompt (versioned, editable)
+scripts/setup_notion.py   one-time Notion DB creation
+scripts/smoke.py          live end-to-end smoke test
+scripts/delete_row.py     remove a local row so a smoke test can re-run
+scripts/run_nightly.py    runs the nightly cleanup once (same code as POST /nightly)
+scripts/weekly_digest.py  builds + posts the weekly digest
+tests/                    unit + integration tests (fully mocked, no network)
+render.yaml               Render free-tier Blueprint
+DEPLOYMENT.md             Render setup, click by click
+SCHEDULING.md             keep-alive ping + nightly cron recipes
+```
