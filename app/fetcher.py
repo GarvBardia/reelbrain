@@ -17,9 +17,9 @@ from app.models import ReelData
 
 MAX_FETCHES_PER_DAY = int(os.environ.get("MAX_FETCHES_PER_DAY", "25"))
 MIN_FETCH_SPACING_SECONDS = int(os.environ.get("MIN_FETCH_SPACING_SECONDS", "20"))
-BURNER_COOKIES_FILE = os.environ.get("BURNER_COOKIES_FILE", "./cookies.txt")
-BURNER_ACCOUNT_USERNAME = os.environ.get("BURNER_ACCOUNT_USERNAME", "")
-REAL_ACCOUNT_GUARD = os.environ.get("REAL_ACCOUNT_GUARD", "")
+BURNER_COOKIES_FILE = os.environ.get("BURNER_COOKIES_FILE", "./cookies.txt").strip()
+BURNER_ACCOUNT_USERNAME = os.environ.get("BURNER_ACCOUNT_USERNAME", "").strip()
+REAL_ACCOUNT_GUARD = os.environ.get("REAL_ACCOUNT_GUARD", "").strip()
 
 BACKOFF_SECONDS = [20, 40, 80]  # bounded — never an unbounded retry loop
 

@@ -13,16 +13,16 @@ from pydantic import ValidationError
 from app.fetcher import detect_comment_gate
 from app.models import Extraction, ReelData, degraded_extraction
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 # gemini-2.0-flash is no longer reliably on the free tier (returns immediate 429s).
 # The current free-tier lineup is the Gemini 2.5 family — 2.5-flash is the direct
 # fast/cheap replacement. Override via GEMINI_MODEL env var if needed.
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest").strip()
 # text-embedding-004 was shut down by Google on Jan 14, 2026 — gemini-embedding-001
 # is the replacement. It defaults to 3072-dim output; we pin it to 768 via
 # output_dimensionality so it stays compatible with the existing sqlite-vec schema
 # (DATA_SCHEMA.md §4, FLOAT[768]) without needing a storage migration.
-GEMINI_EMBEDDING_MODEL = os.environ.get("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001")
+GEMINI_EMBEDDING_MODEL = os.environ.get("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001").strip()
 GEMINI_EMBEDDING_DIM = 768
 PROMPT_TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "prompts" / "extraction.md"
 

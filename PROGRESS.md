@@ -1,5 +1,36 @@
 # PROGRESS.md — hardening/deployment session log
 
+## HOTFIX — env-var whitespace stripping (Render trailing-newline token bug)
+
+**Symptom:** Notion API calls on Render died with
+`httpx.LocalProtocolError: Illegal header value ...\n` — the `NOTION_TOKEN` pasted into the
+Render dashboard carried a trailing newline, which is illegal inside an HTTP
+Authorization header.
+
+**Fix:** every env var read as a credential / ID / username / URL / path is now `.strip()`-ed
+at read time, so pasting is forgiving:
+- `app/notion_writer.py`: `NOTION_TOKEN`, `NOTION_DB_ID`, `NOTION_CREATORS_DB_ID`
+- `app/gemini_pipe.py`: `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_EMBEDDING_MODEL`
+- `app/main.py`: `CAPTURE_SECRET` — stripped at read **and** the inbound request secret is
+  stripped in `_check_secret` before the constant-time compare, so a stored-stripped value
+  still matches a request whose secret has stray whitespace.
+- `app/fetcher.py`: `BURNER_COOKIES_FILE`, `BURNER_ACCOUNT_USERNAME`, `REAL_ACCOUNT_GUARD`
+- `app/store.py`: `DB_PATH`
+- `app/digest.py`: `NOTION_PARENT_PAGE_ID`
+- `scripts/setup_notion.py`, `scripts/setup_notion_saves_only.py`: `NOTION_TOKEN`,
+  `NOTION_PARENT_PAGE_ID`, `NOTION_CREATORS_DB_ID`
+- Numeric config (`MAX_FETCHES_PER_DAY`, `MIN_FETCH_SPACING_SECONDS`, `PORT`) left as-is —
+  already wrapped in `int()`, which tolerates surrounding whitespace.
+
+**Test:** `tests/test_env_stripping.py` — sets env vars with trailing `\n`/`\r\n`/leading
+spaces, reloads the module, asserts stripped; covers `NOTION_TOKEN` (+ the two Notion IDs),
+`CAPTURE_SECRET` (including that a whitespace-carrying inbound secret still matches), and
+`GEMINI_API_KEY`. Full suite: **96 passed** (was 93). No live calls.
+
+**Deploy:** committed and pushed to `main`; Render auto-redeploys from the push.
+
+---
+
 ## FINAL SUMMARY
 
 **Tasks: 8 of 8 completed, none skipped. Tests: 93 passed, 0 failed, 1 warning**

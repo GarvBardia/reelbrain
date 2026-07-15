@@ -12,9 +12,12 @@ from typing import Optional
 
 from app.models import Extraction, ReelData
 
-NOTION_TOKEN = os.environ.get("NOTION_TOKEN", "")
-NOTION_DB_ID = os.environ.get("NOTION_DB_ID", "")
-NOTION_CREATORS_DB_ID = os.environ.get("NOTION_CREATORS_DB_ID", "")
+# .strip(): env values pasted into a hosting dashboard often carry a trailing
+# newline, which makes an illegal HTTP header value (httpx.LocalProtocolError)
+# when the token goes into an Authorization header. Strip every credential/ID.
+NOTION_TOKEN = os.environ.get("NOTION_TOKEN", "").strip()
+NOTION_DB_ID = os.environ.get("NOTION_DB_ID", "").strip()
+NOTION_CREATORS_DB_ID = os.environ.get("NOTION_CREATORS_DB_ID", "").strip()
 
 STATUS_LABELS = {
     "done": "📥 Inbox",

@@ -12,7 +12,7 @@ from typing import Iterator, Optional
 
 logger = logging.getLogger("reelbrain.store")
 
-DB_PATH = os.environ.get("DB_PATH", "./data/reelbrain.db")
+DB_PATH = os.environ.get("DB_PATH", "./data/reelbrain.db").strip()
 EMBEDDING_DIM = 768  # Gemini embedding free tier, per DATA_SCHEMA.md §4
 
 SCHEMA = """

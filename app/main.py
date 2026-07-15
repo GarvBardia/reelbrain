@@ -22,7 +22,7 @@ from app.models import AttachRequest, CaptureRequest, Extraction, NightlyRequest
 logger = logging.getLogger("reelbrain")
 logging.basicConfig(level=logging.INFO)
 
-CAPTURE_SECRET = os.environ.get("CAPTURE_SECRET", "")
+CAPTURE_SECRET = os.environ.get("CAPTURE_SECRET", "").strip()
 
 # BUILD_SPEC 3.1 / 3.3 thresholds
 NEAR_DUP_SIMILARITY = 0.92
@@ -74,7 +74,10 @@ def health() -> dict:
 
 def _check_secret(secret: str) -> None:
     # hmac.compare_digest = constant-time comparison (no timing side channel).
-    if not CAPTURE_SECRET or not hmac.compare_digest(secret, CAPTURE_SECRET):
+    # Strip the incoming secret too: the stored CAPTURE_SECRET is stripped at
+    # read time, so an inbound value with stray whitespace must be normalized the
+    # same way or it would spuriously fail to match.
+    if not CAPTURE_SECRET or not hmac.compare_digest(secret.strip(), CAPTURE_SECRET):
         raise HTTPException(status_code=401, detail="invalid secret")
 
 

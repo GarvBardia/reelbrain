@@ -25,9 +25,9 @@ from notion_client import Client
 
 load_dotenv()
 
-NOTION_TOKEN = os.environ["NOTION_TOKEN"]
-PARENT_PAGE_ID = os.environ["NOTION_PARENT_PAGE_ID"]
-EXISTING_CREATORS_DB_ID = os.environ["NOTION_CREATORS_DB_ID"]
+NOTION_TOKEN = os.environ["NOTION_TOKEN"].strip()
+PARENT_PAGE_ID = os.environ["NOTION_PARENT_PAGE_ID"].strip()
+EXISTING_CREATORS_DB_ID = os.environ["NOTION_CREATORS_DB_ID"].strip()
 
 CONTENT_TYPES = ["tutorial", "insight", "resource_drop", "motivation", "news", "entertainment", "unknown"]
 STATUSES = ["📥 Inbox", "⏳ Awaiting DM", "✅ Processed/Reviewed", "⚠️ Failed — retry", "🗑 Low signal", "🕳 Gate expired"]

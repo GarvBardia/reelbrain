@@ -16,7 +16,7 @@ from app.store import _utc_naive_now
 
 logger = logging.getLogger("reelbrain.digest")
 
-NOTION_PARENT_PAGE_ID = os.environ.get("NOTION_PARENT_PAGE_ID", "")
+NOTION_PARENT_PAGE_ID = os.environ.get("NOTION_PARENT_PAGE_ID", "").strip()
 
 DIGEST_DAYS = 7
 
