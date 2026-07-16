@@ -58,6 +58,41 @@ deploys.
 When IG challenges get frequent, refresh the burner cookies locally (cookies.txt browser
 extension) and update the Secret File — no redeploy of code needed, just a service restart.
 
+## sqlite-vec on Render (the `enable_load_extension` fix)
+
+On some Linux Python builds — including what Render provisions — the standard library's
+`sqlite3` is compiled **without** loadable-extension support. When that's the case,
+`sqlite3.Connection` has no `enable_load_extension` method, and loading sqlite-vec fails
+with:
+
+```
+AttributeError: 'sqlite3.Connection' object has no attribute 'enable_load_extension'
+```
+
+This works fine on local Windows/macOS dev (their `sqlite3` is built with the support),
+so it only ever bites in production. The fix, already in the repo:
+
+- `requirements.txt` includes `pysqlite3-binary` (Linux-only via a `sys_platform == "linux"`
+  marker — there are no Windows wheels, and local dev doesn't need it). It bundles a SQLite
+  compiled **with** extension loading.
+- `app/store.py` detects the missing capability (`hasattr(sqlite3.Connection,
+  "enable_load_extension")`) and, only then, swaps in `pysqlite3.dbapi2` as a drop-in
+  `sqlite3` replacement. On dev where the stdlib already works, this is a no-op.
+- If even `pysqlite3-binary` isn't present/usable, the existing graceful-degrade path
+  still applies: the app logs `sqlite-vec unavailable` and runs fine without embeddings —
+  captures, extraction, and Notion writes are unaffected; only near-dup/related-saves are
+  disabled. Embeddings are never a hard dependency.
+
+**Verify after deploy:** hit `/health` — `sqlite_vec` should now be `true`. If it's still
+`false`, check the build log for whether the `pysqlite3-binary` wheel installed, and the
+runtime log for the `sqlite-vec unavailable` warning's traceback.
+
+**Plan tier:** this needs no paid plan or special Render setting — `pysqlite3-binary`
+carries its own SQLite and `sqlite-vec` ships the extension as a normal in-process shared
+library the app loads from its own site-packages (not a system `.so`, not a syscall Render
+sandboxes). It should work on the free tier. That said, it has **not** been verified on a
+live Render deploy — see the caveat the assistant flagged when landing this.
+
 ## SQLite persistence — read this before relying on the deploy
 
 **Render's free tier has an ephemeral disk.** Every deploy, restart, or free-tier instance

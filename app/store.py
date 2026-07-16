@@ -7,6 +7,20 @@ import os
 import sqlite3
 import time
 from contextlib import contextmanager
+
+# Some Linux Python builds compile the stdlib sqlite3 WITHOUT loadable-extension
+# support, so Connection has no .enable_load_extension and sqlite-vec can't load
+# (this is exactly the Render failure: "'sqlite3.Connection' object has no
+# attribute 'enable_load_extension'"). pysqlite3-binary bundles a SQLite built
+# WITH that support; swap it in as a drop-in replacement ONLY when the stdlib
+# module lacks the capability. Local Windows dev already has it, so this is a
+# no-op there and behavior is unchanged. If pysqlite3 isn't installed either,
+# we keep the stdlib module and the graceful-degrade path below handles it.
+if not hasattr(sqlite3.Connection, "enable_load_extension"):
+    try:
+        import pysqlite3.dbapi2 as sqlite3  # type: ignore[no-redef]
+    except ImportError:
+        pass
 from datetime import date, datetime, timedelta, timezone
 from typing import Iterator, Optional
 

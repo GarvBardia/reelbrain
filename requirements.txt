@@ -11,6 +11,12 @@ google-genai==2.11.0
 notion-client==3.1.0
 httpx==0.28.1
 sqlite-vec==0.1.9
+# Linux-only: the stdlib sqlite3 on some Linux Python builds (incl. Render's) is
+# compiled without loadable-extension support, which sqlite-vec needs. This bundles
+# a SQLite built with it; store.py swaps to it only when stdlib lacks the capability.
+# Marked linux-only because there are no Windows wheels — local Windows dev keeps
+# using its (working) stdlib sqlite3 and never tries to install this.
+pysqlite3-binary==0.5.4 ; sys_platform == "linux"
 
 # dev/test
 pytest==9.1.1

@@ -104,17 +104,26 @@ def _parse(raw: str) -> Extraction:
     return Extraction.model_validate(data)
 
 
+def _degraded(caption: Optional[str]) -> Extraction:
+    """A degraded extraction that STILL runs comment-gate detection. The gate check
+    is a pure caption regex needing no AI, so it must survive every failure path —
+    otherwise a gated reel whose Gemini call died would silently lose its keyword."""
+    extraction = degraded_extraction(caption)
+    _merge_comment_gate(extraction, caption)
+    return extraction
+
+
 def run_extraction(
     reel: ReelData, note: Optional[str], taxonomy: list[str]
 ) -> Extraction:
     """Returns a validated Extraction, degrading gracefully rather than raising."""
     if not reel.video_path:
-        return degraded_extraction(reel.caption)
+        return _degraded(reel.caption)
 
     try:
         audio_path = _extract_audio(reel.video_path)
     except subprocess.CalledProcessError:
-        return degraded_extraction(reel.caption)
+        return _degraded(reel.caption)
 
     prompt = _build_prompt(reel.caption, reel.creator_username, note, taxonomy)
 
@@ -135,7 +144,7 @@ def run_extraction(
             break
 
     if extraction is None:
-        return degraded_extraction(reel.caption)
+        return _degraded(reel.caption)
 
     _merge_comment_gate(extraction, reel.caption)
     return extraction

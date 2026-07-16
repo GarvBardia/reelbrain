@@ -1,5 +1,50 @@
 # PROGRESS.md — hardening/deployment session log
 
+## HOTFIX — comment-gate regex fallback + pysqlite3 for Render sqlite-vec
+
+Two mocked-test-only bug fixes (no live calls).
+
+**Bug A — comment-gate detection skipped on Gemini failure.**
+`app/gemini_pipe.py::run_extraction()` merged the comment-gate regex only on the success
+path; all three degraded returns (no `video_path`, ffmpeg `CalledProcessError`, and the
+final `except Exception: break` when the model call fails) returned `degraded_extraction()`
+**without** the gate check. Since the gate is a pure caption regex needing no AI, a gated
+reel whose Gemini call died would silently lose its `⏳ Awaiting DM` status and keyword.
+Fix: added a `_degraded(caption)` helper that builds the degraded extraction **and** runs
+`_merge_comment_gate` on it; all three degraded paths now go through it. Success path
+unchanged.
+- Tests (`tests/test_gemini_pipe.py`): gate still fires with (1) no video, (2) `_call_gemini`
+  mocked to raise on every attempt, (3) ffmpeg mocked to raise `CalledProcessError` — each
+  asserts `comment_gate.detected is True` and `keyword == "SEND"`.
+
+**Bug B — sqlite-vec can't load on Render (Linux) — `enable_load_extension` missing.**
+Some Linux Python builds compile the stdlib `sqlite3` without loadable-extension support,
+so `Connection` has no `enable_load_extension` and sqlite-vec fails to load (works locally
+on Windows, hence prod-only). Fix:
+- `requirements.txt`: added `pysqlite3-binary==0.5.4 ; sys_platform == "linux"` (Linux-only
+  marker — no Windows wheels exist, and local dev doesn't need it).
+- `app/store.py`: at import, if `not hasattr(sqlite3.Connection, "enable_load_extension")`,
+  swap in `pysqlite3.dbapi2 as sqlite3` (drop-in). No-op on Windows (stdlib already works),
+  so local dev is unchanged. If pysqlite3 isn't importable either, we keep stdlib and the
+  existing graceful-degrade (`sqlite-vec unavailable` warning, app runs without embeddings)
+  is the final fallback — embeddings stay non-critical.
+- `DEPLOYMENT.md`: new "sqlite-vec on Render" section documenting the symptom, the fix, and
+  the /health verification.
+
+**Tests:** full suite **99 passed**, 1 warning (starlette-internal). No live calls; the
+sqlite3 swap is a no-op locally so existing embeddings-store tests still exercise the real
+sqlite-vec load on Windows and pass.
+
+**⚠️ Needs a live check (can't verify without deploy):** the pysqlite3 swap and the exact
+`pysqlite3-binary==0.5.4` wheel are unverified on Render's actual sandbox. High confidence
+it works and needs **no** paid plan tier — pysqlite3-binary bundles its own SQLite and
+sqlite-vec loads its extension as an in-process shared lib from site-packages (not a system
+`.so`, not a sandboxed syscall). But confirm post-deploy via `/health` → `sqlite_vec: true`;
+if the wheel doesn't resolve for Render's Python 3.12, relaxing/bumping that pin is the fix,
+and worst case the app still runs fine with embeddings disabled.
+
+---
+
 ## HOTFIX — env-var whitespace stripping (Render trailing-newline token bug)
 
 **Symptom:** Notion API calls on Render died with
