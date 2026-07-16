@@ -100,6 +100,8 @@ To re-run a smoke test cleanly, delete the Notion page by hand, then
 | Gemini `404 NOT_FOUND: models/text-embedding-004` | Google shut that model down Jan 14, 2026 | default moved to `gemini-embedding-001` with `output_dimensionality=768` (keeps the existing FLOAT[768] sqlite-vec schema) |
 | Notion `body failed validation: body.properties should be defined` (or data_source errors) | Notion's 2025-09-03 API split databases into data sources | code migrated: pages are created under `data_source_id`, DBs created with `initial_data_source` — pinned notion-client handles it |
 | `sqlite_vec: false` in `/health` | sqlite-vec extension failed to load in that environment | captures still work; embeddings/related-saves silently disabled — check install logs for the `sqlite-vec unavailable` warning |
+| `cookies file not found at ... or ...` on every capture | no burner `cookies.txt` at `BURNER_COOKIES_FILE` or `/etc/secrets/cookies.txt` | upload it (Render: Environment → Secret Files, named `cookies.txt`) and restart; check `/health` → `cookies_file: true` |
+| yt-dlp `No video formats found` / `empty media response ... use --cookies` — prod only | IG soft-blocking the datacenter IP, or a stale yt-dlp | bump yt-dlp first (see DEPLOYMENT.md); then refresh burner cookies. Rows still save caption-only via the OG-tag fallback |
 
 ## Phase 1 acceptance check
 

@@ -31,9 +31,13 @@ RELATED_TOP_K = 3
 LOW_SIGNAL_VALUE_SCORE = 2
 CORE_SOURCE_SAVE_COUNT = 5
 
+# How much of a failure reason to surface on the Notion row before truncating.
+FAILURE_REASON_MAX_CHARS = 300
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     store.init_db()
+    fetcher.log_cookie_source()
     yield
 
 
@@ -56,7 +60,13 @@ def ping() -> dict:
 def health() -> dict:
     """Render health check + a quick self-report: is sqlite-vec actually usable?
     (vec_available() alone only says a load hasn't *failed yet* — probing the
-    save_vec table proves the extension loaded and the table exists.)"""
+    save_vec table proves the extension loaded and the table exists.)
+
+    `cookies_file` reports whether a burner cookies.txt was found — without one
+    every fetch fails fast, so this makes the most common prod-only breakage
+    checkable from a browser with no log access. Reports presence only, never
+    the path's contents.
+    """
     vec_ok = False
     if store.vec_available():
         try:
@@ -65,9 +75,14 @@ def health() -> dict:
             vec_ok = True
         except Exception:  # noqa: BLE001 - health must never 500 over an optional feature
             vec_ok = False
+    try:
+        cookies_ok = fetcher.cookies_file_available()
+    except Exception:  # noqa: BLE001
+        cookies_ok = False
     return {
         "status": "ok",
         "sqlite_vec": vec_ok,
+        "cookies_file": cookies_ok,
         "db_path": store.DB_PATH,
     }
 
@@ -149,6 +164,15 @@ def _maybe_flag_core_source(reel: ReelData, creator_page_id: str | None) -> None
             logger.warning("failed to set Core source for %s", reel.creator_username, exc_info=True)
 
 
+def _note_with_failure_reason(note: str | None, reason: str | None) -> str | None:
+    """Append the failure reason to the user's note rather than replacing it, so a
+    Failed row says WHY in Notion without needing log access."""
+    if not reason:
+        return note
+    stamped = f"⚠️ {reason[:FAILURE_REASON_MAX_CHARS]}"
+    return f"{note}\n\n{stamped}" if note else stamped
+
+
 def run_pipeline(
     shortcode: str,
     permalink: str,
@@ -159,6 +183,7 @@ def run_pipeline(
     the row in a terminal status and (fail-soft) writes/updates a Notion page."""
     extraction: Extraction | None = None
     related_page_ids: list[str] = []
+    failure_reason: str | None = None
     status: str
 
     try:
@@ -167,6 +192,7 @@ def run_pipeline(
         logger.warning("fetch degraded for %s: %s", shortcode, degraded)
         reel = degraded.partial
         status = "failed"
+        failure_reason = str(degraded)
     else:
         store.update_save(
             shortcode,
@@ -194,14 +220,16 @@ def run_pipeline(
         else:
             status = "done"
 
+    notion_note = _note_with_failure_reason(note, failure_reason)
     try:
         if existing_page_id:
             result = notion_writer.update_page(
-                existing_page_id, reel, extraction, status, note=note, related_page_ids=related_page_ids
+                existing_page_id, reel, extraction, status,
+                note=notion_note, related_page_ids=related_page_ids,
             )
         else:
             result = notion_writer.create_page(
-                reel, extraction, status, note=note, related_page_ids=related_page_ids
+                reel, extraction, status, note=notion_note, related_page_ids=related_page_ids
             )
         store.update_save(
             shortcode,

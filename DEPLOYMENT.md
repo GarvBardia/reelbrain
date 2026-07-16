@@ -50,13 +50,56 @@ deploys.
 `cookies.txt` must not be committed to the repo. Options, best first:
 
 1. **Render "Secret Files"** (Environment tab → Secret Files): create a secret file named
-   `cookies.txt` with the file's contents, mounted at the service root — matches the
-   default `BURNER_COOKIES_FILE=./cookies.txt`. This is the way.
+   `cookies.txt` with the file's contents. Render mounts Secret Files at
+   **`/etc/secrets/<filename>`**, which `app/fetcher.py` checks automatically as a
+   fallback — so you do NOT need to change `BURNER_COOKIES_FILE`. This is the way.
 2. Base64 the file into an env var and write it out in a start wrapper — works but ugly;
    only if Secret Files is unavailable for some reason.
 
+**Cookie resolution order** (`fetcher.resolve_cookies_file`): `BURNER_COOKIES_FILE`
+(default `./cookies.txt`, i.e. local dev) → `/etc/secrets/cookies.txt` (Render). The
+startup log line says which one this process picked (`burner cookies: using <path>`).
+
+**No cookies = fail fast, deliberately.** If neither path exists, fetches fail immediately
+with `cookies file not found at ... or ...` and the row lands in `⚠️ Failed — retry` with
+that reason written onto the Notion page's **My note**. This is on purpose: an anonymous
+fetch from a datacenter IP gets soft-blocked by Instagram and returns an inscrutable
+"no video formats found", while burning a slot against the 25/day cap. A missing cookie
+file is a deploy problem, and it should say so.
+
+**Verify from a browser:** `/health` reports `"cookies_file": true|false` — no log access
+needed.
+
 When IG challenges get frequent, refresh the burner cookies locally (cookies.txt browser
 extension) and update the Secret File — no redeploy of code needed, just a service restart.
+
+## When Instagram fetches start failing: bump yt-dlp first
+
+**yt-dlp is a cat-and-mouse dependency.** Instagram changes its internals regularly and
+yt-dlp ships fixes within days; a pin that worked last month can break with no code change
+on our side. It's pinned in `requirements.txt` for reproducibility, which means it goes
+stale on purpose — bumping it is a routine maintenance chore, not an emergency.
+
+Symptoms that mean "bump yt-dlp before debugging anything else":
+`No video formats found`, `empty media response ... use --cookies`,
+`requested content is not available`, or any extractor error naming Instagram.
+
+```bash
+py -m pip index versions yt-dlp     # find the newest release
+# bump the pin in requirements.txt, then:
+py -m pip install -r requirements.txt
+py -m pytest                        # mocked suite — proves nothing broke structurally
+python scripts/smoke.py <reel_url>  # the real check: one live reel
+```
+
+Then commit the pin bump and let Render redeploy. If a fresh yt-dlp *and* valid cookies
+still fail only in production, that's the datacenter-IP block — see BUILD_SPEC.md §1.2 for
+the fallback options (paid data-API provider, or a laptop-side fetch worker).
+
+Note the pipeline no longer fails the row outright when yt-dlp dies: it falls back to
+reading the reel page's public Open Graph tags (one anonymous request, never cookies) and
+continues caption-only, so the comment-gate keyword and topic tags still land. You'll see
+those rows in Notion with a transcript toggle reading `(unavailable)`.
 
 ## sqlite-vec on Render (the `enable_load_extension` fix)
 

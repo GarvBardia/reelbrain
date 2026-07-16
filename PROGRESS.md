@@ -1,5 +1,70 @@
 # PROGRESS.md — hardening/deployment session log
 
+## HOTFIX — yt-dlp prod failures: cookie resolution, fail-fast, OG fallback
+
+Server-side fixes for `No video formats found` / `empty media response ... use --cookies`
+on Render while the same code works locally. Mocked tests only, no live calls.
+
+**Found while implementing — the cookie retry was unreachable.** `_looks_like_challenge()`
+gated the cookie-backed retry on markers `login required / rate-limit / 429 / challenge /
+checkpoint`. The errors actually seen in prod (`No video formats found`, `empty media
+response ... use --cookies`) match **none** of them, so `fetch_reel` treated the
+soft-block as a hard error and raised on the spot — **the cookie retry never fired**.
+That alone could explain the prod-only failure. Added those messages (plus
+`requested content is not available`) to `CHALLENGE_MARKERS`, with tests.
+
+1. **Cookie path robustness** (`app/fetcher.py`): `resolve_cookies_file()` checks
+   `BURNER_COOKIES_FILE` then `/etc/secrets/cookies.txt` (Render Secret Files mount), so
+   local and Render both work with no env juggling. `fetch_reel` now **fails fast before
+   any network call or rate-limit sleep** when neither exists — message names both paths.
+   The cookie retry now uses the *resolved* path (it previously used the raw env value,
+   which would have missed the Secret Files mount). `log_cookie_source()` runs in the
+   FastAPI lifespan so the deploy log states which file was picked.
+2. **/health** (`app/main.py`): added `"cookies_file": true|false` (presence only, never
+   contents) — the most common prod-only breakage is now checkable from a browser.
+3. **yt-dlp freshness**: `yt-dlp==2026.7.4` was **already the latest release** (verified via
+   `pip index versions`), so the pin is unchanged — no bump was available. Added a
+   DEPLOYMENT.md section on it being a cat-and-mouse dep: the symptom list that means
+   "bump yt-dlp first", the bump/test procedure, and what it means if a fresh yt-dlp still
+   fails only in prod.
+4. **OG-tag fallback** (`app/fetcher.py`): when yt-dlp gives up, one anonymous `httpx.get`
+   (browser UA, 10s timeout, **never cookies**) reads the page's `og:title` /
+   `og:description` / `og:image` via regex. If it yields a caption, `fetch_reel` **returns
+   caption-only ReelData instead of raising**, so the row is no longer failed — the gate
+   regex and topic tags still run off the caption, and the transcript toggle honestly reads
+   `(unavailable)`. Added `ReelData.thumbnail_url` to hold `og:image` (parsed as asked;
+   not yet written to Notion). If OG yields nothing, `FetchDegraded` is raised as before.
+5. **Notion error visibility** (`app/main.py`): `_note_with_failure_reason()` appends
+   `⚠️ <reason>` (truncated to 300 chars) to **My note**, after the user's note, never
+   replacing it. Only on failure paths; clean rows keep a clean note.
+
+**Tests:** 34 new (`tests/test_fetch_hardening.py` + additions to test_pipeline /
+test_capture_endpoint) covering cookie resolution order + dedupe, fail-fast (asserts
+yt-dlp is never invoked and no fetch is burned against the daily cap), all five soft-block
+markers, OG parsing (both meta attribute orders, HTML entities, `@handle` extraction),
+OG request shape (one call, timeout set, no cookies kwarg), both OG fallback paths, and
+note appending/truncation. **Also added a conftest autouse guard blocking module-level
+`httpx.get` in all tests** — the new OG path would otherwise have hit instagram.com for
+real from the test suite. Full suite: **127 passed**.
+
+**⚠️ For your review:**
+- **BUILD_SPEC 1.2 deviation:** the spec says "FREE-FIRST … try logged-out first". We still
+  do (anonymous attempt first, cookie retry second), but the app now **refuses to run at
+  all without a cookie file**, which narrows "free-first" to "free-first, given cookies
+  exist". That's what you asked for and matches reality on a datacenter IP — flagging it
+  since it's a spec change. If anonymous-first is now pure waste on Render (it burns a
+  daily-cap slot to fail), consider going cookies-first; say the word.
+- **OG-fallback rows land as normal saves, not failures** (`📥 Inbox`/`🗑 Low signal` per
+  value score, or `⏳ Awaiting DM` if gated) — that's the "instead of failing the row
+  entirely" intent, but it does mean a caption-only row can look like a full save at a
+  glance. The tell is the `(unavailable)` transcript toggle. Say the word if you'd rather
+  they carry a marker tag.
+- Unverified live: whether Instagram serves useful `og:description` to a datacenter IP
+  anonymously. The parse is tested against realistic HTML, but if IG returns a login wall
+  to Render's IP, the fallback yields nothing and rows fail as before (no regression).
+
+---
+
 ## HOTFIX — comment-gate regex fallback + pysqlite3 for Render sqlite-vec
 
 Two mocked-test-only bug fixes (no live calls).

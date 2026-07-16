@@ -50,6 +50,9 @@ class ReelData(BaseModel):
     creator_fullname: Optional[str] = None
     taken_at: Optional[str] = None
     like_count: Optional[int] = None
+    # Only set by the OG-tag fallback (fetcher.fetch_og_metadata); yt-dlp's own
+    # metadata doesn't populate it. Not written to Notion today.
+    thumbnail_url: Optional[str] = None
 
 
 class ResourceMentioned(BaseModel):

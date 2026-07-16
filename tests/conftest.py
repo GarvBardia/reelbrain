@@ -39,6 +39,24 @@ def _never_construct_real_genai_client(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _never_make_real_http_requests(monkeypatch):
+    """Defense-in-depth: block real outbound HTTP in every test. The OG-tag
+    fallback (fetcher.fetch_og_metadata) calls httpx.get, so a test that reaches
+    the fetch-failure path would otherwise hit instagram.com for real. Tests that
+    exercise the fallback patch httpx.get or fetch_og_metadata themselves.
+
+    Only the module-level convenience function is patched — FastAPI's TestClient
+    drives its own httpx.Client with an in-process transport and is unaffected.
+    """
+    import httpx
+
+    def _blocked(*args, **kwargs):
+        raise RuntimeError("live HTTP request blocked in tests")
+
+    monkeypatch.setattr(httpx, "get", _blocked)
+
+
+@pytest.fixture(autouse=True)
 def _reset_rate_limit_buckets():
     """Every TestClient request comes from the same 'testclient' IP — clear the
     per-IP rate-limit bucket between tests so unrelated tests can't trip it."""

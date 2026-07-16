@@ -167,3 +167,70 @@ def test_pipeline_fetch_degraded_still_writes_failed_page(monkeypatch, tutorial_
     row = store.get_by_shortcode(tutorial_reel.shortcode)
     assert row["status"] == "failed"
     assert row["notion_page_id"]  # constraint #3: never silently drop a capture
+
+
+def test_failed_row_writes_reason_into_my_note(monkeypatch, tutorial_reel):
+    """A Failed row should say WHY on the Notion page — no log access needed."""
+    from app.fetcher import FetchDegraded
+
+    fake = _install_fake_notion(monkeypatch)
+
+    def fake_fetch(shortcode, permalink):
+        raise FetchDegraded(
+            "cookies file not found at ./cookies.txt or /etc/secrets/cookies.txt",
+            partial=tutorial_reel.model_copy(update={"video_path": None}),
+        )
+
+    monkeypatch.setattr("app.main.fetcher.fetch_reel", fake_fetch)
+
+    store.insert_processing(tutorial_reel.shortcode, tutorial_reel.permalink)
+    run_pipeline(tutorial_reel.shortcode, tutorial_reel.permalink, note=None)
+
+    note = _props_of(save_page_calls(fake)[0])["My note"]["rich_text"][0]["text"]["content"]
+    assert "cookies file not found" in note
+
+
+def test_failure_reason_appends_to_user_note_without_overwriting(monkeypatch, tutorial_reel):
+    from app.fetcher import FetchDegraded
+
+    fake = _install_fake_notion(monkeypatch)
+
+    def fake_fetch(shortcode, permalink):
+        raise FetchDegraded("fetch failed: boom", partial=tutorial_reel.model_copy(update={"video_path": None}))
+
+    monkeypatch.setattr("app.main.fetcher.fetch_reel", fake_fetch)
+
+    store.insert_processing(tutorial_reel.shortcode, tutorial_reel.permalink, note="my original note")
+    run_pipeline(tutorial_reel.shortcode, tutorial_reel.permalink, note="my original note")
+
+    note = _props_of(save_page_calls(fake)[0])["My note"]["rich_text"][0]["text"]["content"]
+    assert note.startswith("my original note")  # user's note preserved, first
+    assert "fetch failed: boom" in note
+
+
+def test_successful_row_note_has_no_failure_stamp(monkeypatch, tutorial_reel, tutorial_extraction):
+    fake = _install_fake_notion(monkeypatch)
+    monkeypatch.setattr("app.main.fetcher.fetch_reel", lambda s, p: tutorial_reel)
+    monkeypatch.setattr("app.main.gemini_pipe.run_extraction", lambda r, n, t: tutorial_extraction)
+
+    store.insert_processing(tutorial_reel.shortcode, tutorial_reel.permalink, note="clean note")
+    run_pipeline(tutorial_reel.shortcode, tutorial_reel.permalink, note="clean note")
+
+    note = _props_of(save_page_calls(fake)[0])["My note"]["rich_text"][0]["text"]["content"]
+    assert note == "clean note"
+    assert "⚠️" not in note
+
+
+def test_note_with_failure_reason_truncates():
+    from app.main import FAILURE_REASON_MAX_CHARS, _note_with_failure_reason
+
+    out = _note_with_failure_reason(None, "x" * 5000)
+    assert out.count("x") == FAILURE_REASON_MAX_CHARS  # reason truncated, prefix aside
+    assert out.startswith("⚠️ ")
+
+
+def test_note_with_failure_reason_passthrough_when_no_reason():
+    from app.main import _note_with_failure_reason
+
+    assert _note_with_failure_reason("keep me", None) == "keep me"
+    assert _note_with_failure_reason(None, None) is None

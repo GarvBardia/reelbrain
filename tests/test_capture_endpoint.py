@@ -34,6 +34,21 @@ def test_health_reports_sqlite_vec(monkeypatch, tutorial_reel, tutorial_extracti
     assert body["sqlite_vec"] is True
 
 
+def test_health_reports_cookies_file_present(monkeypatch, tutorial_reel, tutorial_extraction, tmp_path):
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# netscape cookie file")
+    monkeypatch.setattr(main.fetcher, "BURNER_COOKIES_FILE", str(cookies))
+    client = _client(monkeypatch, tutorial_reel, tutorial_extraction)
+    assert client.get("/health").json()["cookies_file"] is True
+
+
+def test_health_reports_cookies_file_missing(monkeypatch, tutorial_reel, tutorial_extraction, tmp_path):
+    monkeypatch.setattr(main.fetcher, "BURNER_COOKIES_FILE", str(tmp_path / "nope.txt"))
+    monkeypatch.setattr(main.fetcher, "RENDER_SECRETS_COOKIES_FILE", str(tmp_path / "also-nope.txt"))
+    client = _client(monkeypatch, tutorial_reel, tutorial_extraction)
+    assert client.get("/health").json()["cookies_file"] is False
+
+
 def test_capture_rejects_bad_secret(monkeypatch, tutorial_reel, tutorial_extraction):
     client = _client(monkeypatch, tutorial_reel, tutorial_extraction)
     resp = client.post("/capture", json={"url": URL, "note": None, "secret": "wrong"})
