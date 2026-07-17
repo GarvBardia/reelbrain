@@ -1,5 +1,48 @@
 # PROGRESS.md — hardening/deployment session log
 
+## WORKSTREAM 2 — Obsidian vault sync (the smart-memory layer)
+
+**Built:** `app/obsidian_sync.py` (logic) + `scripts/sync_to_obsidian.py` (local-only
+runner, sys.path bootstrap + .env, never deployed) + `VAULT.md` (usage, Obsidian intro,
+Windows Task Scheduler steps) + `VAULT_PATH` in `.env.example`.
+
+- **Notion → markdown:** paginated `data_sources.query` over the Saves DB; per page,
+  `blocks.children.list` (toggles get a second fetch for their children). Block
+  conversion mirrors our writer's layout: callout → `## Main point` blockquote, bullets →
+  `## Supporting points`, numbered → `## Steps`, bookmarks/paragraphs → `## Resources`,
+  quotes → `## Quotable lines`, toggles → `## <title>` (Transcript/Raw caption).
+- **Frontmatter:** shortcode, `creator: "[[creators/x]]"`, status, value_score,
+  `topics: ["[[topics/x]]"]`, url, posted. Filename `{posted-date}-{shortcode}.md`
+  (created_time date as fallback). Creator username comes from local SQLite (the Notion
+  property is a relation — resolving it would cost one extra API call per save; SQLite
+  already has it).
+- **Smart linking:** `store.get_embedding()` reads capture-time vectors back out of
+  sqlite-vec (raw float32 blob, struct-unpacked — verified the roundtrip locally before
+  writing code); top-3 similar other saves become real `[[reels/...]]` wikilinks in a
+  `## Related` section. Nothing is recomputed; saves without a stored vector just get no
+  Related section.
+- **Stubs + index:** `topics/x.md` / `creators/x.md` auto-created once (never
+  overwritten — your notes in them survive re-syncs); `_index.md` lists every topic with
+  save counts, sorted by count.
+- **Idempotent:** existing notes matched by the `shortcode:` in frontmatter and updated
+  in place — verified by a test where the posted date changes between runs (computed
+  filename would differ) and still exactly one file remains, at the original path.
+
+**Tests:** 8 new in `tests/test_obsidian_sync.py` — full-note content (frontmatter,
+every section, stub creation), Related from real sqlite-vec vectors (self-link excluded),
+no-embedding → no section, idempotent rerun, pagination (page_size=2 walks 3 queries),
+index counts, stub preservation, slugify. **Full suite: 144 passed.** No live calls.
+
+**For your review / notes:**
+- Reel-note edits do NOT survive re-sync (regenerated from Notion each run) — by design;
+  put your own thinking in topic/creator stubs. Called out in VAULT.md.
+- `_slugify` is ASCII-only ("désí créator" → "d-s-cr-ator") — ugly but stable; unicode
+  slugs in filenames get risky across OSes. The note's own title keeps full unicode.
+- The sync is read-only against Notion and reuses the existing pinned notion-client. Its
+  first live run is on you (ground rules) — see the final summary for the exact command.
+
+---
+
 ## WORKSTREAM 1 — Notion cleanup: gate-miss fix, mobile views, auto-archive
 
 **1. The DajFASZODlj gate miss — root cause found and fixed.** Investigated the success

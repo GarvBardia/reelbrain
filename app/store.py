@@ -222,6 +222,23 @@ def find_neighbors(vector: list[float], k: int = 4) -> list[tuple[str, float]]:
     return [(row["shortcode"], 1 - row["distance"]) for row in rows]
 
 
+def get_embedding(shortcode: str) -> Optional[list[float]]:
+    """Read a stored embedding back out (Obsidian sync reuses capture-time vectors
+    rather than recomputing). sqlite-vec stores FLOAT[N] as a raw float32 blob."""
+    if _VEC_LOAD_FAILED:
+        return None
+    import struct
+
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT embedding FROM save_vec WHERE shortcode = ?", (shortcode,)
+        ).fetchone()
+    if row is None:
+        return None
+    blob = row["embedding"]
+    return list(struct.unpack(f"{len(blob) // 4}f", blob))
+
+
 def count_saves_by_creator(creator_username: str) -> int:
     with get_connection() as conn:
         row = conn.execute(
