@@ -2,10 +2,14 @@
 layer). Local-only: run via scripts/sync_to_obsidian.py, never deployed to Render.
 
 One markdown note per save at {VAULT_PATH}/reels/{date}-{shortcode}.md with YAML
-frontmatter and [[wikilinks]]; stub notes for creators/topics; a "## Related" section
-built from the sqlite-vec embeddings computed at capture time (NOT recomputed); and a
-vault-root _index.md over all topics. Idempotent — existing notes are matched by the
-shortcode in their frontmatter and rewritten in place.
+frontmatter and [[wikilinks]]; topic/creator notes carrying a real, auto-regenerated
+index of their reels (not just a bare stub relying on Obsidian's Backlinks panel); a
+"## Related" section built from the sqlite-vec embeddings computed at capture time
+(NOT recomputed); and a vault-root _index.md with real per-topic previews. Idempotent —
+existing notes are matched by the shortcode in their frontmatter and rewritten in place.
+
+Topic/creator notes and _index.md carry an AUTO-GENERATED block (see upsert_auto_block)
+so a user's own notes above it survive every re-sync untouched.
 """
 from __future__ import annotations
 
@@ -22,7 +26,11 @@ logger = logging.getLogger("reelbrain.obsidian")
 VAULT_PATH = os.environ.get("VAULT_PATH", r"C:\Users\garvb\ReelBrainVault").strip()
 
 RELATED_TOP_K = 3
+INDEX_PREVIEW_LIMIT = 3
 FRONTMATTER_SHORTCODE_RE = re.compile(r"^shortcode:\s*(\S+)\s*$", re.MULTILINE)
+
+AUTO_START = "<!-- AUTO-GENERATED, DO NOT EDIT BELOW -->"
+AUTO_END = "<!-- END AUTO-GENERATED -->"
 
 
 # --- Notion reading -----------------------------------------------------------
@@ -65,6 +73,15 @@ def _fetch_blocks(client, block_id: str) -> list[dict]:
         if not response.get("has_more"):
             return blocks
         cursor = response.get("next_cursor")
+
+
+def extract_main_point(blocks: list[dict]) -> str:
+    """The reel's one-line Main Point is always the first top-level callout block
+    (that's exactly what notion_writer._build_children emits it as)."""
+    for block in blocks:
+        if block.get("type") == "callout":
+            return _rt_text(block.get("callout", {}).get("rich_text", []))
+    return ""
 
 
 # Section headings per block type — mirrors the page layout notion_writer emits.
@@ -196,6 +213,83 @@ def build_note(fields: dict, creator: Optional[str], body_markdown: str,
     return "\n".join(lines).rstrip() + "\n"
 
 
+# --- auto-generated block (preserves user edits above/below it) ----------------
+
+
+def upsert_auto_block(path: Path, default_header: str, generated_lines: list[str]) -> None:
+    """Rewrite ONLY the content between AUTO_START/AUTO_END, leaving everything
+    else in the file untouched. This is how topic/creator stubs and _index.md
+    survive re-syncs: a user's own "## Notes" section (or any preamble) written
+    above the markers is never touched, and anything they happen to add below
+    the block is preserved too. If the file doesn't exist yet, or exists without
+    markers (an old-style bare stub from before this feature), default_header
+    seeds the content above the block.
+    """
+    if path.exists():
+        content = path.read_text(encoding="utf-8")
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        content = default_header
+
+    start_idx = content.find(AUTO_START)
+    end_idx = content.find(AUTO_END)
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        prefix = content[:start_idx].rstrip("\n")
+        suffix = content[end_idx + len(AUTO_END):].lstrip("\n").rstrip("\n")
+    else:
+        prefix = content.rstrip("\n")
+        suffix = ""
+
+    block = "\n".join([AUTO_START, *generated_lines, AUTO_END])
+    parts = [p for p in (prefix, block) if p]
+    new_content = "\n\n".join(parts)
+    if suffix:
+        new_content += "\n\n" + suffix
+    path.write_text(new_content.rstrip("\n") + "\n", encoding="utf-8")
+
+
+def _sort_entries(entries: list[dict]) -> list[dict]:
+    """value_score descending, then posted date descending. Missing value_score
+    sorts as 0 (last among scored reels); missing date sorts last among ties."""
+    return sorted(entries, key=lambda e: (e["value_score"] or 0, e["posted"] or ""), reverse=True)
+
+
+def _format_entry_line(entry: dict) -> str:
+    value_part = f"value {entry['value_score']}" if entry["value_score"] is not None else "value —"
+    main_point = entry["main_point"] or "(no main point)"
+    return f"- [[reels/{entry['stem']}|{entry['title']}]] — {value_part} — {main_point}"
+
+
+def write_stub_index(vault: Path, folder: str, name: str, entries: list[dict]) -> Path:
+    """topics/x.md or creators/x.md: a real "## Saved Reels" index of every reel
+    tagged with this topic/creator, regenerated every sync. Sorted value desc,
+    then date desc. Anything the user wrote above this block survives."""
+    path = vault / folder / f"{_slugify(name)}.md"
+    default_header = f"# {name}\n\n## Notes\n"
+    lines = ["## Saved Reels", ""]
+    lines.extend(_format_entry_line(e) for e in _sort_entries(entries))
+    upsert_auto_block(path, default_header, lines)
+    return path
+
+
+def write_topics_index(vault: Path, topic_entries: dict[str, list[dict]]) -> None:
+    """_index.md: every topic, sorted by save count, each with a real preview of
+    its top reels (not just a bare count) so the index is an actual starting
+    point for browsing, not a table of contents to nowhere."""
+    lines: list[str] = []
+    for topic, entries in sorted(topic_entries.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        sorted_entries = _sort_entries(entries)
+        count = len(entries)
+        plural = "save" if count == 1 else "saves"
+        lines.append(f"## [[topics/{_slugify(topic)}|{topic}]] — {count} {plural}")
+        for entry in sorted_entries[:INDEX_PREVIEW_LIMIT]:
+            lines.append(f"- [[reels/{entry['stem']}|{entry['title']}]]")
+        lines.append("")
+    if not topic_entries:
+        lines = ["(no topics yet — run a few captures first)"]
+    upsert_auto_block(vault / "_index.md", "# Topics Index\n", lines)
+
+
 # --- vault filesystem ---------------------------------------------------------
 
 
@@ -215,25 +309,6 @@ def existing_notes_by_shortcode(vault: Path) -> dict[str, Path]:
         if match:
             mapping[match.group(1)] = path
     return mapping
-
-
-def ensure_stub(vault: Path, folder: str, name: str) -> None:
-    """topics/x.md or creators/x.md — created once so no wikilink dangles."""
-    path = vault / folder / f"{_slugify(name)}.md"
-    if path.exists():
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"# {name}\n\n## Notes\n", encoding="utf-8")
-
-
-def write_topics_index(vault: Path, topic_counts: dict[str, int]) -> None:
-    lines = ["# Topics Index", ""]
-    for topic, count in sorted(topic_counts.items(), key=lambda kv: (-kv[1], kv[0])):
-        plural = "save" if count == 1 else "saves"
-        lines.append(f"- [[topics/{_slugify(topic)}|{topic}]] — {count} {plural}")
-    if len(lines) == 2:
-        lines.append("(no topics yet — run a few captures first)")
-    (vault / "_index.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 # --- related saves via capture-time embeddings ---------------------------------
@@ -269,15 +344,18 @@ def sync(vault_path: Optional[str] = None) -> dict:
             fields["shortcode"], vault / "reels" / note_filename(fields)
         )
 
-    # pass 2: bodies, related links, stubs, writes
-    topic_counts: dict[str, int] = {}
+    # pass 2: bodies, related links, writes — and collect per-topic/creator entries
+    topic_entries: dict[str, list[dict]] = {}
+    creator_entries: dict[str, list[dict]] = {}
     written = 0
     for fields in all_fields:
         shortcode = fields["shortcode"]
         row = store.get_by_shortcode(shortcode)
         creator = row["creator"] if row and row["creator"] else None
 
-        body = blocks_to_markdown(client, _fetch_blocks(client, fields["page_id"]))
+        blocks = _fetch_blocks(client, fields["page_id"])
+        body = blocks_to_markdown(client, blocks)
+        main_point = extract_main_point(blocks)
         related_stems = [
             path_by_shortcode[sc].stem
             for sc in related_shortcodes(shortcode)
@@ -288,11 +366,24 @@ def sync(vault_path: Optional[str] = None) -> dict:
         path_by_shortcode[shortcode].write_text(note, encoding="utf-8")
         written += 1
 
-        if creator:
-            ensure_stub(vault, "creators", creator)
-        for topic in fields["topics"]:
-            ensure_stub(vault, "topics", topic)
-            topic_counts[topic] = topic_counts.get(topic, 0) + 1
+        raw_score = fields["value_score"]
+        entry = {
+            "stem": path_by_shortcode[shortcode].stem,
+            "title": fields["title"] or shortcode,
+            "value_score": int(raw_score) if str(raw_score).isdigit() else None,
+            "posted": fields["posted"],
+            "main_point": main_point,
+        }
 
-    write_topics_index(vault, topic_counts)
-    return {"notes_written": written, "topics": len(topic_counts), "vault": str(vault)}
+        if creator:
+            creator_entries.setdefault(creator, []).append(entry)
+        for topic in fields["topics"]:
+            topic_entries.setdefault(topic, []).append(entry)
+
+    for topic, entries in topic_entries.items():
+        write_stub_index(vault, "topics", topic, entries)
+    for creator, entries in creator_entries.items():
+        write_stub_index(vault, "creators", creator, entries)
+
+    write_topics_index(vault, topic_entries)
+    return {"notes_written": written, "topics": len(topic_entries), "vault": str(vault)}

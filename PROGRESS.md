@@ -1,5 +1,49 @@
 # PROGRESS.md — hardening/deployment session log
 
+## Obsidian sync: real auto-regenerated topic/creator indexes (fix)
+
+**Problem:** topic/creator notes were create-once stubs (`# name\n\n## Notes\n`) that
+never got the actual list of related reels — that only showed via Obsidian's Backlinks
+panel, which isn't a real page and isn't obvious to someone new to Obsidian.
+
+**Fix — `app/obsidian_sync.py`:**
+- New `upsert_auto_block(path, default_header, generated_lines)`: rewrites *only* the
+  content between `<!-- AUTO-GENERATED, DO NOT EDIT BELOW -->` / `<!-- END AUTO-GENERATED -->`
+  markers. Everything above the start marker (a user's own `## Notes`, or anything else
+  they wrote) and everything after the end marker is preserved byte-for-byte. If a file
+  doesn't exist yet, or exists from before this feature with no markers at all, the whole
+  existing content becomes the preserved prefix and the block is appended fresh below —
+  so old-style bare stubs migrate cleanly on their next sync with zero data loss.
+- New `write_stub_index()` replaces the old `ensure_stub()` (removed — fully superseded):
+  every topic/creator note now gets a real `## Saved Reels` section, regenerated every
+  sync, listing every tagged reel as a `[[wikilink]]` with its value score and one-line
+  Main Point (pulled from the reel's own first callout block via new `extract_main_point()`),
+  sorted by `value_score` descending then posted-date descending.
+- `write_topics_index()` (`_index.md`) rewritten the same way: real per-topic previews
+  (top 3 reel titles as wikilinks under each topic heading), not just a bare count, and
+  now also wrapped in the same AUTO-GENERATED markers so a preamble note above it would
+  survive too.
+- `sync()` restructured to collect `topic_entries`/`creator_entries` (title, value_score,
+  posted date, main_point, note stem) alongside the existing per-reel write pass, rather
+  than just incrementing counts.
+
+**Tests:** 11 new in `tests/test_obsidian_sync.py` (8 existing kept, all still pass):
+`upsert_auto_block` unit tests (new file, no-markers migration, replace-between-markers,
+preserve-content-after-end-marker), topic and creator notes both getting a real
+`## Saved Reels` section, **the exact scenario asked for** — a real prior sync's output
+hand-edited above the markers surviving a second sync — **and** a second sync adding a
+new reel to an already-existing topic updating the block to show both (not just the new
+one, not a stale copy of just the old one), sort-order verification (value desc, then
+date desc across three reels), `_index.md` showing real reel-title previews, and
+`_index.md`'s own preamble surviving a resync. **Full suite: 179 passed** (was 168). No
+live calls.
+
+**For your review:** `VAULT.md` updated to describe the new behavior; nothing else
+downstream (VAULT_CLAUDE_SETUP.md's instructions, the Task Scheduler steps) needed
+changes since they were already describing the vault at a level this doesn't affect.
+
+---
+
 ## `scripts/bulk_import.py` — bulk URL import against the deployed endpoint
 
 **Important discovery that shaped the design:** `/capture` returns 202 immediately and
