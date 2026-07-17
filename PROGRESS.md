@@ -1,5 +1,73 @@
 # PROGRESS.md — hardening/deployment session log
 
+## Known limitations (plain English)
+
+Three things worth knowing about how this app behaves day-to-day — none of these are
+bugs, they're tradeoffs of the ₹0/free-tier constraint, documented so they're not a
+surprise later.
+
+**(a) Photo and carousel posts capture the URL only, no transcript.** yt-dlp only
+understands video, so a photo or carousel post always fails to fetch — that's expected,
+not broken. Normally the app falls back to reading the post's public preview data
+(Open Graph tags) to still get a caption; but from Render's datacenter IP, Instagram
+often blocks that anonymous read too. When both fail, the reel still gets captured — it
+lands in Notion as **📷 Photo — manual**, with the link saved and a note explaining
+there's no auto-summary. You'll need to open the link yourself to see what it is.
+
+**(b) The burner account's login cookies need periodic manual refresh — this is not
+automated on purpose.** Instagram sessions expire; when that happens, fetches start
+failing with an auth-type error. The app never tries to log back in by itself (that
+would mean storing a real password and risking the burner account being flagged). You
+get a **cookie-health alert** (a Notion page, and a phone push if you set up ntfy.sh)
+after 3 consecutive auth failures. Fix is a 2-minute manual step — see COOKIES.md.
+
+**(c) Render's free tier wipes the local database on every redeploy — Notion is the
+real source of truth, not SQLite.** The local database exists to make things faster
+(fewer Notion round-trips) and to power dedupe detection ("have I saved this already?")
+and the intelligence layer (embeddings, related-saves, tag suggestions). When it gets
+wiped: dedupe detection resets (re-sharing an old link may re-process it as new),
+related-saves/tag-suggestion history resets, but **nothing captured is ever lost** —
+every save's actual content lives in Notion. `/attach` and `/retry` specifically fall
+back to reading Notion directly if the local database doesn't have what they need
+(see below), so those two commonly-used actions keep working across a redeploy even
+before the database catches back up.
+
+---
+
+## Fix 2 — verified: the ephemeral-SQLite Notion fallback is correctly deployed
+
+Re-read `store.py`'s `find_pending_gate`/`get_by_shortcode_or_notion` and `main.py`'s
+`/retry`/`/attach` line by line, as asked, rather than assuming last session's fix was
+intact. It is — fully applied, nothing missing or half-wired:
+
+- `POST /retry/{shortcode}` (`app/main.py`) calls `store.get_by_shortcode_or_notion`,
+  not the plain `get_by_shortcode` — confirmed at the call site.
+- `POST /attach` calls `store.find_pending_gate`, which itself falls back to
+  `_find_pending_gate_via_notion` once every local attempt (exact shortcode, note
+  substring, most-recent awaiting_dm) comes up empty — confirmed the fallback branch
+  is actually reached at the end of the function, not just present but unreachable.
+- Both fallbacks route through `_persist_notion_page` → `upsert_from_notion`, so a
+  Notion-recovered row is written back to SQLite as a real row, not a fake stand-in.
+- All 25 existing tests in `tests/test_notion_fallback.py` still pass unmodified,
+  including the exact "SQLite miss → Notion hit" case for both endpoints and the
+  "both miss → still a real 404" case for both — re-ran them fresh rather than
+  trusting a memory of them passing before.
+
+**No code changes were needed for this fix** — it shipped correctly in commit `8ef0730`
+from the previous session. No separate commit for this entry; it's documented here
+alongside the "known limitations" section as this session's verification record.
+
+**One related gap noticed while re-reading, out of scope for this task (not fixed,
+flagging only):** `POST /capture`'s duplicate-detection check (`store.get_by_shortcode`,
+`app/main.py` line ~282) does NOT have the same Notion fallback. If SQLite gets wiped
+and someone re-shares a URL that was already captured before the wipe, `/capture` won't
+recognize it as a duplicate locally and will re-process it — potentially creating a
+second Notion page for the same reel. Lower-stakes than `/attach`/`/retry` failing
+outright (worst case is a duplicate page, not a lost/broken capture), but worth a
+follow-up if it turns out to matter in practice.
+
+---
+
 ## Fix 1 — photo/carousel posts no longer silently vanish
 
 **Root cause, found via testing (not assumed):** yt-dlp is video-only, so a photo or
