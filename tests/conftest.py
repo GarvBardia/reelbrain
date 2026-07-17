@@ -54,6 +54,9 @@ def _never_make_real_http_requests(monkeypatch):
         raise RuntimeError("live HTTP request blocked in tests")
 
     monkeypatch.setattr(httpx, "get", _blocked)
+    # scripts/bulk_import.py posts to the deployed /capture endpoint — block that
+    # too. Its own tests always inject a fake submit_fn, never the real one.
+    monkeypatch.setattr(httpx, "post", _blocked)
 
 
 @pytest.fixture(autouse=True)

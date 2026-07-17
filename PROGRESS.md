@@ -1,5 +1,66 @@
 # PROGRESS.md — hardening/deployment session log
 
+## `scripts/bulk_import.py` — bulk URL import against the deployed endpoint
+
+**Important discovery that shaped the design:** `/capture` returns 202 immediately and
+runs the actual yt-dlp fetch in a background task (`run_pipeline`) — the daily
+`MAX_FETCHES_PER_DAY` cap is enforced *inside* that background task
+(`fetcher._enforce_rate_discipline`), not as a distinct HTTP-level rejection. There is no
+special status code or error body for "daily cap reached" — a submission past the cap
+still gets a plain 202, and only later, invisibly to any client, becomes a Notion page
+with status `Failed — retry`. So a client genuinely cannot detect the cap from the
+server's response. Built the only thing that actually works: the script self-throttles by
+counting its own `processing`-status submissions recorded in the progress file for today,
+stopping before it would exceed `MAX_FETCHES_PER_DAY` and printing the requested
+"daily cap reached ... resume tomorrow" message. This is a ceiling on the script's own
+contribution only — it can't see the iOS Shortcut or manual `/retry` calls also spending
+the same server-side daily budget, so it's an approximation, not a hard guarantee.
+Documented prominently in the script's own docstring and in the README, not buried.
+
+**What it does:**
+- `read_urls`: one URL per line, blank lines and `#`-comments skipped.
+- `bulk_import_progress.json` (atomic write: temp file + `os.replace`) — one entry per
+  URL: status (`processing`/`duplicate`/`error`/`rate_limited`/`auth_error`), http_status,
+  detail, date, timestamp. **`processing`/`duplicate` are terminal** (skipped on rerun);
+  **`error`/`rate_limited` are NOT** — a transient failure (network blip, cold start, a
+  temporary rate limit) gets retried automatically next run instead of silently
+  blacklisting that URL forever.
+- Client-side spacing: `MIN_FETCH_SPACING_SECONDS` (default 20) + random jitter (0-5s)
+  between submissions — skipped after a duplicate (no server-side fetch happened, nothing
+  to space out) and after the last URL.
+- `401` (bad `CAPTURE_SECRET`) stops the entire run immediately — no point hammering a
+  misconfigured secret against every remaining URL.
+- `429` (our own per-IP rate limiter, unrelated to the daily cap) sleeps 2x spacing and
+  continues — should be essentially unreachable given 20s+ spacing vs. the server's
+  30/min limit, but handled rather than treated as fatal.
+- Request timeout is a generous 60s to tolerate Render's free-tier cold start (~30-50s)
+  on the first hit after idle.
+- Running per-URL count + final summary (`X captured, Y duplicates, Z errors`, plus
+  skipped/total) printed as specified.
+
+**Tests:** 24 new in `tests/test_bulk_import.py`, all logic-level — `run_bulk_import`
+takes injectable `submit_fn`/`sleep_fn`/`jitter_fn`/`print_fn` so no test touches the
+network, the clock, or stdout. Covers: URL/comment parsing, progress roundtrip + atomic
+write, daily-submission counting (today only, `processing` only), the happy path,
+duplicate/error mix, no-delay-after-duplicate, rerun skipping terminal entries, error
+retry on a later run, the daily-cap stop (both "already at cap from a prior run" and
+"hits cap mid-run"), that the cap only counts *today's* entries, auth-error full-stop,
+rate-limit backoff-and-continue, `--dry-run` (zero submissions, no progress file
+written), jitter addition, and `submit_capture`'s response-shape mapping for all five
+outcomes (202/200-duplicate/401/429/400/network-exception) against a fake httpx response.
+**Also added an autouse `httpx.post` block to conftest** (mirroring the existing
+`httpx.get` block) — confirmed it doesn't interfere with FastAPI's `TestClient`, which
+uses its own `httpx.Client` instance, not the module-level function.
+
+**Full suite: 168 passed** (was 144). No live calls — did not run this script against the
+real deployed endpoint myself, per the ground rules.
+
+**For your review:** the daily-cap self-throttle is the one part of this that's a
+deliberate approximation rather than a precise mirror of server truth — worth knowing
+before running a large multi-day import alongside regular manual captures.
+
+---
+
 ## SESSION SUMMARY — three workstreams (Notion cleanup / Obsidian vault / Claude setup)
 
 **All three done, three separate commits, 144 tests passing, no live calls made.**

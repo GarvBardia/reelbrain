@@ -90,6 +90,26 @@ python scripts/smoke.py https://www.instagram.com/reel/XXXXXXXX/
 To re-run a smoke test cleanly, delete the Notion page by hand, then
 `python scripts/delete_row.py <shortcode>`.
 
+## Bulk importing a list of reels
+
+```bash
+python scripts/bulk_import.py urls.txt
+```
+
+One reel URL per line in `urls.txt` (blank lines and `#` comments ignored). POSTs each
+to your deployed `/capture` (`REELBRAIN_URL` in `.env`), spaced `MIN_FETCH_SPACING_SECONDS`
++ jitter apart. Progress is tracked in `bulk_import_progress.json` — safely re-runnable;
+already-submitted URLs are skipped, errored ones are retried automatically next run.
+
+**Read before a large import:** `/capture` responds instantly and does the actual fetch
+in the background, so the server's `MAX_FETCHES_PER_DAY` cap has no distinct HTTP error —
+a submission past the cap still gets a normal response and only fails invisibly later.
+The script works around this by self-throttling to the same cap using its own progress
+file and stopping cleanly with "daily cap reached — resume tomorrow." This only accounts
+for submissions the script itself made — it can't see fetches from the iOS Shortcut or
+manual `/retry` calls consuming the same daily budget. `--dry-run` lists what would be
+submitted without sending anything.
+
 ## Troubleshooting — errors we actually hit, and their fixes
 
 | Error | Cause | Fix |
@@ -299,8 +319,13 @@ scripts/smoke.py          live end-to-end smoke test
 scripts/delete_row.py     remove a local row so a smoke test can re-run
 scripts/run_nightly.py    runs the nightly cleanup once (same code as POST /nightly)
 scripts/weekly_digest.py  builds + posts the weekly digest
+scripts/bulk_import.py    bulk-POST a list of reel URLs to the deployed /capture
+scripts/sync_to_obsidian.py  Notion -> local Obsidian vault markdown sync
 tests/                    unit + integration tests (fully mocked, no network)
 render.yaml               Render free-tier Blueprint
 DEPLOYMENT.md             Render setup, click by click
 SCHEDULING.md             keep-alive ping + nightly cron recipes
+VAULT.md                  Obsidian vault sync usage + scheduling
+VAULT_CLAUDE_SETUP.md     Claude Desktop filesystem-MCP setup for the vault
+NOTION_VIEWS.md           manual Notion view setup (mobile-friendly, This Week)
 ```
