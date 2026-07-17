@@ -1,5 +1,34 @@
 # PROGRESS.md — hardening/deployment session log
 
+## SESSION SUMMARY — three workstreams (Notion cleanup / Obsidian vault / Claude setup)
+
+**All three done, three separate commits, 144 tests passing, no live calls made.**
+
+| WS | What landed | Commit |
+|---|---|---|
+| 1 | Gate regex fixed (quoted mixed-case keywords — the DajFASZODlj miss), NOTION_VIEWS.md manual view guide (API can't configure views), nightly auto-archive (score≤2, 30d untouched → 🗄 Archived) | `52913aa` |
+| 2 | Obsidian sync: Notion→markdown notes with frontmatter wikilinks, embedding-based `## Related` links (reused, not recomputed), stubs, `_index.md`, idempotent, VAULT.md incl. Task Scheduler steps | `7205c22` |
+| 3 | VAULT_CLAUDE_SETUP.md: Desktop filesystem-MCP setup scoped to the vault, paste-ready project instructions, limitation note + recommendation | (this commit) |
+
+**Needs your review:**
+- WS1: auto-archive uses `updated_at` as the "untouched" proxy — Notion-side My-note
+  edits are invisible to it (details in the WS1 entry).
+- WS2: reel-note edits don't survive re-sync (by design); stub notes do.
+- WS1: `NOTION_VIEWS.md` is manual clicks (~3 min) since the API can't create views.
+- The existing DajFASZODlj row needs a retry to pick up the gate fix (command below).
+
+**Your next 3 commands:**
+1. Re-run the missed gate row through the fixed pipeline (after Render shows Live):
+   `curl -X POST https://<your-render-app>/retry/DajFASZODlj`
+2. First real vault sync (local, read-only against Notion):
+   `python scripts/sync_to_obsidian.py`
+3. Open the result in Obsidian (then follow VAULT_CLAUDE_SETUP.md for the Claude project):
+   open `C:\Users\garvb\ReelBrainVault` via Obsidian → "Open folder as vault"
+
+Plus the 3 minutes of Notion view clicks from NOTION_VIEWS.md when you're next at a desk.
+
+---
+
 ## WORKSTREAM 2 — Obsidian vault sync (the smart-memory layer)
 
 **Built:** `app/obsidian_sync.py` (logic) + `scripts/sync_to_obsidian.py` (local-only
