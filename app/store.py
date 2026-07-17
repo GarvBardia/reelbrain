@@ -284,13 +284,127 @@ def get_most_recent_awaiting_dm() -> Optional[sqlite3.Row]:
         ).fetchone()
 
 
+# --- ephemeral-disk recovery: Notion is the durable source of truth --------
+#
+# Render's free tier wipes its ephemeral disk on every redeploy/restart, taking
+# SQLite with it. When a local lookup misses entirely, /attach and /retry fall
+# back to querying Notion directly (the durable copy) and persist whatever's
+# found locally as a byproduct, so the rest of this process session — and any
+# later lookups before the next wipe — see a normal local row.
+
+
+def upsert_from_notion(
+    *,
+    shortcode: str,
+    permalink: str,
+    note: Optional[str],
+    status: str,
+    notion_page_id: str,
+    notion_page_url: str,
+    gate_keyword: Optional[str] = None,
+) -> sqlite3.Row:
+    """Persists a minimal row reconstructed from a Notion page and returns it as
+    a genuine local row. ON CONFLICT covers the (unlikely) case where a row
+    already exists locally under a different status — e.g. a race with a
+    background pipeline — without clobbering a note the row already had."""
+    now = _now_iso()
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO saves
+                   (shortcode, permalink, note, status, notion_page_id, notion_page_url,
+                    gate_keyword, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(shortcode) DO UPDATE SET
+                   permalink = excluded.permalink,
+                   note = COALESCE(saves.note, excluded.note),
+                   status = excluded.status,
+                   notion_page_id = excluded.notion_page_id,
+                   notion_page_url = excluded.notion_page_url,
+                   gate_keyword = excluded.gate_keyword,
+                   updated_at = excluded.updated_at""",
+            (shortcode, permalink, note, status, notion_page_id, notion_page_url,
+             gate_keyword, now, now),
+        )
+    return get_by_shortcode(shortcode)
+
+
+def _persist_notion_page(page: dict) -> Optional[sqlite3.Row]:
+    from app import notion_writer
+
+    fields = notion_writer.extract_saves_fields(page)
+    if not fields["shortcode"]:
+        return None
+    return upsert_from_notion(
+        shortcode=fields["shortcode"],
+        permalink=fields["permalink"] or f"https://www.instagram.com/reel/{fields['shortcode']}/",
+        note=fields["note"],
+        # Whichever status we reconstruct here is provisional — both /attach and
+        # /retry immediately overwrite it (to 'done' / 'processing' respectively)
+        # right after finding the row, so an unmapped label defaulting to 'done'
+        # is harmless.
+        status=notion_writer.status_label_from_notion(fields["status_label"]) or "done",
+        notion_page_id=fields["page_id"],
+        notion_page_url=fields["url"],
+        gate_keyword=fields["gate_keyword"],
+    )
+
+
+def get_by_shortcode_or_notion(shortcode: str) -> Optional[sqlite3.Row]:
+    """get_by_shortcode, falling back to a direct Notion lookup (and local
+    re-insert) if the local row is missing. Used by /retry."""
+    row = get_by_shortcode(shortcode)
+    if row:
+        return row
+    from app import notion_writer
+
+    try:
+        page = notion_writer.find_page_by_shortcode(shortcode)
+    except Exception:
+        logger.warning("Notion fallback lookup failed for %s", shortcode, exc_info=True)
+        return None
+    if not page:
+        return None
+    return _persist_notion_page(page)
+
+
+def _find_pending_gate_via_notion(shortcode_or_note: Optional[str]) -> Optional[sqlite3.Row]:
+    from app import notion_writer
+
+    try:
+        pages = notion_writer.find_awaiting_dm_pages()
+    except Exception:
+        logger.warning("Notion fallback lookup for awaiting-DM entries failed", exc_info=True)
+        return None
+    if not pages:
+        return None
+
+    chosen = None
+    if shortcode_or_note:
+        needle = shortcode_or_note.lower()
+        for page in pages:
+            if notion_writer.extract_saves_fields(page)["shortcode"] == shortcode_or_note:
+                chosen = page
+                break
+        if chosen is None:
+            for page in pages:
+                fields = notion_writer.extract_saves_fields(page)
+                if needle in (fields["note"] or "").lower() or needle in (fields["title"] or "").lower():
+                    chosen = page
+                    break
+    if chosen is None:
+        chosen = pages[0]  # already sorted most-recently-edited first, mirrors get_most_recent_awaiting_dm
+
+    return _persist_notion_page(chosen)
+
+
 def find_pending_gate(shortcode_or_note: Optional[str]) -> Optional[sqlite3.Row]:
     """BUILD_SPEC 2.2: match /attach's target row.
 
     Tries an exact shortcode match first, then a substring match against the
     note the entry was captured with, both restricted to awaiting_dm rows.
     Falls back to the most-recent awaiting_dm entry if shortcode_or_note is
-    omitted or matches nothing.
+    omitted or matches nothing. If SQLite has nothing at all (a fresh/wiped
+    disk), falls back to querying Notion directly with the same priority order.
     """
     if shortcode_or_note:
         with get_connection() as conn:
@@ -307,7 +421,10 @@ def find_pending_gate(shortcode_or_note: Optional[str]) -> Optional[sqlite3.Row]
             ).fetchone()
             if row:
                 return row
-    return get_most_recent_awaiting_dm()
+    local = get_most_recent_awaiting_dm()
+    if local:
+        return local
+    return _find_pending_gate_via_notion(shortcode_or_note)
 
 
 def get_archivable(older_than_days: int = 30, max_value_score: int = 2) -> list[sqlite3.Row]:

@@ -27,6 +27,10 @@ STATUS_LABELS = {
     "gate_expired": "🕳 Gate expired",
     "archived": "🗄 Archived",
 }
+# Reverse lookup for reading a page's Status back into our internal keys (used by
+# the ephemeral-disk-recovery fallback below). "✅ Processed/Reviewed" is a
+# manual-only status the pipeline never writes, so it has no internal key.
+_STATUS_LABELS_REVERSE = {label: key for key, label in STATUS_LABELS.items()}
 
 _data_source_id_cache: dict[str, str] = {}
 
@@ -69,6 +73,76 @@ def _get_or_create_creator(client, username: Optional[str], fullname: Optional[s
 
 def _rich_text(content: str) -> list[dict]:
     return [{"type": "text", "text": {"content": content[:2000]}}] if content else []
+
+
+# --- reading pages back (ephemeral-disk recovery for /attach and /retry) -------
+#
+# SQLite is the normal source of truth for the app's own bookkeeping, but Render's
+# free tier wipes its ephemeral disk on every redeploy/restart. Notion is the
+# durable copy. When a local row is missing, store.py queries Notion directly via
+# the functions below and re-persists whatever it finds locally as a byproduct.
+
+
+def _rt_text(rich_text_items: Optional[list[dict]]) -> str:
+    """Concatenate a rich_text (or title) array read back from the API. Real
+    responses carry plain_text; payloads built by tests carry text.content —
+    accept both, mirroring app/obsidian_sync.py's reader of the same shape."""
+    parts = []
+    for item in rich_text_items or []:
+        parts.append(item.get("plain_text") or item.get("text", {}).get("content", ""))
+    return "".join(parts)
+
+
+def status_label_from_notion(label: str) -> Optional[str]:
+    return _STATUS_LABELS_REVERSE.get(label)
+
+
+def extract_saves_fields(page: dict) -> dict:
+    """The subset of a raw Saves-DB page's properties that store.py's fallback
+    needs to reconstruct a usable local row: shortcode, permalink, note, status,
+    gate keyword, title, plus the page's own id/url."""
+    props = page.get("properties", {})
+    shortcode = _rt_text((props.get("Shortcode") or {}).get("rich_text"))
+    note = _rt_text((props.get("My note") or {}).get("rich_text")) or None
+    gate_keyword = _rt_text((props.get("Gate keyword") or {}).get("rich_text")) or None
+    permalink = (props.get("Reel URL") or {}).get("url") or ""
+    status_label = ((props.get("Status") or {}).get("select") or {}).get("name", "")
+    title = _rt_text((props.get("Title") or {}).get("title"))
+    return {
+        "shortcode": shortcode,
+        "permalink": permalink,
+        "note": note,
+        "status_label": status_label,
+        "gate_keyword": gate_keyword,
+        "title": title,
+        "page_id": page.get("id", ""),
+        "url": page.get("url", ""),
+    }
+
+
+def find_page_by_shortcode(shortcode: str) -> Optional[dict]:
+    """Exact Shortcode match in the Saves data source, or None. Used by /retry's
+    fallback when the local SQLite row is missing."""
+    client = _client()
+    saves_ds_id = _resolve_data_source_id(client, NOTION_DB_ID)
+    results = client.data_sources.query(
+        data_source_id=saves_ds_id,
+        filter={"property": "Shortcode", "rich_text": {"equals": shortcode}},
+    )["results"]
+    return results[0] if results else None
+
+
+def find_awaiting_dm_pages() -> list[dict]:
+    """Every Saves page with Status = Awaiting DM, most-recently-edited first.
+    Used by /attach's fallback when no local SQLite row matches; store.py applies
+    the same shortcode-then-note-then-most-recent priority as its local search."""
+    client = _client()
+    saves_ds_id = _resolve_data_source_id(client, NOTION_DB_ID)
+    return client.data_sources.query(
+        data_source_id=saves_ds_id,
+        filter={"property": "Status", "select": {"equals": STATUS_LABELS["awaiting_dm"]}},
+        sorts=[{"timestamp": "last_edited_time", "direction": "descending"}],
+    )["results"]
 
 
 def _build_properties(

@@ -297,7 +297,10 @@ def retry(shortcode: str, request: Request, background_tasks: BackgroundTasks) -
     _check_rate_limit(request)
     if not _SHORTCODE_PATH_RE.fullmatch(shortcode):
         raise HTTPException(status_code=400, detail="malformed shortcode")
-    row = store.get_by_shortcode(shortcode)
+    # Falls back to querying Notion directly (the durable source of truth) if the
+    # local row is missing — Render's ephemeral disk gets wiped on every
+    # redeploy/restart, but the Notion page survives.
+    row = store.get_by_shortcode_or_notion(shortcode)
     if not row:
         raise HTTPException(status_code=404, detail="unknown shortcode")
 

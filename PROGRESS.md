@@ -1,5 +1,74 @@
 # PROGRESS.md — hardening/deployment session log
 
+## /attach and /retry survive ephemeral-disk wipes (Notion fallback)
+
+**Fixes the specific failure mode we hit twice today: `DajFASZODlj` on `/retry` and
+`DZSFkNppVW_` on `/attach`, both 404/"no matching entry" purely because Render's
+free-tier ephemeral disk got wiped on redeploy and took local SQLite with it — while
+the actual Notion page (the real source of truth for everything else in this system)
+was sitting there the whole time.**
+
+**1. `app/notion_writer.py` — new read-back helpers** (this file previously only
+*wrote* to Notion; reading properties back needed new code):
+- `_rt_text()`: reads a rich_text/title array back to plain text (mirrors
+  `obsidian_sync.py`'s reader of the same API shape, kept separate rather than
+  cross-imported since obsidian_sync is a local-only vault-sync module).
+- `extract_saves_fields(page)`: pulls shortcode, permalink, note, status label, gate
+  keyword, title, page id/url out of a raw Saves-DB page object.
+- `status_label_from_notion(label)`: reverse of `STATUS_LABELS`; unmapped (the
+  manual-only `✅ Processed/Reviewed`) returns `None`.
+- `find_page_by_shortcode(shortcode)`: exact match, for `/retry`.
+- `find_awaiting_dm_pages()`: every `⏳ Awaiting DM` page, most-recently-edited
+  first, for `/attach`.
+
+**2. `app/store.py` — the fallback logic + persistence:**
+- `upsert_from_notion()`: the "re-insert as a byproduct" step — `INSERT ... ON
+  CONFLICT(shortcode) DO UPDATE`, so it works whether the local row is genuinely
+  absent or (rare race) present under a different status, and never clobbers an
+  existing note (`COALESCE`). Returns a real `sqlite3.Row` via a fresh SELECT — no
+  fake row-like object needed, subsequent code just sees a normal local row.
+- `get_by_shortcode_or_notion()`: `get_by_shortcode`, then on a miss queries
+  `find_page_by_shortcode` and persists what it finds. Used by `/retry`.
+- `find_pending_gate()`: after ALL local attempts miss (exact shortcode, note
+  substring, most-recent-awaiting_dm), now falls back to
+  `_find_pending_gate_via_notion()`, which applies the **identical priority order**
+  against Notion's awaiting-DM pages: exact shortcode → note substring → title
+  substring (an addition — the task asked for Title-or-My-note; local search only
+  ever checked note, so Notion fallback is slightly more capable here) → most
+  recent. Used by `/attach`.
+- Both fallbacks catch any Notion error and return `None` rather than raising —
+  a Notion outage degrades to the pre-existing 404, it doesn't crash the endpoint.
+
+**3. `app/main.py`:** `/retry` swapped `store.get_by_shortcode` for
+`store.get_by_shortcode_or_notion`. `/attach` needed no change — it already calls
+`store.find_pending_gate`, which now carries the fallback internally.
+
+**What only got backfilled, not fully reconstructed:** the fallback-recovered row is
+deliberately minimal — shortcode, permalink, note, status, notion_page_id/url, gate
+keyword. Fields like `creator`, `transcript`, `extraction_json`, `taken_at` stay
+`NULL` until a real pipeline run backfills them (which `/retry` triggers
+immediately; `/attach` doesn't need them at all for what it does). Good enough for
+both endpoints' actual needs — confirmed by reading exactly what each one accesses
+off `row` before writing any reconstruction code, per the task's own instruction.
+
+**Tests:** 25 new in `tests/test_notion_fallback.py` — notion_writer's readers
+(`_rt_text` both shapes, status mapping known/unmapped, field extraction complete
+and with missing-optional-properties, both query functions' exact filter/sort
+shapes); store.py's fallback (upsert creates + round-trips, ON CONFLICT preserves an
+existing note, local-hit short-circuits before ever touching Notion — proved with a
+`data_sources.query` that raises if called at all — fallback-hit persists and a
+*second* lookup then also short-circuits, both-miss returns `None`, Notion errors
+degrade to `None` rather than raising, and `find_pending_gate`'s full priority chain:
+shortcode / note / title / most-recent, each independently); and the two endpoints
+end-to-end through `TestClient` reproducing the exact failure modes named above —
+`/retry` and `/attach` both succeeding via the Notion fallback with a mocked pipeline,
+both still correctly 404ing when Notion has nothing either, and a round-trip check
+that the locally-persisted row after a fallback `/attach` is indistinguishable from
+what a normal local hit would have produced. **Full suite: 238 passed** (was 213).
+No live Notion calls anywhere — every test drives a fake `data_sources.query`.
+
+---
+
 ## Cookie-expiry monitoring + alerting
 
 **Goal:** stop discovering expired burner cookies by noticing failed captures.
