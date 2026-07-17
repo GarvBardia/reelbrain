@@ -37,7 +37,7 @@ def test_nightly_runs_cleanup_and_reports(monkeypatch):
 
     resp = client.post("/nightly", json={"secret": "test-secret"})
     assert resp.status_code == 200
-    assert resp.json() == {"marked_failed": ["HTTPSTUCK"], "marked_gate_expired": []}
+    assert resp.json() == {"marked_failed": ["HTTPSTUCK"], "marked_gate_expired": [], "marked_archived": []}
     assert store.get_by_shortcode("HTTPSTUCK")["status"] == "failed"
 
 
@@ -45,4 +45,4 @@ def test_nightly_empty_run_returns_empty_lists(monkeypatch):
     client = _client(monkeypatch)
     resp = client.post("/nightly", json={"secret": "test-secret"})
     assert resp.status_code == 200
-    assert resp.json() == {"marked_failed": [], "marked_gate_expired": []}
+    assert resp.json() == {"marked_failed": [], "marked_gate_expired": [], "marked_archived": []}

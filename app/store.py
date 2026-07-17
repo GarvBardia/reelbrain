@@ -286,6 +286,24 @@ def find_pending_gate(shortcode_or_note: Optional[str]) -> Optional[sqlite3.Row]
     return get_most_recent_awaiting_dm()
 
 
+def get_archivable(older_than_days: int = 30, max_value_score: int = 2) -> list[sqlite3.Row]:
+    """Stale low-value rows for the nightly auto-archive: value_score <= 2 and no
+    activity on the row for 30+ days (updated_at is our best 'untouched' proxy —
+    Notion-side edits to My note aren't visible to us, so any pipeline/API touch
+    counts as activity). Rows still in flight (processing) or waiting on the user
+    (awaiting_dm) are never archived out from under their own workflow."""
+    cutoff = (_utc_naive_now() - timedelta(days=older_than_days)).isoformat()
+    with get_connection() as conn:
+        return conn.execute(
+            """SELECT * FROM saves
+               WHERE status NOT IN ('processing', 'awaiting_dm', 'archived')
+                 AND extraction_json IS NOT NULL
+                 AND CAST(json_extract(extraction_json, '$.value_score') AS INTEGER) <= ?
+                 AND COALESCE(updated_at, created_at) < ?""",
+            (max_value_score, cutoff),
+        ).fetchall()
+
+
 def get_saves_since(days: int = 7) -> list[sqlite3.Row]:
     """All saves created in the past N days, newest first (weekly digest)."""
     cutoff = (_utc_naive_now() - timedelta(days=days)).isoformat()

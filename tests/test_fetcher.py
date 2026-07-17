@@ -30,10 +30,24 @@ def test_detect_comment_gate_negative_no_gate():
     assert detect_comment_gate("just a normal caption about my day") is None
 
 
-def test_detect_comment_gate_requires_uppercase_keyword():
-    # Matches CLAUDE.md's literal regex intent: only fires on an actually-capitalized
-    # keyword, the typical gate style ("comment SEND"), not on every use of the word.
+def test_detect_comment_gate_requires_uppercase_when_unquoted():
+    # Unquoted keywords still need ALL-CAPS to separate them from ordinary prose.
     assert detect_comment_gate("comment your thoughts below") is None
+
+
+def test_detect_comment_gate_quoted_mixed_case():
+    """The DajFASZODlj miss: quoted keyword in ordinary Title case. Quoting is the
+    creator's own signal, so case must not matter inside quotes."""
+    assert detect_comment_gate('Comment "International" for free Guide') == "International"
+
+
+def test_detect_comment_gate_quoted_lowercase_and_curly_quotes():
+    assert detect_comment_gate("Comment “growth” and I'll DM you") == "growth"
+    assert detect_comment_gate("comment 'links' for the resource") == "links"
+
+
+def test_detect_comment_gate_unquoted_allcaps_still_works():
+    assert detect_comment_gate("comment SEND below for the guide") == "SEND"
 
 
 def test_detect_comment_gate_none_caption():

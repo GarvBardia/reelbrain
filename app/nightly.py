@@ -17,6 +17,8 @@ logger = logging.getLogger("reelbrain.nightly")
 
 STUCK_PROCESSING_MINUTES = 60
 GATE_EXPIRY_DAYS = 7
+ARCHIVE_AFTER_DAYS = 30
+ARCHIVE_MAX_VALUE_SCORE = 2
 
 
 def _row_to_reel_data(row) -> ReelData:
@@ -65,8 +67,26 @@ def expire_old_gates() -> list[str]:
     return updated
 
 
+def archive_stale_low_value() -> list[str]:
+    """Auto-archive: value_score <= 2 rows untouched for 30+ days flip to
+    🗄 Archived so the Inbox/Low-signal views stay uncluttered. Notion status
+    sync is best-effort like the other nightly passes."""
+    updated = []
+    for row in store.get_archivable(
+        older_than_days=ARCHIVE_AFTER_DAYS, max_value_score=ARCHIVE_MAX_VALUE_SCORE
+    ):
+        store.update_save(row["shortcode"], status="archived")
+        try:
+            _ensure_notion_status(row, "archived")
+        except Exception:  # noqa: BLE001
+            logger.exception("failed to sync Notion status for archived row %s", row["shortcode"])
+        updated.append(row["shortcode"])
+    return updated
+
+
 def run() -> dict:
     return {
         "marked_failed": mark_stuck_processing_failed(),
         "marked_gate_expired": expire_old_gates(),
+        "marked_archived": archive_stale_low_value(),
     }

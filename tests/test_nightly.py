@@ -120,4 +120,69 @@ def test_run_reports_both_buckets(monkeypatch):
     _backdate("A2", updated_minutes_ago=8 * 24 * 60)
 
     result = nightly.run()
-    assert result == {"marked_failed": ["A1"], "marked_gate_expired": ["A2"]}
+    assert result == {"marked_failed": ["A1"], "marked_gate_expired": ["A2"], "marked_archived": []}
+
+
+# --- auto-archive (WS1.3) -----------------------------------------------------
+
+import json
+
+
+def _seed_scored(shortcode: str, value_score: int, status: str = "low_signal",
+                 days_old: int = 0) -> None:
+    store.insert_processing(shortcode, f"https://www.instagram.com/reel/{shortcode}/")
+    store.update_save(
+        shortcode, status=status,
+        extraction_json=json.dumps({"main_point": "x", "value_score": value_score}),
+        notion_page_id=f"page-{shortcode}", notion_page_url=f"https://notion.so/page-{shortcode}",
+    )
+    if days_old:
+        _backdate(shortcode, created_minutes_ago=days_old * 24 * 60,
+                  updated_minutes_ago=days_old * 24 * 60)
+
+
+def test_stale_low_value_row_archived(monkeypatch):
+    fake = _install_fake_notion(monkeypatch)
+    _seed_scored("STALE1", value_score=1, days_old=31)
+
+    updated = nightly.archive_stale_low_value()
+
+    assert updated == ["STALE1"]
+    assert store.get_by_shortcode("STALE1")["status"] == "archived"
+    assert fake.pages.updated[0]["properties"]["Status"]["select"]["name"] == "🗄 Archived"
+
+
+def test_recent_low_value_row_not_archived(monkeypatch):
+    _install_fake_notion(monkeypatch)
+    _seed_scored("FRESHLOW", value_score=2, days_old=5)
+    assert nightly.archive_stale_low_value() == []
+    assert store.get_by_shortcode("FRESHLOW")["status"] == "low_signal"
+
+
+def test_stale_high_value_row_not_archived(monkeypatch):
+    _install_fake_notion(monkeypatch)
+    _seed_scored("STALEGOOD", value_score=4, status="done", days_old=90)
+    assert nightly.archive_stale_low_value() == []
+    assert store.get_by_shortcode("STALEGOOD")["status"] == "done"
+
+
+def test_awaiting_dm_never_archived_even_if_stale_and_low(monkeypatch):
+    """A pending gate belongs to the gate-expiry pass, not the archive pass."""
+    _install_fake_notion(monkeypatch)
+    _seed_scored("STALEGATE", value_score=1, status="awaiting_dm", days_old=45)
+    assert nightly.archive_stale_low_value() == []
+
+
+def test_archived_row_not_rearchived(monkeypatch):
+    _install_fake_notion(monkeypatch)
+    _seed_scored("ALREADYARCH", value_score=1, status="archived", days_old=60)
+    assert nightly.archive_stale_low_value() == []
+
+
+def test_row_without_extraction_not_archived(monkeypatch):
+    """Failed rows with no extraction_json have no value_score — leave them for /retry."""
+    _install_fake_notion(monkeypatch)
+    store.insert_processing("NOEXTRACT", "https://www.instagram.com/reel/NOEXTRACT/")
+    store.update_save("NOEXTRACT", status="failed")
+    _backdate("NOEXTRACT", created_minutes_ago=60 * 24 * 60, updated_minutes_ago=60 * 24 * 60)
+    assert nightly.archive_stale_low_value() == []

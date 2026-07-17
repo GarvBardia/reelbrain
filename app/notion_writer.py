@@ -25,6 +25,7 @@ STATUS_LABELS = {
     "failed": "⚠️ Failed — retry",
     "low_signal": "🗑 Low signal",
     "gate_expired": "🕳 Gate expired",
+    "archived": "🗄 Archived",
 }
 
 _data_source_id_cache: dict[str, str] = {}

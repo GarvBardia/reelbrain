@@ -34,10 +34,19 @@ BACKOFF_SECONDS = [20, 40, 80]  # bounded — never an unbounded retry loop
 
 SHORTCODE_RE = re.compile(r"instagram\.com/(?:reel|reels|p|tv)/([A-Za-z0-9_-]+)")
 
-# CLAUDE.md's own regex, kept literal — the [A-Z]{2,12} deliberately only
-# matches an actually-capitalized keyword (e.g. "comment SEND"), the usual
-# gate style; the word "comment" itself is matched case-insensitively.
-COMMENT_GATE_RE = re.compile(r"(?i:comment)\s+[\"']?([A-Z]{2,12})[\"']?")
+# Two gate styles, in priority order:
+#   1. QUOTED keyword, any case — 'Comment "International" for free Guide'.
+#      Quoting is the creator's own signal that this is the magic word, so we
+#      trust it regardless of capitalization. Curly quotes included (iOS/IG
+#      autocorrect them constantly).
+#   2. Unquoted ALL-CAPS word — "comment SEND below". Without quotes, the
+#      all-caps requirement is what separates a keyword from ordinary prose
+#      ("comment your thoughts below" must NOT match).
+COMMENT_GATE_RE = re.compile(
+    r"(?i:comment)\s+"
+    r"(?:[\"'“”‘’]\s*([A-Za-z][A-Za-z0-9 _-]{1,29}?)\s*[\"'“”‘’]"
+    r"|([A-Z]{2,12})\b)"
+)
 
 # Errors that mean "Instagram is stonewalling this request" and are worth a
 # cookie-backed retry, as opposed to a genuine hard error (bad URL, deleted post).
@@ -127,7 +136,9 @@ def detect_comment_gate(caption: Optional[str]) -> Optional[str]:
     if not caption:
         return None
     match = COMMENT_GATE_RE.search(caption)
-    return match.group(1) if match else None
+    if not match:
+        return None
+    return match.group(1) or match.group(2)
 
 
 def _check_burner_guard() -> None:

@@ -1,5 +1,47 @@
 # PROGRESS.md — hardening/deployment session log
 
+## WORKSTREAM 1 — Notion cleanup: gate-miss fix, mobile views, auto-archive
+
+**1. The DajFASZODlj gate miss — root cause found and fixed.** Investigated the success
+path first as asked: `_merge_comment_gate` IS correctly applied there (and on all degraded
+paths since the earlier fix) — the wiring is fine. The actual bug: the regex backstop
+`[A-Z]{2,12}` only matches ALL-CAPS keywords. The caption is
+`Comment "International" for free Guide` — mixed case — so the regex returned None, and
+since Gemini's own `comment_gate` field also missed it, there was nothing to merge.
+Reproduced locally before fixing. New regex accepts a **quoted keyword in any case**
+(straight or curly quotes — the creator quoting the word is itself the signal) while
+keeping the ALL-CAPS requirement for unquoted words, so "comment your thoughts below"
+still doesn't match. Tests: the exact failing caption, curly quotes, lowercase-quoted,
+unquoted-ALL-CAPS, and the prose negative.
+   - Note: the existing DajFASZODlj row won't self-heal — after redeploy, `POST /retry/DajFASZODlj`
+     will rerun it through the fixed pipeline.
+
+**2. Mobile-friendly Notion views → `NOTION_VIEWS.md` (manual steps, ~3 min).** The public
+Notion API has NO endpoints for view creation/config (sorts, filters, visible properties
+are UI-only), so a setup script is impossible — took the task's escape hatch. The doc
+covers: a `📱 Triage` default view (Status priority-sorted via select-option order — the
+only mechanism Notion has for custom status ordering — newest first within status, only
+Title/Status/Topics/Creator visible, leftmost tab = default on mobile) and a `This Week`
+gallery view on a rolling 7-day `Posted at` filter with an OR on `Saved at` so degraded
+rows don't vanish. Plus a one-click filter to keep 🗄 Archived out of daily views.
+
+**3. Auto-archive wired into the existing nightly job.** `store.get_archivable()`:
+`value_score <= 2` (from `extraction_json` via `json_extract`) AND untouched 30+ days AND
+status not `processing`/`awaiting_dm`/`archived` → flipped to new `archived` status
+(`🗄 Archived` added to STATUS_LABELS; Notion select options auto-create on first write,
+no schema migration needed). Runs as a third pass in `nightly.run()`, reported as
+`marked_archived` in the /nightly response. 6 new tests: archives stale+low, spares
+recent-low / stale-high / awaiting_dm / already-archived / no-extraction (failed) rows.
+   - **Caveat for your review:** "no My note edits" is approximated by `updated_at` — we
+     never read Notion pages back, so Notion-side edits are invisible to us. "Untouched"
+     means no pipeline/API activity on the row for 30 days. If you edit a note in Notion
+     to save it from archiving, the nightly job won't know. Good enough at this scale, but
+     it's a proxy, not the literal spec.
+
+**Tests: 136 passed** (was 127). No live calls.
+
+---
+
 ## HOTFIX — yt-dlp prod failures: cookie resolution, fail-fast, OG fallback
 
 Server-side fixes for `No video formats found` / `empty media response ... use --cookies`
