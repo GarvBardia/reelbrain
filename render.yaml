@@ -24,6 +24,10 @@ services:
         sync: false
       - key: NOTION_CREATORS_DB_ID
         sync: false
+      # Needed for the weekly digest and cookie-health alert pages (both create
+      # pages directly under this page, not in a database). See DEPLOYMENT.md.
+      - key: NOTION_PARENT_PAGE_ID
+        sync: false
       - key: BURNER_COOKIES_FILE
         value: ./cookies.txt
       - key: BURNER_ACCOUNT_USERNAME
@@ -38,3 +42,8 @@ services:
         value: "25"
       - key: MIN_FETCH_SPACING_SECONDS
         value: "20"
+      # Cookie-health alerting — see COOKIES.md.
+      - key: COOKIE_HEALTH_THRESHOLD
+        value: "3"
+      - key: NTFY_TOPIC
+        sync: false

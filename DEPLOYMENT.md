@@ -23,14 +23,21 @@ deploys.
      Integration Secret".
    - `NOTION_DB_ID` / `NOTION_CREATORS_DB_ID` — the two IDs `scripts/setup_notion.py`
      printed when you created the databases.
+   - `NOTION_PARENT_PAGE_ID` — the same parent page ID from setup. Needed at runtime too,
+     not just for the one-time setup script: the weekly digest and cookie-health alert
+     both create pages directly under it.
    - `BURNER_ACCOUNT_USERNAME` — the burner IG account's username.
    - `REAL_ACCOUNT_GUARD` — your REAL IG username (the safety interlock; the app refuses
      to fetch if it ever matches the burner name).
    - `CAPTURE_SECRET` — the same string your iOS Shortcut sends.
+   - `NTFY_TOPIC` — optional; an unguessable topic name for a free ntfy.sh push
+     notification when cookies expire. See COOKIES.md. Leave blank to skip — the Notion
+     alert fires regardless.
 4. Click **Apply**. First build takes a few minutes.
 5. When it's live, open `https://<your-service>.onrender.com/health` — you should see
-   `{"status": "ok", "sqlite_vec": true, ...}`. If `sqlite_vec` is `false`, embeddings are
-   disabled but everything else still works (see README Phase 3 notes).
+   `{"status": "ok", "sqlite_vec": true, "cookie_health": "ok", ...}`. If `sqlite_vec` is
+   `false`, embeddings are disabled but everything else still works (see README Phase 3
+   notes). If `cookie_health` ever flips to `"degraded"`, see COOKIES.md.
 
 ## Path B — manual (no Blueprint)
 

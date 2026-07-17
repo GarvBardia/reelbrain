@@ -60,6 +60,13 @@ CREATE TABLE IF NOT EXISTS fetch_log (
     count INTEGER NOT NULL DEFAULT 0,
     last_fetch_at TEXT
 );
+
+-- Generic small-state key/value store (cookie-health counter, alert dedup dates,
+-- anything else that's a single persistent value rather than a row per record).
+CREATE TABLE IF NOT EXISTS app_state (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
 """
 
 
@@ -376,4 +383,22 @@ def record_fetch() -> None:
             """INSERT INTO fetch_log (day, count, last_fetch_at) VALUES (?, 1, ?)
                ON CONFLICT(day) DO UPDATE SET count = count + 1, last_fetch_at = ?""",
             (day, now, now),
+        )
+
+
+# --- small persistent state (cookie-health counter, alert dedup, etc.) --------
+
+
+def get_state(key: str, default: Optional[str] = None) -> Optional[str]:
+    with get_connection() as conn:
+        row = conn.execute("SELECT value FROM app_state WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_state(key: str, value: str) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO app_state (key, value) VALUES (?, ?)
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value""",
+            (key, value),
         )

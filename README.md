@@ -122,6 +122,20 @@ submitted without sending anything.
 | `sqlite_vec: false` in `/health` | sqlite-vec extension failed to load in that environment | captures still work; embeddings/related-saves silently disabled — check install logs for the `sqlite-vec unavailable` warning |
 | `cookies file not found at ... or ...` on every capture | no burner `cookies.txt` at `BURNER_COOKIES_FILE` or `/etc/secrets/cookies.txt` | upload it (Render: Environment → Secret Files, named `cookies.txt`) and restart; check `/health` → `cookies_file: true` |
 | yt-dlp `No video formats found` / `empty media response ... use --cookies` — prod only | IG soft-blocking the datacenter IP, or a stale yt-dlp | bump yt-dlp first (see DEPLOYMENT.md); then refresh burner cookies. Rows still save caption-only via the OG-tag fallback |
+| `cookie_health: "degraded"` in `/health`, or a `⚙️ System Alert` in Notion | 3+ consecutive cookie-backed auth failures — burner cookies have expired | see **COOKIES.md** — 2-minute refresh runbook |
+
+## Cookie-health monitoring (no auto-refresh, on purpose)
+
+`/health`'s `cookie_health` field goes `"degraded"` after `COOKIE_HEALTH_THRESHOLD`
+(default 3) consecutive cookie-backed fetches fail with an auth-type error — the
+strongest signal available that the burner session has expired, distinct from a merely
+missing/private video. The nightly job checks this once a day and, while degraded, fires
+at most one alert per day: a distinctly-titled `⚙️ System Alert` page in Notion (under
+`NOTION_PARENT_PAGE_ID`, always wired up) and, if `NTFY_TOPIC` is set, a real push
+notification via the free [ntfy.sh](https://ntfy.sh) service (no account needed on
+either end). Detection and notification only — nothing here attempts to log back in or
+refresh the session automatically, since that would mean storing a real password and
+risking the burner account. See **COOKIES.md** for the manual fix once you're alerted.
 
 ## Phase 1 acceptance check
 
@@ -310,7 +324,8 @@ app/fetcher.py            yt-dlp burner fetch + safety caps
 app/gemini_pipe.py        audio+caption -> Gemini -> validated JSON (transcript + extraction)
 app/notion_writer.py      Notion page creation/update (data_source_id API)
 app/store.py              SQLite: saves, tags, embeddings (sqlite-vec), dedupe, rate counter
-app/nightly.py            stuck-row + expired-gate cleanup
+app/nightly.py            stuck-row + expired-gate cleanup + cookie-health alert check
+app/alerts.py             cookie-health alerting: Notion System Alert page + ntfy.sh push
 app/digest.py             weekly digest: group, render markdown, Notion page
 app/models.py             pydantic schemas (strict request models)
 prompts/extraction.md     system prompt (versioned, editable)
@@ -328,4 +343,5 @@ SCHEDULING.md             keep-alive ping + nightly cron recipes
 VAULT.md                  Obsidian vault sync usage + scheduling
 VAULT_CLAUDE_SETUP.md     Claude Desktop filesystem-MCP setup for the vault
 NOTION_VIEWS.md           manual Notion view setup (mobile-friendly, This Week)
+COOKIES.md                cookie-expiry alert runbook (2-minute manual refresh)
 ```

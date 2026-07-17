@@ -66,6 +66,11 @@ def health() -> dict:
     every fetch fails fast, so this makes the most common prod-only breakage
     checkable from a browser with no log access. Reports presence only, never
     the path's contents.
+
+    `cookie_health` is "degraded" once AUTH_FAILURE_THRESHOLD consecutive
+    cookie-backed fetches have failed with an auth-type error (login required,
+    empty media response, etc.) — a distinct signal from cookies_file, since the
+    file can exist and still hold expired cookies. Detection only, no auto-fix.
     """
     vec_ok = False
     if store.vec_available():
@@ -79,10 +84,15 @@ def health() -> dict:
         cookies_ok = fetcher.cookies_file_available()
     except Exception:  # noqa: BLE001
         cookies_ok = False
+    try:
+        cookie_health = fetcher.cookie_health_status()
+    except Exception:  # noqa: BLE001
+        cookie_health = "ok"
     return {
         "status": "ok",
         "sqlite_vec": vec_ok,
         "cookies_file": cookies_ok,
+        "cookie_health": cookie_health,
         "db_path": store.DB_PATH,
     }
 

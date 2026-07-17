@@ -65,6 +65,27 @@ CHALLENGE_MARKERS = (
     "requested content is not available",
 )
 
+# Subset of CHALLENGE_MARKERS that specifically mean the COOKIES are the problem
+# (expired/logged-out) rather than something generic — a rate limit, or a normal
+# private/deleted/missing video. Only checked against COOKIE-BACKED attempts (see
+# fetch_reel's retry loop): an anonymous attempt hitting "login required" is
+# expected and tells us nothing about whether our own cookies are still good.
+# "no video formats found" / "429" / "rate-limit" / "requested content is not
+# available" are deliberately excluded — those happen for reasons unrelated to
+# cookie validity and would make this counter noisy/false-positive-prone.
+AUTH_FAILURE_MARKERS = (
+    "login required",
+    "empty media response",
+    "challenge",
+    "checkpoint",
+    "use --cookies",
+)
+
+# Consecutive cookie-backed auth failures before /health reports cookie_health
+# as "degraded". Override via COOKIE_HEALTH_THRESHOLD if 3 is too twitchy/lax.
+AUTH_FAILURE_THRESHOLD = int(os.environ.get("COOKIE_HEALTH_THRESHOLD", "3"))
+_CONSECUTIVE_AUTH_FAILURES_KEY = "consecutive_cookie_auth_failures"
+
 # --- OG-tag fallback (never authenticated) ---
 OG_FETCH_TIMEOUT_SECONDS = 10.0
 OG_USER_AGENT = (
@@ -170,6 +191,41 @@ def _enforce_rate_discipline(shortcode: str, permalink: str) -> None:
 def _looks_like_challenge(exc: Exception) -> bool:
     text = str(exc).lower()
     return any(marker in text for marker in CHALLENGE_MARKERS)
+
+
+def _is_cookie_auth_failure(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in AUTH_FAILURE_MARKERS)
+
+
+def get_consecutive_auth_failures() -> int:
+    raw = store.get_state(_CONSECUTIVE_AUTH_FAILURES_KEY, "0")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 0
+
+
+def record_cookie_auth_failure() -> int:
+    """Called only on a COOKIE-BACKED fetch attempt failing with an auth-type
+    marker. Returns the new consecutive count."""
+    count = get_consecutive_auth_failures() + 1
+    store.set_state(_CONSECUTIVE_AUTH_FAILURES_KEY, str(count))
+    logger.warning("cookie auth failure recorded (%d consecutive)", count)
+    return count
+
+
+def record_cookie_auth_success() -> None:
+    """Called on any successful cookie-backed fetch — resets the streak."""
+    if get_consecutive_auth_failures():
+        logger.info("cookie-backed fetch succeeded — resetting auth-failure counter")
+    store.set_state(_CONSECUTIVE_AUTH_FAILURES_KEY, "0")
+
+
+def cookie_health_status() -> str:
+    """"ok" or "degraded" — the /health field. Detection only; nothing here ever
+    attempts to log in or refresh cookies (that risks the burner account)."""
+    return "degraded" if get_consecutive_auth_failures() >= AUTH_FAILURE_THRESHOLD else "ok"
 
 
 def _run_ytdlp(url: str, cookiefile: Optional[str]) -> dict:
@@ -329,9 +385,12 @@ def fetch_reel(shortcode: str, permalink: str) -> ReelData:
         try:
             store.record_fetch()
             info = _run_ytdlp(permalink, cookiefile=cookies_file)
+            record_cookie_auth_success()
             return _info_to_reel_data(shortcode, permalink, info)
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
+            if _is_cookie_auth_failure(exc):
+                record_cookie_auth_failure()
             if not _looks_like_challenge(exc):
                 return _og_fallback_or_degrade(shortcode, permalink, f"fetch failed: {exc}", exc)
 

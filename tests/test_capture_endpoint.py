@@ -49,6 +49,19 @@ def test_health_reports_cookies_file_missing(monkeypatch, tutorial_reel, tutoria
     assert client.get("/health").json()["cookies_file"] is False
 
 
+def test_health_reports_cookie_health_ok_by_default(monkeypatch, tutorial_reel, tutorial_extraction):
+    client = _client(monkeypatch, tutorial_reel, tutorial_extraction)
+    assert client.get("/health").json()["cookie_health"] == "ok"
+
+
+def test_health_reports_cookie_health_degraded(monkeypatch, tutorial_reel, tutorial_extraction):
+    monkeypatch.setattr(main.fetcher, "AUTH_FAILURE_THRESHOLD", 3)
+    for _ in range(3):
+        main.fetcher.record_cookie_auth_failure()
+    client = _client(monkeypatch, tutorial_reel, tutorial_extraction)
+    assert client.get("/health").json()["cookie_health"] == "degraded"
+
+
 def test_capture_rejects_bad_secret(monkeypatch, tutorial_reel, tutorial_extraction):
     client = _client(monkeypatch, tutorial_reel, tutorial_extraction)
     resp = client.post("/capture", json={"url": URL, "note": None, "secret": "wrong"})

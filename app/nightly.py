@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 
-from app import notion_writer, store
+from app import alerts, notion_writer, store
 from app.models import ReelData
 
 logger = logging.getLogger("reelbrain.nightly")
@@ -89,4 +89,5 @@ def run() -> dict:
         "marked_failed": mark_stuck_processing_failed(),
         "marked_gate_expired": expire_old_gates(),
         "marked_archived": archive_stale_low_value(),
+        "cookie_alert": alerts.check_and_alert(),
     }

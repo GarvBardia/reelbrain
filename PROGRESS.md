@@ -1,5 +1,77 @@
 # PROGRESS.md — hardening/deployment session log
 
+## Cookie-expiry monitoring + alerting
+
+**Goal:** stop discovering expired burner cookies by noticing failed captures.
+Detection + notification only — explicitly no auto-login/refresh (that would mean
+storing a real password and risking the burner account).
+
+**1. Failure signal (`app/fetcher.py`, `app/store.py`):**
+- New `app_state` KV table in SQLite (`store.get_state`/`set_state`) — a generic small
+  persistent-value store, reused by the alert dedup below too.
+- `AUTH_FAILURE_MARKERS`: a deliberate SUBSET of the existing `CHALLENGE_MARKERS` —
+  `login required`, `empty media response`, `challenge`, `checkpoint`, `use --cookies`.
+  Excluded on purpose: `no video formats found` / `429` / `rate-limit` / `requested
+  content is not available` — those happen for reasons unrelated to cookie validity
+  (a private/deleted video, a passing rate limit) and would make the counter noisy.
+- Only checked on the **cookie-backed** retry attempts in `fetch_reel`, never the
+  initial anonymous one — an anonymous attempt hitting "login required" is expected
+  and says nothing about whether *our* cookies are still good.
+- `record_cookie_auth_failure()` / `record_cookie_auth_success()` /
+  `get_consecutive_auth_failures()`: increment on a cookie-backed auth-type failure,
+  reset to 0 on any successful cookie-backed fetch. Persisted (survives a Render
+  restart mid-degradation, unlike in-process state).
+
+**2. `/health` (`app/main.py`):** new `cookie_health` field, `"ok"` / `"degraded"` at
+`AUTH_FAILURE_THRESHOLD` (default 3, `COOKIE_HEALTH_THRESHOLD` env var) consecutive
+cookie-backed auth failures. Distinct from the existing `cookies_file` field — a file
+can exist and still hold expired cookies.
+
+**3. Alerting (`app/alerts.py`, new module, wired into `nightly.run()`):**
+- **Notion:** a distinctly-titled `⚙️ System Alert — cookies likely expired — <date>`
+  page created directly under `NOTION_PARENT_PAGE_ID` (same pattern as the weekly
+  digest — no new database needed for a "dedicated area"). Wired up unconditionally
+  per the task's "at minimum."
+- **ntfy.sh:** recommended as the simpler channel — genuinely zero-config (no account,
+  no signup, one `httpx.post` to a topic URL), and unlike Notion it's an actual push to
+  the phone rather than something you have to go open. Wired up too since it was easy,
+  gated behind an optional `NTFY_TOPIC` env var (blank = skipped, no error).
+- Both are best-effort: any failure is caught and logged, never raised — a Notion or
+  ntfy outage must not block or crash the nightly job.
+- **Dedup:** at most one alert per calendar day while degraded (`app_state` again),
+  so a nightly job re-run (manual `/nightly` POST, GH Actions retry) doesn't spam
+  either channel — but a still-broken cookie file gets a fresh nudge the next day.
+- `render.yaml` gained `NOTION_PARENT_PAGE_ID` (was actually missing before — the
+  weekly digest needed it too and had no way to configure it via the Blueprint; fixed
+  in passing) and the two new vars.
+
+**4. `COOKIES.md`:** the 2-minute manual runbook — browser login as the burner →
+export cookies.txt → paste into Render's Secret File → Render auto-restarts on Secret
+File change (no redeploy needed) → verify via `/health`. Plus ntfy.sh setup steps and
+a short "how the detection actually works" section for context.
+
+**Tests:** 32 new — `tests/test_cookie_health.py` (counter mechanics, persistence via
+`app_state`, ok/degraded at custom thresholds, auth-vs-non-auth marker classification
+including the two cases that matter most: "no video formats found" is a challenge but
+NOT an auth failure, and a hard error unrelated to auth touches neither; four
+integration tests against the real `fetch_reel` retry loop — success resets, cookie-
+backed auth failure increments, non-auth challenge doesn't touch the counter, anonymous-
+only failure never reaches the counter at all) and `tests/test_alerts.py` (no alert
+when healthy, alert fires when degraded, once-per-day dedup and reset on a new day,
+Notion page shape, Notion failure doesn't block dedup or crash, ntfy request shape,
+ntfy skip without a topic, ntfy network-error survival, both channels firing together).
+Plus 2 new `/health` tests and fixes to 3 existing nightly-response-shape assertions
+that needed the new `cookie_alert` key. **Full suite: 213 passed** (was 179). No live
+calls — conftest's existing `httpx.post`/`httpx.get` blocks cover the new ntfy path too.
+
+**For your review:** the `AUTH_FAILURE_MARKERS` subset (which errors count as "cookies
+are the problem" vs. generic/unrelated) is my judgment call, documented inline in
+`fetcher.py` — worth a skim if your real-world failure messages don't match what I
+guessed. Also: pick an actually-unguessable `NTFY_TOPIC` if you turn it on — anyone who
+knows the topic name can post to or read it, per ntfy's whole no-account design.
+
+---
+
 ## Obsidian sync: real auto-regenerated topic/creator indexes (fix)
 
 **Problem:** topic/creator notes were create-once stubs (`# name\n\n## Notes\n`) that

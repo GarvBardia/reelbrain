@@ -120,7 +120,10 @@ def test_run_reports_both_buckets(monkeypatch):
     _backdate("A2", updated_minutes_ago=8 * 24 * 60)
 
     result = nightly.run()
-    assert result == {"marked_failed": ["A1"], "marked_gate_expired": ["A2"], "marked_archived": []}
+    assert result["marked_failed"] == ["A1"]
+    assert result["marked_gate_expired"] == ["A2"]
+    assert result["marked_archived"] == []
+    assert result["cookie_alert"] == {"cookie_health": "ok", "alert_sent": False}
 
 
 # --- auto-archive (WS1.3) -----------------------------------------------------

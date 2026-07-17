@@ -24,8 +24,13 @@ from app import nightly, store
 def main() -> None:
     store.init_db()
     result = nightly.run()
-    print(f"marked failed:       {result['marked_failed'] or '(none)'}")
+    print(f"marked failed:        {result['marked_failed'] or '(none)'}")
     print(f"marked gate_expired:  {result['marked_gate_expired'] or '(none)'}")
+    print(f"marked archived:      {result['marked_archived'] or '(none)'}")
+    cookie_alert = result["cookie_alert"]
+    print(f"cookie health:        {cookie_alert['cookie_health']}")
+    if cookie_alert["alert_sent"]:
+        print("cookie alert sent — see COOKIES.md to refresh the burner cookies")
 
 
 if __name__ == "__main__":
