@@ -6,7 +6,7 @@ The fake mirrors Notion's 2025-09-03+ "data source" API shape that notion_writer
 actually uses (databases.retrieve -> data_sources, data_sources.query, pages with a
 data_source_id parent) — see the NOTE at the top of app/notion_writer.py.
 """
-from app import notion_writer, store
+from app import fetcher, notion_writer, store
 from app.main import run_pipeline
 
 
@@ -167,6 +167,45 @@ def test_pipeline_fetch_degraded_still_writes_failed_page(monkeypatch, tutorial_
     row = store.get_by_shortcode(tutorial_reel.shortcode)
     assert row["status"] == "failed"
     assert row["notion_page_id"]  # constraint #3: never silently drop a capture
+
+
+def test_photo_carousel_post_still_captured_not_dropped(monkeypatch, tutorial_reel):
+    """The actual reported bug: yt-dlp says 'no video formats found' (a
+    photo/carousel post) on every attempt, and the OG-tag scrape ALSO comes back
+    empty (Instagram login-walling the anonymous scrape from Render's IP). This
+    must never silently drop the capture — it must still land as a real Notion
+    row carrying the permalink, distinctly marked so the user knows to open it
+    manually rather than expecting an auto-summary.
+
+    Runs the REAL app.fetcher.fetch_reel (only its yt-dlp/OG internals mocked),
+    not a stand-in, so this proves the actual integration, not just the unit.
+    """
+    fake = _install_fake_notion(monkeypatch)
+    monkeypatch.setattr(fetcher, "resolve_cookies_file", lambda: "cookies.txt")
+    monkeypatch.setattr(fetcher, "BACKOFF_SECONDS", [0])
+    monkeypatch.setattr(fetcher, "fetch_og_metadata", lambda p: None)  # login-walled
+
+    def _no_video(url, cookiefile):
+        raise RuntimeError("No video formats found")
+
+    monkeypatch.setattr(fetcher, "_run_ytdlp", _no_video)
+
+    store.insert_processing(tutorial_reel.shortcode, tutorial_reel.permalink)
+    run_pipeline(tutorial_reel.shortcode, tutorial_reel.permalink, note="my original note")
+
+    save_calls = save_page_calls(fake)
+    assert len(save_calls) == 1  # a real Notion row was created — nothing dropped
+    props = _props_of(save_calls[0])
+    assert props["Status"]["select"]["name"] == "📷 Photo — manual"
+    assert props["Reel URL"]["url"] == tutorial_reel.permalink
+    note_text = props["My note"]["rich_text"][0]["text"]["content"]
+    assert "my original note" in note_text  # user's own note preserved
+    assert "photo/carousel post — no auto-transcript, open the reel URL to view" in note_text
+
+    row = store.get_by_shortcode(tutorial_reel.shortcode)
+    assert row["status"] == "photo_manual"
+    assert row["notion_page_id"]  # constraint #3: never silently drop a capture
+    assert row["permalink"] == tutorial_reel.permalink
 
 
 def test_failed_row_writes_reason_into_my_note(monkeypatch, tutorial_reel):

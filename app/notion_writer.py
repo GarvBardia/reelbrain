@@ -26,6 +26,8 @@ STATUS_LABELS = {
     "low_signal": "🗑 Low signal",
     "gate_expired": "🕳 Gate expired",
     "archived": "🗄 Archived",
+    # Photo/carousel posts: yt-dlp is video-only and can never fetch these
+    "photo_manual": "📷 Photo — manual",
 }
 # Reverse lookup for reading a page's Status back into our internal keys (used by
 # the ephemeral-disk-recovery fallback below). "✅ Processed/Reviewed" is a

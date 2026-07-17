@@ -1,5 +1,66 @@
 # PROGRESS.md — hardening/deployment session log
 
+## Fix 1 — photo/carousel posts no longer silently vanish
+
+**Root cause, found via testing (not assumed):** yt-dlp is video-only, so a photo or
+carousel post always fails with "no video formats found" — expected, not a bug. The
+OG-tag fallback exists for exactly this, but Instagram login-walls the anonymous HTML
+scrape from Render's datacenter IP, so it returns nothing there. Architecturally this
+already produced a Notion row (`⚠️ Failed — retry`, via the existing `FetchDegraded` →
+`run_pipeline` catch path) rather than a true silent drop — but "Failed — retry" is
+actively misleading for a photo post: retrying can never succeed, since it's
+structurally not a video. That's the real bug: a row stuck in a status implying
+"try again" that will never self-resolve, functionally indistinguishable from vanished.
+
+**Found while testing, a second real bug:** `fetch_reel`'s final fallback (after the
+cookie-backed retry loop exhausts `BACKOFF_SECONDS`) discards the actual yt-dlp error
+and substitutes a generic "repeated challenges... refresh burner cookies" string. Since
+a genuine photo/carousel post reports "no video formats found" identically on *every*
+retry attempt (cookies don't change what kind of post it is), this generic string was
+the ONLY reason ever reaching `_og_fallback_or_degrade` for the realistic case — my
+photo/carousel detection would never have fired against real traffic without this fix.
+Now the last real exception's text rides along inside the generic message.
+
+**The fix:**
+- `app/models.py`: `ReelData` gains `is_photo_or_carousel: bool` and `fetch_note:
+  Optional[str]` — a fetcher-supplied annotation surfaced on the Notion row's My note
+  regardless of success/failure (generalizing the existing failure-reason mechanism).
+- `app/fetcher.py`: new `PHOTO_OR_CAROUSEL_MARKERS = ("no video formats found",)` and
+  `_is_photo_or_carousel()`. When the OG-tag fallback ALSO fails and the original error
+  matches this signature, `_og_fallback_or_degrade` returns a URL-only `ReelData`
+  (`is_photo_or_carousel=True`) instead of raising `FetchDegraded`. Any OTHER kind of
+  total failure still raises as before — those may genuinely be worth a human retry,
+  unlike a post that will never become fetchable no matter how many times you try.
+- `app/notion_writer.py`: new status `"photo_manual"` → `"📷 Photo — manual"`. Auto-
+  creates as a Notion select option on first write, same as the earlier `archived`
+  addition — no manual schema migration needed.
+- `app/main.py`: `run_pipeline`'s status decision checks `reel.is_photo_or_carousel`
+  first, ahead of the comment-gate/value-score logic (harmless either way here, since a
+  photo/carousel `ReelData` never has a caption for the gate regex to match — but
+  semantically the most specific classification should win). `notion_note` now folds in
+  `reel.fetch_note` alongside the existing `failure_reason`, so the row lands with
+  `⚠️ photo/carousel post — no auto-transcript, open the reel URL to view` appended
+  after the user's own note, never replacing it.
+
+**Tests:** 8 new in `tests/test_fetch_hardening.py` (marker matching, the fetch-level
+fix in isolation, a regression guard proving an unrelated hard failure with a failed OG
+scrape still raises `FetchDegraded` as before, and `fetch_reel` end-to-end never
+raising for the realistic repeated-"no video formats found" case) plus one full
+pipeline-level integration test in `tests/test_pipeline.py` — running the REAL
+`fetcher.fetch_reel` (only its yt-dlp/OG internals mocked, not the whole function) through
+`run_pipeline`, asserting a genuine Notion page gets created with `Status = 📷 Photo —
+manual`, the correct `Reel URL`, the user's original note preserved plus the appended
+explanation, and a local SQLite row — this is the task's own literal ask: "a 'No video
+formats found' error with a failed OG fallback still yields a persisted row with the
+permalink, not a dropped capture." Two pre-existing tests (`test_cookie_retry_uses_
+resolved_path`, `test_non_auth_challenge_does_not_increment_counter`) used "no video
+formats found" purely as an arbitrary example CHALLENGE_MARKER for unrelated
+assertions (cookie-path resolution, auth-counter behavior) — swapped their example
+error strings to non-photo markers so each test still isolates the thing it's actually
+about. **Full suite: 246 passed** (was 238). No live calls.
+
+---
+
 ## /attach and /retry survive ephemeral-disk wipes (Notion fallback)
 
 **Fixes the specific failure mode we hit twice today: `DajFASZODlj` on `/retry` and

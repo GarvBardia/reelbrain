@@ -143,7 +143,10 @@ def test_non_auth_challenge_does_not_increment_counter(monkeypatch, tmp_path):
     monkeypatch.setattr(fetcher, "fetch_og_metadata", lambda p: None)
 
     def _run_ytdlp(url, cookiefile):
-        raise RuntimeError("No video formats found")
+        # A CHALLENGE_MARKER that's neither an auth marker nor the photo/carousel
+        # marker — this test is specifically about the auth-failure counter, not
+        # about photo/carousel classification (see test_fetch_hardening.py for that).
+        raise RuntimeError("requested content is not available")
 
     monkeypatch.setattr(fetcher, "_run_ytdlp", _run_ytdlp)
 

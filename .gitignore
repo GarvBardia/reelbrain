@@ -1,5 +1,6 @@
 .env
 cookies.txt
+cookies*.txt
 data/*.db
 data/videos/
 bulk_import_progress*.json

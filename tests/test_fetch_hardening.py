@@ -218,6 +218,68 @@ def test_og_fallback_failure_still_degrades_with_reason(monkeypatch, tmp_path):
     assert exc_info.value.partial.shortcode == "OGTEST01"
 
 
+# --- photo/carousel posts: never dropped, even when OG also fails -----------
+
+@pytest.mark.parametrize("reason,expected", [
+    ("ERROR: [Instagram] No video formats found!", True),
+    ("no video formats found for this post", True),
+    ("Unsupported URL: example.com", False),
+    ("HTTP Error 429: Too Many Requests", False),
+])
+def test_is_photo_or_carousel_marker(reason, expected):
+    assert fetcher._is_photo_or_carousel(reason) is expected
+
+
+def test_photo_carousel_captured_url_only_when_og_also_fails(monkeypatch, tmp_path):
+    """The exact bug: yt-dlp says 'no video formats found' (a photo/carousel
+    post) and the OG-tag scrape also comes back empty (login-walled from
+    Render's IP) — this must NOT raise FetchDegraded. It must still produce a
+    usable ReelData so the capture lands, not vanishes."""
+    _with_cookies(monkeypatch, tmp_path)
+    monkeypatch.setattr(fetcher, "fetch_og_metadata", lambda p: None)  # login-walled scrape
+
+    reel = fetcher._og_fallback_or_degrade(
+        "PHOTO01", PERMALINK, "ERROR: [Instagram] No video formats found!", RuntimeError("boom"),
+    )
+
+    assert reel.shortcode == "PHOTO01"
+    assert reel.permalink == PERMALINK
+    assert reel.video_path is None
+    assert reel.caption is None
+    assert reel.is_photo_or_carousel is True
+    assert reel.fetch_note == "photo/carousel post — no auto-transcript, open the reel URL to view"
+
+
+def test_non_photo_failure_with_failed_og_still_raises_as_before(monkeypatch, tmp_path):
+    """Regression guard: an unrelated hard failure must NOT be reclassified as a
+    photo/carousel post just because OG also failed — it should still raise
+    FetchDegraded (Failed — retry), since that one might genuinely be worth
+    a human retry."""
+    _with_cookies(monkeypatch, tmp_path)
+    monkeypatch.setattr(fetcher, "fetch_og_metadata", lambda p: None)
+
+    with pytest.raises(FetchDegraded) as exc_info:
+        fetcher._og_fallback_or_degrade("HARD01", PERMALINK, "Unsupported URL: example.com", RuntimeError("x"))
+    assert exc_info.value.partial.shortcode == "HARD01"
+
+
+def test_fetch_reel_end_to_end_photo_carousel_never_raises(monkeypatch, tmp_path):
+    """fetch_reel itself (not just the inner helper) must return, not raise, for
+    the full photo/carousel + failed-OG-scrape scenario."""
+    _with_cookies(monkeypatch, tmp_path)
+    monkeypatch.setattr(fetcher, "BACKOFF_SECONDS", [0])
+    monkeypatch.setattr(fetcher, "fetch_og_metadata", lambda p: None)
+
+    def _no_video(url, cookiefile):
+        raise RuntimeError("No video formats found")
+
+    monkeypatch.setattr(fetcher, "_run_ytdlp", _no_video)
+
+    reel = fetcher.fetch_reel("PHOTO02", PERMALINK)  # must not raise
+    assert reel.is_photo_or_carousel is True
+    assert reel.permalink == PERMALINK
+
+
 def test_cookie_retry_uses_resolved_path(monkeypatch, tmp_path):
     """The cookie-backed retry must use the resolved file, not the raw env value."""
     cookies = tmp_path / "cookies.txt"
@@ -230,7 +292,10 @@ def test_cookie_retry_uses_resolved_path(monkeypatch, tmp_path):
 
     def _record(url, cookiefile):
         seen.append(cookiefile)
-        raise RuntimeError("No video formats found")
+        # A genuine soft-block signature, deliberately NOT "no video formats
+        # found" — this test is about which cookie path gets used, not about
+        # photo/carousel classification (see test_photo_carousel_* for that).
+        raise RuntimeError("checkpoint required")
 
     monkeypatch.setattr(fetcher, "_run_ytdlp", _record)
     monkeypatch.setattr(fetcher, "fetch_og_metadata", lambda p: None)

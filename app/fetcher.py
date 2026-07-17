@@ -86,6 +86,14 @@ AUTH_FAILURE_MARKERS = (
 AUTH_FAILURE_THRESHOLD = int(os.environ.get("COOKIE_HEALTH_THRESHOLD", "3"))
 _CONSECUTIVE_AUTH_FAILURES_KEY = "consecutive_cookie_auth_failures"
 
+# yt-dlp's signature for "this post has no video" — a photo or carousel post,
+# which yt-dlp (video-only) structurally cannot fetch regardless of cookies or
+# retries. Distinct from CHALLENGE_MARKERS' broader "no video formats found"
+# entry: that one drives the cookie-backed retry loop (worth trying once with
+# auth in case it's actually a soft-block), this one decides what to do once
+# every fetch attempt — including the OG-tag scrape — has already failed.
+PHOTO_OR_CAROUSEL_MARKERS = ("no video formats found",)
+
 # --- OG-tag fallback (never authenticated) ---
 OG_FETCH_TIMEOUT_SECONDS = 10.0
 OG_USER_AGENT = (
@@ -328,12 +336,27 @@ def _og_reel_data(shortcode: str, permalink: str, tags: dict[str, str]) -> Optio
     )
 
 
+def _is_photo_or_carousel(reason: str) -> bool:
+    text = reason.lower()
+    return any(marker in text for marker in PHOTO_OR_CAROUSEL_MARKERS)
+
+
 def _og_fallback_or_degrade(
     shortcode: str, permalink: str, reason: str, cause: Optional[Exception]
 ) -> ReelData:
     """Terminal path when yt-dlp has failed: try the OG-tag read once, and if it
     yields a caption, continue the pipeline caption-only rather than failing the
-    row outright. Otherwise raise FetchDegraded as before."""
+    row outright.
+
+    If OG also fails AND the original failure was yt-dlp's "no video formats
+    found" signature, this is almost certainly a photo/carousel post — not a
+    technical failure at all, just a kind of post yt-dlp (video-only) can never
+    fetch. Retrying that can never succeed, so it must not land as "Failed —
+    retry": return a URL-only ReelData instead so the pipeline still produces a
+    captured row (📷 Photo — manual), never a dropped capture. Any OTHER kind of
+    total failure still raises FetchDegraded as before — those may genuinely be
+    worth a human retry.
+    """
     tags = fetch_og_metadata(permalink)
     if tags:
         reel = _og_reel_data(shortcode, permalink, tags)
@@ -343,6 +366,22 @@ def _og_fallback_or_degrade(
                 shortcode, reason,
             )
             return reel
+
+    if _is_photo_or_carousel(reason):
+        logger.warning(
+            "yt-dlp reports no video formats for %s (OG-tag scrape also failed, "
+            "likely login-walled from this IP) — treating as a photo/carousel "
+            "post and capturing URL-only instead of dropping it",
+            shortcode,
+        )
+        return ReelData(
+            shortcode=shortcode,
+            permalink=permalink,
+            caption=None,
+            is_photo_or_carousel=True,
+            fetch_note="photo/carousel post — no auto-transcript, open the reel URL to view",
+        )
+
     raise FetchDegraded(reason, partial=ReelData(shortcode=shortcode, permalink=permalink)) from cause
 
 
@@ -394,9 +433,14 @@ def fetch_reel(shortcode: str, permalink: str) -> ReelData:
             if not _looks_like_challenge(exc):
                 return _og_fallback_or_degrade(shortcode, permalink, f"fetch failed: {exc}", exc)
 
+    # Include last_exc's own text, not just the generic framing: a photo/carousel
+    # post keeps reporting "no video formats found" on every retry regardless of
+    # cookies (retrying can't turn a photo into a video), and that signature has
+    # to survive into the reason string for _is_photo_or_carousel to catch it —
+    # otherwise every such post would get misclassified as a genuine soft-block.
     return _og_fallback_or_degrade(
         shortcode,
         permalink,
-        "repeated challenges from Instagram — refresh burner cookies",
+        f"repeated challenges from Instagram — refresh burner cookies (last error: {last_exc})",
         last_exc,
     )

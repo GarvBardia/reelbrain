@@ -53,6 +53,16 @@ class ReelData(BaseModel):
     # Only set by the OG-tag fallback (fetcher.fetch_og_metadata); yt-dlp's own
     # metadata doesn't populate it. Not written to Notion today.
     thumbnail_url: Optional[str] = None
+    # True only when fetcher determined this is a photo/carousel post (yt-dlp's
+    # "no video formats found" signature) with no OG-tag caption recoverable
+    # either. Forces a distinct terminal status in main.py's run_pipeline instead
+    # of the normal comment-gate/value-score decision — retrying can never help
+    # a non-video post, so it must not land as "Failed — retry".
+    is_photo_or_carousel: bool = False
+    # Fetcher-supplied note surfaced on the Notion row's "My note" regardless of
+    # success/failure (see main.py's _note_with_failure_reason). No emoji prefix
+    # here — that's added uniformly by the note-building helper.
+    fetch_note: Optional[str] = None
 
 
 class ResourceMentioned(BaseModel):

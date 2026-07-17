@@ -221,16 +221,22 @@ def run_pipeline(
             transcript=extraction.transcript,
             extraction_json=extraction.model_dump_json(),
         )
+        # Photo/carousel posts (yt-dlp is video-only, can never fetch these) take
+        # priority over everything else: retrying can never help, so this must
+        # never end up "Failed — retry" regardless of what the degraded
+        # extraction's gate/value-score would otherwise imply.
+        if reel.is_photo_or_carousel:
+            status = "photo_manual"
         # Comment-gate takes priority over the low-signal filter: even a low-value
         # reel still needs the user to act on (or knowingly skip) the gate.
-        if extraction.comment_gate.detected:
+        elif extraction.comment_gate.detected:
             status = "awaiting_dm"
         elif extraction.value_score <= LOW_SIGNAL_VALUE_SCORE:
             status = "low_signal"
         else:
             status = "done"
 
-    notion_note = _note_with_failure_reason(note, failure_reason)
+    notion_note = _note_with_failure_reason(note, failure_reason or reel.fetch_note)
     try:
         if existing_page_id:
             result = notion_writer.update_page(
