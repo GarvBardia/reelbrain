@@ -26,7 +26,6 @@ logger = logging.getLogger("reelbrain.obsidian")
 VAULT_PATH = os.environ.get("VAULT_PATH", r"C:\Users\garvb\ReelBrainVault").strip()
 
 RELATED_TOP_K = 3
-INDEX_PREVIEW_LIMIT = 3
 FRONTMATTER_SHORTCODE_RE = re.compile(r"^shortcode:\s*(\S+)\s*$", re.MULTILINE)
 
 AUTO_START = "<!-- AUTO-GENERATED, DO NOT EDIT BELOW -->"
@@ -163,6 +162,7 @@ def extract_note_fields(page: dict) -> dict:
     props = page.get("properties", {})
     select = _prop(props, "Status").get("select") or {}
     value_select = _prop(props, "Value score").get("select") or {}
+    priority_select = _prop(props, "Priority").get("select") or {}
     date_prop = _prop(props, "Posted at").get("date") or {}
     posted = (date_prop.get("start") or "")[:10]
     return {
@@ -171,6 +171,11 @@ def extract_note_fields(page: dict) -> dict:
         "title": _rt_text(_prop(props, "Title").get("title", [])),
         "status": select.get("name", ""),
         "value_score": value_select.get("name", ""),
+        # Plain text ("High"/"Medium"/"Low") straight from the Priority Select
+        # property — no emoji, ever. Empty string for rows saved before the
+        # Priority property existed (see PROGRESS.md: backfill is a separate,
+        # not-yet-built script).
+        "priority": priority_select.get("name", ""),
         "topics": [t["name"] for t in _prop(props, "Topics").get("multi_select", [])],
         "url": _prop(props, "Reel URL").get("url") or "",
         "posted": posted or (page.get("created_time", "") or "")[:10],
@@ -189,6 +194,8 @@ def build_note(fields: dict, creator: Optional[str], body_markdown: str,
     if creator:
         lines.append(f'creator: "[[creators/{_slugify(creator)}]]"')
     lines.append(f'status: "{fields["status"]}"')
+    if fields["priority"]:
+        lines.append(f"priority: {fields['priority']}")
     if fields["value_score"]:
         lines.append(f"value_score: {fields['value_score']}")
     if fields["topics"]:
@@ -203,6 +210,14 @@ def build_note(fields: dict, creator: Optional[str], body_markdown: str,
     lines.append("")
     lines.append(f"# {fields['title'] or fields['shortcode']}")
     lines.append("")
+    # Plain-text Priority/Score lines, no emoji — visible immediately on
+    # opening the note, not just buried in frontmatter YAML.
+    if fields["priority"]:
+        lines.append(f"Priority: {fields['priority']}")
+    if fields["value_score"]:
+        lines.append(f"Score: {fields['value_score']}")
+    if fields["priority"] or fields["value_score"]:
+        lines.append("")
     lines.append(body_markdown.rstrip())
     if related_stems:
         lines.append("")
@@ -255,9 +270,10 @@ def _sort_entries(entries: list[dict]) -> list[dict]:
 
 
 def _format_entry_line(entry: dict) -> str:
-    value_part = f"value {entry['value_score']}" if entry["value_score"] is not None else "value —"
+    priority_part = f"Priority: {entry['priority']}" if entry.get("priority") else "Priority: —"
+    score_part = f"Score: {entry['value_score']}" if entry["value_score"] is not None else "Score: —"
     main_point = entry["main_point"] or "(no main point)"
-    return f"- [[reels/{entry['stem']}|{entry['title']}]] — {value_part} — {main_point}"
+    return f"- [[reels/{entry['stem']}|{entry['title']}]] — {priority_part} — {score_part} — {main_point}"
 
 
 def write_stub_index(vault: Path, folder: str, name: str, entries: list[dict]) -> Path:
@@ -272,18 +288,34 @@ def write_stub_index(vault: Path, folder: str, name: str, entries: list[dict]) -
     return path
 
 
+PRIORITY_ORDER = ["High", "Medium", "Low"]
+
+
 def write_topics_index(vault: Path, topic_entries: dict[str, list[dict]]) -> None:
-    """_index.md: every topic, sorted by save count, each with a real preview of
-    its top reels (not just a bare count) so the index is an actual starting
-    point for browsing, not a table of contents to nowhere."""
+    """_index.md: grouped by Priority FIRST (## High Priority, ## Medium
+    Priority, ## Low Priority), each section listing every topic that has at
+    least one reel at that tier with a count — so opening the vault
+    immediately shows what needs attention, not just a topic dump sorted by
+    volume. Reels with no Priority set (saved before this property existed)
+    fall into "Low Priority" rather than vanishing from the index."""
+    by_priority: dict[str, dict[str, int]] = {p: {} for p in PRIORITY_ORDER}
+    for topic, entries in topic_entries.items():
+        for entry in entries:
+            priority = entry.get("priority") or "Low"
+            by_priority.setdefault(priority, {})
+            by_priority[priority][topic] = by_priority[priority].get(topic, 0) + 1
+
     lines: list[str] = []
-    for topic, entries in sorted(topic_entries.items(), key=lambda kv: (-len(kv[1]), kv[0])):
-        sorted_entries = _sort_entries(entries)
-        count = len(entries)
-        plural = "save" if count == 1 else "saves"
-        lines.append(f"## [[topics/{_slugify(topic)}|{topic}]] — {count} {plural}")
-        for entry in sorted_entries[:INDEX_PREVIEW_LIMIT]:
-            lines.append(f"- [[reels/{entry['stem']}|{entry['title']}]]")
+    for priority in PRIORITY_ORDER:
+        topics = by_priority.get(priority, {})
+        lines.append(f"## {priority} Priority")
+        lines.append("")
+        if not topics:
+            lines.append("(none)")
+        else:
+            for topic, count in sorted(topics.items(), key=lambda kv: (-kv[1], kv[0])):
+                plural = "save" if count == 1 else "saves"
+                lines.append(f"- [[topics/{_slugify(topic)}|{topic}]] — {count} {plural}")
         lines.append("")
     if not topic_entries:
         lines = ["(no topics yet — run a few captures first)"]
@@ -373,6 +405,7 @@ def sync(vault_path: Optional[str] = None) -> dict:
             "value_score": int(raw_score) if str(raw_score).isdigit() else None,
             "posted": fields["posted"],
             "main_point": main_point,
+            "priority": fields["priority"],
         }
 
         if creator:

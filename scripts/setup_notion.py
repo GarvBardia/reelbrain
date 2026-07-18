@@ -34,6 +34,8 @@ PARENT_PAGE_ID = os.environ["NOTION_PARENT_PAGE_ID"].strip()
 CONTENT_TYPES = ["tutorial", "insight", "resource_drop", "motivation", "news", "entertainment", "unknown"]
 STATUSES = ["📥 Inbox", "⏳ Awaiting DM", "✅ Processed/Reviewed", "⚠️ Failed — retry", "🗑 Low signal", "🕳 Gate expired"]
 VALUE_SCORES = ["1", "2", "3", "4", "5"]
+# Plain text, no emoji — see app/gemini_pipe.py compute_priority().
+PRIORITIES = ["High", "Medium", "Low"]
 
 
 def title(text: str) -> list[dict]:
@@ -81,6 +83,7 @@ def main() -> None:
                 "Reel URL": {"url": {}},
                 "Posted at": {"date": {}},
                 "Value score": select_options(VALUE_SCORES),
+                "Priority": select_options(PRIORITIES),
                 "Comment gate": {"checkbox": {}},
                 "Gate keyword": {"rich_text": {}},
                 "Gate resource": {"url": {}},

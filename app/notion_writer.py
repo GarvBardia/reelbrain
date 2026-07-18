@@ -179,6 +179,7 @@ def _build_properties(
         props["Content type"] = {"select": {"name": extraction.content_type}}
         props["Topics"] = {"multi_select": [{"name": t} for t in extraction.topic_tags]}
         props["Value score"] = {"select": {"name": str(extraction.value_score)}}
+        props["Priority"] = {"select": {"name": extraction.priority}}
         props["Comment gate"] = {"checkbox": extraction.comment_gate.detected}
         if extraction.comment_gate.keyword:
             props["Gate keyword"] = {"rich_text": _rich_text(extraction.comment_gate.keyword)}

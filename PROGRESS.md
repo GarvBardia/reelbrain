@@ -1,5 +1,51 @@
 # PROGRESS.md — hardening/deployment session log
 
+## Priority system — computed field replacing decorative-only value_score
+
+`value_score` existed but nothing acted on it. **Priority now drives real
+action:** a new computed field, a Notion Select property, a dedicated
+"go do this" view, and an Obsidian vault reorganized around it. Mocked tests
+only — no live calls. 285 tests passing.
+
+**What's new:**
+- `app/gemini_pipe.py`: `compute_priority(topic_tags, value_score)` — `"High"`
+  if a topic matches `CLAUDE_KEYWORDS` (`claude`, `claude-ai`, `claude-code`,
+  `anthropic`, `claude-skills`, `mcp` — case-insensitive substring match, easy
+  to extend) OR `value_score >= 4`; `"Medium"` if `value_score == 3`; `"Low"`
+  otherwise. Plain text values only, computed at the same finalization point
+  as `comment_gate` (both the success path and the degraded path), so it's
+  never left at the model default.
+- `app/models.py`: `Extraction.priority: Literal["High", "Medium", "Low"]`.
+- `app/notion_writer.py`: writes a `"Priority"` Select property on every
+  capture/retry, alongside the existing properties.
+- **⚠️ NEEDS YOUR ACTION before this deploys:** run
+  `python scripts/add_priority_property.py` once — Notion's API auto-creates
+  new *option values* on an existing Select property, but not a brand-new
+  *property* that doesn't exist in the schema yet. Without this, writes to
+  the new "Priority" property will likely fail against your live database.
+- **⚠️ NEEDS YOUR ACTION, manual, ~1 minute:** add the "🎯 Action Needed" view
+  (Priority=High AND Status≠Archived, sorted Created time desc) — see the new
+  section in `NOTION_VIEWS.md`. Notion's public API has no endpoint for
+  creating views (confirmed precedent: the existing Triage/This Week views in
+  the same file), so this is a UI-only step, same as those.
+- Obsidian (`app/obsidian_sync.py`): reel notes now carry plain-text
+  `Priority: High` / `Score: 4` lines in frontmatter and body (no emoji
+  anywhere); topic/creator auto-generated listings show the same plain text
+  (replacing the old "value N" phrasing); `_index.md` is restructured to
+  group by Priority tier first (`## High Priority` / `## Medium Priority` /
+  `## Low Priority`), each listing topics with a count — so opening the vault
+  immediately shows what needs attention, not an alphabetical/by-volume dump.
+
+**This does NOT retroactively fix existing rows.** Every save already in
+Notion has no Priority value at all — Obsidian sync treats those as Low
+Priority (so they don't vanish from the index), but their Notion rows have no
+`Priority` property set until you `/retry` them or edit manually. **A
+one-time backfill script (read existing Value score + Topics off every row,
+compute and write Priority) would need writing separately if you want old
+saves reclassified — let me know if you want that built.**
+
+---
+
 ## Three live-testing bugs — fixed vs. needs your manual Notion correction
 
 Three bugs reported from live testing. Mocked tests only in this pass — no live

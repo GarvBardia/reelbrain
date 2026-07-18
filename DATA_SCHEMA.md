@@ -14,6 +14,7 @@
 | Saved at | created_time | |
 | Posted at | date | taken_at from metadata |
 | Value score | select | 1–5 |
+| Priority | select | High / Medium / Low — plain text, no emoji. Computed post-extraction (app/gemini_pipe.py compute_priority): High if a Claude/Anthropic-related topic or value_score>=4, Medium if value_score==3, else Low |
 | Comment gate | checkbox | |
 | Gate keyword | rich_text | |
 | Gate resource | url | attached DM link |
@@ -23,7 +24,7 @@
 
 **Page body layout:** callout (main point) → bulleted supporting points → numbered steps (if any) → bookmark blocks for resources → quote blocks → toggle("Transcript") → toggle("Raw caption").
 
-**Views:** Inbox (Status=Inbox, sort Saved at desc) · Awaiting DM · By Topic (group Topics) · By Creator · High value (score≥4) · Low signal.
+**Views:** Inbox (Status=Inbox, sort Saved at desc) · Awaiting DM · By Topic (group Topics) · By Creator · High value (score≥4) · Low signal · 🎯 Action Needed (Priority=High AND Status≠Archived, sort Created time desc — see NOTION_VIEWS.md).
 
 ### DB: `🎤 Creators`
 Username (title) · Full name · Save count (rollup) · Core source (checkbox) · Profile URL · Primary topics (rollup of Topics).
@@ -74,7 +75,8 @@ Body mirrors the Notion layout; related saves as `[[wikilinks]]` appended by the
     "promised_resource": "string|null"
   },
   "value_score": 3,
-  "language": "en"
+  "language": "en",
+  "priority": "High"
 }
 ```
 

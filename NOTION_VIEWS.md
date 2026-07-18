@@ -40,6 +40,22 @@ mobile automatically).
 4. If Gallery: ⋯ → Layout → Card preview: **None** (we don't store cover images),
    card size **Small**; Properties: show `Status` + `Topics` only.
 
+## View 3 — "🎯 Action Needed"
+
+The actual "go do something about this" list — Priority is now a computed field
+(see PROGRESS.md), not just decoration, and this view is what makes it act like one.
+
+1. **Run `python scripts/add_priority_property.py` first** (once) — adds the
+   `Priority` Select property to the live database. The app itself doesn't create
+   brand-new properties on write, only new option values on existing ones.
+2. **+** new view → **Table** (or List) → name it `🎯 Action Needed` → **Create**.
+3. **Filter** (⋯ → Filter → Add filter):
+   - `Priority` → **is** → `High`
+   - **And** → `Status` → **is not** → `🗄 Archived`
+4. **Sort:** `Saved at` (the `created_time` property) — **Descending**, so the
+   newest high-priority items surface first.
+5. **Properties:** show at least `Title`, `Priority`, `Topics`, `Status` — hide the rest.
+
 ## Archived rows stay out of the way automatically
 
 The nightly job now flips stale low-value rows to `🗄 Archived` (see PROGRESS.md).

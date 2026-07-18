@@ -110,6 +110,7 @@ def _degraded(caption: Optional[str]) -> Extraction:
     otherwise a gated reel whose Gemini call died would silently lose its keyword."""
     extraction = degraded_extraction(caption)
     _merge_comment_gate(extraction, caption)
+    extraction.priority = compute_priority(extraction.topic_tags, extraction.value_score)
     return extraction
 
 
@@ -147,6 +148,7 @@ def run_extraction(
         return _degraded(reel.caption)
 
     _merge_comment_gate(extraction, reel.caption)
+    extraction.priority = compute_priority(extraction.topic_tags, extraction.value_score)
     return extraction
 
 
@@ -173,3 +175,32 @@ def _merge_comment_gate(extraction: Extraction, caption: Optional[str]) -> None:
     assert extraction.comment_gate.detected or not extraction.comment_gate.keyword, (
         "comment_gate invariant violated: keyword set without detected=True"
     )
+
+
+# --- Priority: a computed field driving real action, not decoration ----------
+#
+# value_score alone was decorative — nothing acted on it. Priority turns it (plus
+# a Claude/Anthropic-relevance signal, since that's what actually needs a quick
+# follow-up) into something the "🎯 Action Needed" Notion view and the Obsidian
+# vault's priority-first index both filter/sort on. Named constant so the
+# keyword list is easy to extend later without touching the matching logic.
+CLAUDE_KEYWORDS = ("claude", "claude-ai", "claude-code", "anthropic", "claude-skills", "mcp")
+
+
+def _is_claude_related(topic_tags: list[str]) -> bool:
+    """Case-insensitive substring match: any keyword appearing anywhere inside
+    any topic tag counts (e.g. topic 'claude-code-tips' matches both 'claude'
+    and 'claude-code')."""
+    return any(keyword in tag.lower() for tag in topic_tags for keyword in CLAUDE_KEYWORDS)
+
+
+def compute_priority(topic_tags: list[str], value_score: int) -> str:
+    """'High' if either a Claude/Anthropic-related topic is present or
+    value_score >= 4; 'Medium' if value_score == 3; 'Low' otherwise. Plain text
+    values only ("High"/"Medium"/"Low") — no emoji, since this drives a Notion
+    Select property and Obsidian frontmatter directly."""
+    if _is_claude_related(topic_tags) or value_score >= 4:
+        return "High"
+    if value_score == 3:
+        return "Medium"
+    return "Low"

@@ -8,6 +8,7 @@ data_source_id parent) — see the NOTE at the top of app/notion_writer.py.
 """
 from app import fetcher, notion_writer, store
 from app.main import run_pipeline
+from app.models import CommentGate, Extraction
 
 
 class FakePages:
@@ -120,6 +121,25 @@ def test_pipeline_gated_reel_sets_awaiting_dm(monkeypatch, gated_reel, gated_ext
     row = store.get_by_shortcode(gated_reel.shortcode)
     assert row["status"] == "awaiting_dm"
     assert row["gate_keyword"] == "SEND"
+
+
+def test_pipeline_writes_priority_property_to_notion(monkeypatch, tutorial_reel):
+    """Priority system: the computed Priority lands on the Notion page as a
+    Select property, written alongside the existing properties on every
+    capture/retry — plain text ("High"), no emoji."""
+    fake = _install_fake_notion(monkeypatch)
+    extraction = Extraction(
+        main_point="A high-priority item", topic_tags=["claude-code"], value_score=2,
+        comment_gate=CommentGate(detected=False), priority="High",
+    )
+    monkeypatch.setattr("app.main.fetcher.fetch_reel", lambda shortcode, permalink: tutorial_reel)
+    monkeypatch.setattr("app.main.gemini_pipe.run_extraction", lambda reel, note, taxonomy: extraction)
+
+    store.insert_processing(tutorial_reel.shortcode, tutorial_reel.permalink)
+    run_pipeline(tutorial_reel.shortcode, tutorial_reel.permalink, note=None)
+
+    props = _props_of(save_page_calls(fake)[0])
+    assert props["Priority"]["select"]["name"] == "High"
 
 
 def test_pipeline_music_only_reel_is_honest_about_no_speech(monkeypatch, music_only_reel, music_only_extraction):

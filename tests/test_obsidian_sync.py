@@ -56,19 +56,23 @@ def _rt(text):
     return [{"plain_text": text}]
 
 
-def _page(shortcode, title, status="📥 Inbox", topics=(), value="4", posted="2026-07-01"):
+def _page(shortcode, title, status="📥 Inbox", topics=(), value="4", posted="2026-07-01",
+          priority=""):
+    props = {
+        "Shortcode": {"rich_text": _rt(shortcode)},
+        "Title": {"title": _rt(title)},
+        "Status": {"select": {"name": status}},
+        "Value score": {"select": {"name": value}},
+        "Topics": {"multi_select": [{"name": t} for t in topics]},
+        "Reel URL": {"url": f"https://www.instagram.com/reel/{shortcode}/"},
+        "Posted at": {"date": {"start": posted} if posted else None},
+    }
+    if priority:
+        props["Priority"] = {"select": {"name": priority}}
     return {
         "id": f"pg-{shortcode}",
         "created_time": "2026-07-02T00:00:00.000Z",
-        "properties": {
-            "Shortcode": {"rich_text": _rt(shortcode)},
-            "Title": {"title": _rt(title)},
-            "Status": {"select": {"name": status}},
-            "Value score": {"select": {"name": value}},
-            "Topics": {"multi_select": [{"name": t} for t in topics]},
-            "Reel URL": {"url": f"https://www.instagram.com/reel/{shortcode}/"},
-            "Posted at": {"date": {"start": posted} if posted else None},
-        },
+        "properties": props,
     }
 
 
@@ -87,6 +91,15 @@ def _body(shortcode):
 
 def _toggle_children(text):
     return [{"type": "paragraph", "paragraph": {"rich_text": _rt(text)}}]
+
+
+def _contains_emoji(text: str) -> bool:
+    """True if any character looks pictographic/emoji. Threshold chosen to
+    cover every emoji this codebase actually uses (⏳=U+23F3, ⚠=U+26A0,
+    🗑=U+1F5D1, 🎯=U+1F3AF, etc. — all >= U+2300) while NOT flagging ordinary
+    punctuation this codebase also uses, like em-dash (—, U+2014) or curly
+    quotes (U+2018-201D)."""
+    return any(ord(ch) >= 0x2300 for ch in text)
 
 
 def _vector(primary, blend=0.0, dim=768):
@@ -139,6 +152,43 @@ def test_full_sync_writes_note_with_frontmatter_sections_and_stubs(monkeypatch, 
     assert (tmp_path / "topics" / "sleep.md").exists()
     assert (tmp_path / "topics" / "health.md").exists()
     assert result["notes_written"] == 1
+
+
+def test_reel_note_shows_plain_text_priority_and_score_no_emoji(monkeypatch, tmp_path):
+    """Priority system: frontmatter AND body carry plain 'Priority: High' /
+    'Score: 4' lines — no emoji anywhere in either."""
+    _install(monkeypatch, [_page("PRI1", "Claude tips", topics=("claude-code",),
+                                 value="4", priority="High")],
+             {"pg-PRI1": _body("PRI1"), "tg-PRI1": _toggle_children("t")})
+    _seed_row("PRI1")
+
+    sync(str(tmp_path))
+    content = (tmp_path / "reels" / "2026-07-01-PRI1.md").read_text(encoding="utf-8")
+
+    assert "priority: High" in content        # frontmatter
+    assert "Priority: High" in content        # body, plain text
+    assert "Score: 4" in content               # body, plain text
+    # the specific ask (item 5): the generated Priority/Score lines carry no emoji.
+    priority_line = next(l for l in content.splitlines() if l.startswith("Priority:"))
+    score_line = next(l for l in content.splitlines() if l.startswith("Score:"))
+    assert not _contains_emoji(priority_line)
+    assert not _contains_emoji(score_line)
+
+
+def test_topic_stub_listing_shows_plain_priority_and_score_no_emoji(monkeypatch, tmp_path):
+    _install(monkeypatch, [_page("PRI2", "Claude tips", topics=("mcp",),
+                                 value="5", priority="High")],
+             {"pg-PRI2": _body("PRI2"), "tg-PRI2": _toggle_children("t")})
+    _seed_row("PRI2")
+
+    sync(str(tmp_path))
+    topic_note = (tmp_path / "topics" / "mcp.md").read_text(encoding="utf-8")
+
+    assert "Priority: High" in topic_note
+    assert "Score: 5" in topic_note
+    assert "value 5" not in topic_note  # old "value N" phrasing fully replaced
+    listing_line = next(l for l in topic_note.splitlines() if l.startswith("- [[reels/"))
+    assert not _contains_emoji(listing_line)  # no emoji in the auto-generated reel listing
 
 
 def test_related_section_from_stored_embeddings(monkeypatch, tmp_path):
@@ -314,7 +364,7 @@ def test_topic_note_gets_real_saved_reels_index_not_just_a_stub(monkeypatch, tmp
     assert AUTO_START in topic_note and AUTO_END in topic_note
     assert "## Saved Reels" in topic_note
     assert "[[reels/2026-07-01-SR1|Sleep Tips]]" in topic_note
-    assert "value 4" in topic_note
+    assert "Score: 4" in topic_note  # plain-text Score, replacing the old "value 4" phrasing
     assert "Main insight here" in topic_note  # the reel's Main Point, pulled in
 
 
@@ -410,23 +460,64 @@ def test_saved_reels_sorted_by_value_desc_then_date_desc(monkeypatch, tmp_path):
     assert pos_new < pos_old < pos_low  # value 5/newer, value 5/older, value 2
 
 
-def test_index_shows_real_reel_previews_not_just_counts(monkeypatch, tmp_path):
-    pages = [_page("PRV1", "Preview Reel One", topics=("sleep",)),
-             _page("PRV2", "Preview Reel Two", topics=("sleep",))]
+def test_index_groups_by_priority_first_with_topic_counts(monkeypatch, tmp_path):
+    """_index.md's new structure (replacing the old alphabetical/by-volume topic
+    dump): grouped by Priority tier first, each section listing topic links with
+    a count of how many reels at that tier carry the topic."""
+    pages = [
+        _page("PRV1", "Preview Reel One", topics=("sleep",), priority="High"),
+        _page("PRV2", "Preview Reel Two", topics=("sleep",), priority="High"),
+        _page("PRV3", "Medium Reel", topics=("money",), priority="Medium"),
+        _page("PRV4", "Low Reel", topics=("music",), priority="Low"),
+    ]
     blocks = {}
-    for s in ("PRV1", "PRV2"):
+    for s in ("PRV1", "PRV2", "PRV3", "PRV4"):
         blocks[f"pg-{s}"] = _body(s)
         blocks[f"tg-{s}"] = _toggle_children("t")
     _install(monkeypatch, pages, blocks)
-    _seed_row("PRV1")
-    _seed_row("PRV2")
+    for s in ("PRV1", "PRV2", "PRV3", "PRV4"):
+        _seed_row(s)
 
     sync(str(tmp_path))
     index = (tmp_path / "_index.md").read_text(encoding="utf-8")
 
     assert AUTO_START in index and AUTO_END in index
-    assert "[[reels/2026-07-01-PRV1|Preview Reel One]]" in index
-    assert "[[reels/2026-07-01-PRV2|Preview Reel Two]]" in index
+    assert "## High Priority" in index
+    assert "## Medium Priority" in index
+    assert "## Low Priority" in index
+    # priority section ordering: High before Medium before Low
+    assert index.index("## High Priority") < index.index("## Medium Priority") < index.index("## Low Priority")
+    # topic + count, grouped under the correct tier — no more individual reel previews
+    high_section = index[index.index("## High Priority"):index.index("## Medium Priority")]
+    assert "[[topics/sleep|sleep]] — 2 saves" in high_section
+    medium_section = index[index.index("## Medium Priority"):index.index("## Low Priority")]
+    assert "[[topics/money|money]] — 1 save" in medium_section
+    low_section = index[index.index("## Low Priority"):]
+    assert "[[topics/music|music]] — 1 save" in low_section
+
+
+def test_index_priority_section_shows_none_when_empty(monkeypatch, tmp_path):
+    _install(monkeypatch, [_page("SOLO1", "Solo", topics=("sleep",), priority="Low")],
+              {"pg-SOLO1": _body("SOLO1"), "tg-SOLO1": _toggle_children("t")})
+    _seed_row("SOLO1")
+
+    sync(str(tmp_path))
+    index = (tmp_path / "_index.md").read_text(encoding="utf-8")
+    high_section = index[index.index("## High Priority"):index.index("## Medium Priority")]
+    assert "(none)" in high_section
+
+
+def test_index_rows_without_priority_property_fall_into_low(monkeypatch, tmp_path):
+    """Reels saved before the Priority property existed have no value at all —
+    they must still show up (in Low), never silently vanish from the index."""
+    _install(monkeypatch, [_page("NOPRI1", "No priority set", topics=("sleep",))],  # priority=""
+              {"pg-NOPRI1": _body("NOPRI1"), "tg-NOPRI1": _toggle_children("t")})
+    _seed_row("NOPRI1")
+
+    sync(str(tmp_path))
+    index = (tmp_path / "_index.md").read_text(encoding="utf-8")
+    low_section = index[index.index("## Low Priority"):]
+    assert "[[topics/sleep|sleep]] — 1 save" in low_section
 
 
 def test_index_manual_preamble_survives_resync(monkeypatch, tmp_path):

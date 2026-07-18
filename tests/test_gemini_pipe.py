@@ -114,6 +114,21 @@ def test_merge_comment_gate_forces_detected_true_when_model_sets_keyword_without
     assert extraction.comment_gate.keyword == "International"
 
 
+def test_run_extraction_sets_priority_on_the_success_path(monkeypatch):
+    """Priority is computed and attached at the same finalization point as
+    comment_gate — never left at the model default regardless of path taken."""
+    reel = ReelData(
+        shortcode="PRIOK1", permalink="https://www.instagram.com/reel/PRIOK1/",
+        video_path="/tmp/PRIOK1.mp4", caption="no gate here",
+    )
+    extraction = Extraction(main_point="x", topic_tags=["fitness"], value_score=5)
+    monkeypatch.setattr(gemini_pipe, "_extract_audio", lambda video_path: "/tmp/a.m4a")
+    monkeypatch.setattr(gemini_pipe, "_call_gemini", lambda audio_path, prompt: extraction.model_dump_json())
+
+    result = run_extraction(reel, note=None, taxonomy=[])
+    assert result.priority == "High"  # value_score 5 >= 4
+
+
 def test_merge_comment_gate_invariant_holds_across_all_input_combinations():
     """Exhaustive: whatever detected/keyword the model hands in, and whatever
     the regex does or doesn't find, the merged result must never end up with a
@@ -126,3 +141,51 @@ def test_merge_comment_gate_invariant_holds_across_all_input_combinations():
                 )
                 _merge_comment_gate(extraction, caption)
                 assert extraction.comment_gate.detected or not extraction.comment_gate.keyword
+
+
+# --- compute_priority: computed field replacing decorative-only value_score ---
+
+def test_compute_priority_high_from_value_score():
+    assert gemini_pipe.compute_priority(["fitness"], 4) == "High"
+    assert gemini_pipe.compute_priority(["fitness"], 5) == "High"
+
+
+def test_compute_priority_medium_at_value_score_three():
+    assert gemini_pipe.compute_priority(["fitness"], 3) == "Medium"
+
+
+def test_compute_priority_low_otherwise():
+    assert gemini_pipe.compute_priority(["fitness"], 1) == "Low"
+    assert gemini_pipe.compute_priority(["fitness"], 2) == "Low"
+
+
+def test_compute_priority_high_from_claude_keyword_even_at_low_value_score():
+    """A Claude/Anthropic-related topic forces High regardless of value_score —
+    the whole point of the OR condition."""
+    assert gemini_pipe.compute_priority(["claude-code"], 1) == "High"
+    assert gemini_pipe.compute_priority(["anthropic"], 2) == "High"
+
+
+def test_compute_priority_claude_keyword_matching_is_case_insensitive():
+    assert gemini_pipe.compute_priority(["Claude-Code"], 1) == "High"
+    assert gemini_pipe.compute_priority(["ANTHROPIC"], 1) == "High"
+    assert gemini_pipe.compute_priority(["MCP-Servers"], 1) == "High"
+
+
+def test_compute_priority_claude_keyword_substring_match_within_topic():
+    """Each keyword in CLAUDE_KEYWORDS matches as a substring anywhere in a
+    topic tag, not just an exact-equal tag."""
+    assert gemini_pipe.compute_priority(["my-claude-skills-list"], 1) == "High"
+    assert gemini_pipe.compute_priority(["claude-ai-tools"], 1) == "High"
+
+
+def test_compute_priority_no_claude_keyword_falls_through_to_value_score():
+    assert gemini_pipe.compute_priority(["fitness", "cooking"], 5) == "High"   # via value_score
+    assert gemini_pipe.compute_priority(["fitness", "cooking"], 3) == "Medium"
+    assert gemini_pipe.compute_priority(["fitness", "cooking"], 1) == "Low"
+
+
+def test_compute_priority_no_topics_at_all():
+    assert gemini_pipe.compute_priority([], 4) == "High"
+    assert gemini_pipe.compute_priority([], 3) == "Medium"
+    assert gemini_pipe.compute_priority([], 1) == "Low"

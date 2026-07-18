@@ -8,7 +8,7 @@ graph, readable by any tool (including a Claude project — see VAULT_CLAUDE_SET
 
 ```
 C:\Users\garvb\ReelBrainVault\          (or wherever VAULT_PATH points)
-  _index.md                 ← start here: every topic, real reel previews, not just counts
+  _index.md                 ← start here: grouped by Priority (High/Medium/Low first)
   reels/
     2026-07-01-AAA111.md    ← one note per save: {posted-date}-{shortcode}.md
   topics/
@@ -17,22 +17,33 @@ C:\Users\garvb\ReelBrainVault\          (or wherever VAULT_PATH points)
     janedoe.md              ← same, per creator
 ```
 
-Each reel note has YAML frontmatter (shortcode, creator, status, value_score, topics,
-url, posted) followed by the same sections as the Notion page — Main point, Supporting
-points, Steps, Resources, Quotable lines, Transcript — plus a **## Related** section
-linking the 3 most similar past saves. Related links come from the embeddings computed
-at capture time (sqlite-vec), so they surface connections Notion's Related property
-missed, and they're real `[[wikilinks]]` so Obsidian's graph view renders them.
+Each reel note has YAML frontmatter (shortcode, creator, status, priority, value_score,
+topics, url, posted) followed by plain-text `Priority: High` / `Score: 4` lines (no
+emoji — see PROGRESS.md's Priority system entry) and then the same sections as the
+Notion page — Main point, Supporting points, Steps, Resources, Quotable lines,
+Transcript — plus a **## Related** section linking the 3 most similar past saves.
+Related links come from the embeddings computed at capture time (sqlite-vec), so they
+surface connections Notion's Related property missed, and they're real `[[wikilinks]]`
+so Obsidian's graph view renders them.
 
 **Topic and creator notes are a real index, not a bare stub.** Every sync rewrites a
 `## Saved Reels` section listing every reel tagged with that topic (or by that creator),
-each as `[[wikilink]]` — title, value score, and one-line Main Point — sorted by value
-score descending, then date descending. This is the actual reason to be in Obsidian
-instead of Notion: you get a real page per topic, not just Obsidian's Backlinks panel
-(which works, but isn't a page you can read top to bottom). The generated part is wrapped
-between `<!-- AUTO-GENERATED, DO NOT EDIT BELOW -->` / `<!-- END AUTO-GENERATED -->`
-markers — anything you write above (or below) those markers, in any of these notes
-including `_index.md`, survives every re-sync untouched.
+each as `[[wikilink]]` — title, `Priority: X`, `Score: X`, and one-line Main Point —
+sorted by value score descending, then date descending. This is the actual reason to be
+in Obsidian instead of Notion: you get a real page per topic, not just Obsidian's
+Backlinks panel (which works, but isn't a page you can read top to bottom).
+
+**`_index.md` is grouped by Priority first** — `## High Priority`, `## Medium Priority`,
+`## Low Priority` — each section listing every topic that has at least one reel at that
+tier, with a count (`[[topics/mcp|mcp]] — 3 saves`). Opening the vault immediately shows
+what needs attention instead of an alphabetical/by-volume topic dump. Reels saved before
+the Priority property existed have no value set and fall into Low Priority rather than
+vanishing — see PROGRESS.md re: whether a backfill script is worth building.
+
+The generated part of every one of these files is wrapped between
+`<!-- AUTO-GENERATED, DO NOT EDIT BELOW -->` / `<!-- END AUTO-GENERATED -->` markers —
+anything you write above (or below) those markers, in any of these notes including
+`_index.md`, survives every re-sync untouched.
 
 ## Running the sync
 

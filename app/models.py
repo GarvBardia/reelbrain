@@ -100,6 +100,10 @@ class Extraction(BaseModel):
     comment_gate: CommentGate = Field(default_factory=CommentGate)
     value_score: int = Field(ge=1, le=5, default=3)
     language: str = "en"
+    # Computed post-extraction (see gemini_pipe.compute_priority), never set by
+    # Gemini itself — drives the Notion "Priority" Select property and the
+    # Obsidian "Action Needed"-style grouping. Plain text, no emoji.
+    priority: Literal["High", "Medium", "Low"] = "Low"
 
     @field_validator("main_point")
     @classmethod
