@@ -1,5 +1,89 @@
 # PROGRESS.md — hardening/deployment session log
 
+## Three live-testing bugs — fixed vs. needs your manual Notion correction
+
+Three bugs reported from live testing. Mocked tests only in this pass — no live
+Instagram/Notion/Gemini calls were made by Claude. Three commits, one per bug:
+`34258de` (BUG 3), `04f4c99` (BUG 2), `84ba60a` (BUG 1).
+
+### ✅ FIXED — BUG 3 (CRITICAL): `/attach` could attach to the wrong row
+An explicit `shortcode_or_note` (e.g. `DZSFkNppVW_`) landed on an unrelated row
+(`Dap3IoNo4Kt`) instead. Root cause: `find_pending_gate`'s exact-shortcode check
+was scoped to rows already `Awaiting DM`; if the requested row wasn't in that
+set (e.g. after an ephemeral-disk wipe), the exact match silently found nothing
+and fell through to the "single remaining row" auto-pick meant only for an
+*omitted* shortcode — substituting a completely different row. Fixed: exact
+shortcode is now resolved across the full local table (any status), then
+directly against Notion, before any substring/fallback logic runs. A shortcode
+that exists but isn't pending now returns 404 — never a substitute. 6 new
+regression tests prove the exact incident shape can't recur. **Nothing for you
+to do** — this was a pure code bug, now closed.
+
+### ✅ FIXED — BUG 2, part 2: emoji-drop-for-DM gates now detected
+`Dap3IoNo4Kt` ("Drop your 🔥 emoji to grab all in ur dms") wasn't recognized as
+a gate — no literal "comment" for the existing regex to match. Added a
+narrowly-scoped pattern (verb "drop" + emoji-shaped token + literal "emoji" +
+"dm" nearby) specifically to avoid false-positiving on ordinary "drop a fire
+emoji if you agree" captions. **Nothing for you to do** for future captures;
+already-processed rows with this phrasing won't retroactively update unless
+you `/retry` them.
+
+### ✅ FIXED — BUG 2, part 1: `comment_gate`/`gate_keyword` invariant enforced
+`DajFASZODlj` (`gate_keyword="International"`, `comment_gate=False`) and
+`DaQIJHnP6zn` (`gate_keyword="CODING"`, same mismatch) — Gemini's own model
+output could set a keyword while independently leaving `detected=False`, and
+when the regex also missed the caption's phrasing, nothing corrected it.
+`_merge_comment_gate` now forces `detected=True` whenever a keyword is present,
+with an assertion guaranteeing the two fields can never disagree again.
+
+**⚠️ NEEDS YOUR MANUAL NOTION CORRECTION:** the two specific rows above still
+have the stale, disagreeing values in Notion right now — this fix only
+prevents new mismatches, it doesn't rewrite old rows. Either edit `DajFASZODlj`
+and `DaQIJHnP6zn` directly in Notion (check the "Comment gate" box), or run
+`POST /retry/DajFASZODlj` and `POST /retry/DaQIJHnP6zn` to regenerate them
+under the fixed code.
+
+**Investigated, no code bug found — the "`__YES__`/`__NO__` string" report:**
+the live "Comment gate" property is correctly declared as a Checkbox
+(`scripts/setup_notion.py`), and the write code has always sent a real Python
+boolean (`{"checkbox": extraction.comment_gate.detected}` in
+`notion_writer.py`) — no such string literal appears anywhere in this
+codebase's current code or git history. **This needs you to check directly in
+Notion**: open the "Comment gate" column header → "Edit property" and confirm
+it still says "Checkbox". If it does, and you're still seeing literal
+`__YES__`/`__NO__` text somewhere, tell me exactly which row/view you're
+looking at — my best guess is these are stale values from a much earlier
+iteration of the pipeline (predating this session's codebase), or you're
+looking at a different property/view than "Comment gate" itself.
+
+### ⚠️ ALREADY FIXED, PRE-DATES THIS SESSION — BUG 1: photo/carousel vanish
+`DaNiWoBzdja` ("No video formats found") reportedly vanished entirely. Verified
+the existing fix (commit `ef2cbf0`, an earlier session) is fully intact:
+`fetcher.py` correctly classifies this error on both the immediate-failure and
+backoff-exhausted paths, and `main.py`'s `run_pipeline` checks
+`is_photo_or_carousel` before any other status logic, always writing a
+"📷 Photo — manual" row. This was already covered by an end-to-end test; added
+one more tied to the literal reported shortcode for direct confirmation. **No
+code change was needed. If `DaNiWoBzdja` is still missing from Notion**, that
+capture most likely ran before `ef2cbf0` was deployed — run
+`POST /retry/DaNiWoBzdja` to regenerate it under the current code.
+
+### 📋 Gate-resource audit — report only, nothing changed in Notion
+Built `scripts/audit_gate_resources.py` — a **read-only** script (run it
+yourself with your own Notion credentials; Claude made no live calls this
+session) that lists every Saves row's Gate resource URL next to its
+title/topics for a manual eyeball-check, plus automated checks for
+`gate_keyword`-without-`comment_gate`, `comment_gate`-without-`gate_keyword`,
+and a `Gate resource` set while `Status` is still `Awaiting DM`. Run:
+```
+python scripts/audit_gate_resources.py
+```
+Share the output (or the specific mismatches you spot) and I can help
+interpret/fix from there — I won't write anything to Notion without you
+confirming first.
+
+---
+
 ## URGENT SAFETY FIX — /attach refuses to guess instead of best-guessing
 
 **Tonight's real incident:** with many rows simultaneously `Awaiting DM`, `/attach`'s
