@@ -367,6 +367,42 @@ def get_by_shortcode_or_notion(shortcode: str) -> Optional[sqlite3.Row]:
     return _persist_notion_page(page)
 
 
+class AmbiguousGateMatch(Exception):
+    """Raised by find_pending_gate when a substring/fallback match isn't unique.
+
+    Real incident: with several rows simultaneously Awaiting DM, a loose
+    note/title substring match attached a DM'd resource to the WRONG pending
+    entry. From here on, this lookup never guesses when more than one
+    candidate matches — it raises this exception (main.py translates it to
+    HTTP 409) listing every matching shortcode, so the caller retries with an
+    explicit one instead of silently getting whichever matched first.
+    """
+
+    def __init__(self, candidates: list[str]):
+        self.candidates = candidates
+        super().__init__(f"{len(candidates)} ambiguous awaiting-DM candidates: {candidates}")
+
+
+def _awaiting_dm_rows() -> list[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM saves WHERE status = 'awaiting_dm' ORDER BY updated_at DESC"
+        ).fetchall()
+
+
+def _row_title(row: sqlite3.Row) -> str:
+    """Locally-derived equivalent of the Notion page's Title (= the extraction's
+    main_point) — there's no separate title column in SQLite. awaiting_dm rows
+    always have extraction_json populated, since gate detection happens after
+    extraction in run_pipeline, so this is never empty in practice for them."""
+    if not row["extraction_json"]:
+        return ""
+    try:
+        return json.loads(row["extraction_json"]).get("main_point") or ""
+    except (json.JSONDecodeError, AttributeError):
+        return ""
+
+
 def _find_pending_gate_via_notion(shortcode_or_note: Optional[str]) -> Optional[sqlite3.Row]:
     from app import notion_writer
 
@@ -378,52 +414,63 @@ def _find_pending_gate_via_notion(shortcode_or_note: Optional[str]) -> Optional[
     if not pages:
         return None
 
-    chosen = None
-    if shortcode_or_note:
-        needle = shortcode_or_note.lower()
-        for page in pages:
-            if notion_writer.extract_saves_fields(page)["shortcode"] == shortcode_or_note:
-                chosen = page
-                break
-        if chosen is None:
-            for page in pages:
-                fields = notion_writer.extract_saves_fields(page)
-                if needle in (fields["note"] or "").lower() or needle in (fields["title"] or "").lower():
-                    chosen = page
-                    break
-    if chosen is None:
-        chosen = pages[0]  # already sorted most-recently-edited first, mirrors get_most_recent_awaiting_dm
+    entries = [(page, notion_writer.extract_saves_fields(page)) for page in pages]
 
-    return _persist_notion_page(chosen)
+    if shortcode_or_note:
+        exact = [p for p, f in entries if f["shortcode"] == shortcode_or_note]
+        if exact:
+            return _persist_notion_page(exact[0])  # shortcode is unique -> never ambiguous
+
+        needle = shortcode_or_note.lower()
+        matches = [
+            (p, f) for p, f in entries
+            if needle in (f["note"] or "").lower() or needle in (f["title"] or "").lower()
+        ]
+        if len(matches) > 1:
+            raise AmbiguousGateMatch([f["shortcode"] for _p, f in matches])
+        if len(matches) == 1:
+            return _persist_notion_page(matches[0][0])
+
+    if len(pages) > 1:
+        raise AmbiguousGateMatch([f["shortcode"] for _p, f in entries])
+    return _persist_notion_page(pages[0])
 
 
 def find_pending_gate(shortcode_or_note: Optional[str]) -> Optional[sqlite3.Row]:
     """BUILD_SPEC 2.2: match /attach's target row.
 
-    Tries an exact shortcode match first, then a substring match against the
-    note the entry was captured with, both restricted to awaiting_dm rows.
-    Falls back to the most-recent awaiting_dm entry if shortcode_or_note is
-    omitted or matches nothing. If SQLite has nothing at all (a fresh/wiped
-    disk), falls back to querying Notion directly with the same priority order.
+    SAFETY (post-incident, see AmbiguousGateMatch): never guesses when more
+    than one candidate matches — raises AmbiguousGateMatch instead.
+
+    Priority, each level restricted to currently awaiting_dm rows:
+      1. Exact shortcode match — always unambiguous (shortcode is a primary key).
+      2. Substring match against note OR title. 2+ matches -> AmbiguousGateMatch.
+      3. If shortcode_or_note was omitted, or matched nothing above: the single
+         awaiting_dm row, if there is exactly one. 2+ rows -> AmbiguousGateMatch.
+         Falls back to Notion (ephemeral-disk recovery) only when local has NONE.
     """
+    local_rows = _awaiting_dm_rows()
+
     if shortcode_or_note:
-        with get_connection() as conn:
-            row = conn.execute(
-                "SELECT * FROM saves WHERE shortcode = ? AND status = 'awaiting_dm'",
-                (shortcode_or_note,),
-            ).fetchone()
-            if row:
-                return row
-            row = conn.execute(
-                """SELECT * FROM saves WHERE status = 'awaiting_dm' AND note LIKE ?
-                   ORDER BY updated_at DESC LIMIT 1""",
-                (f"%{shortcode_or_note}%",),
-            ).fetchone()
-            if row:
-                return row
-    local = get_most_recent_awaiting_dm()
-    if local:
-        return local
+        exact = [r for r in local_rows if r["shortcode"] == shortcode_or_note]
+        if exact:
+            return exact[0]  # shortcode is unique -> never ambiguous
+
+        needle = shortcode_or_note.lower()
+        matches = [
+            r for r in local_rows
+            if needle in (r["note"] or "").lower() or needle in _row_title(r).lower()
+        ]
+        if len(matches) > 1:
+            raise AmbiguousGateMatch([r["shortcode"] for r in matches])
+        if len(matches) == 1:
+            return matches[0]
+
+    if local_rows:
+        if len(local_rows) > 1:
+            raise AmbiguousGateMatch([r["shortcode"] for r in local_rows])
+        return local_rows[0]
+
     return _find_pending_gate_via_notion(shortcode_or_note)
 
 

@@ -321,11 +321,28 @@ def retry(shortcode: str, request: Request, background_tasks: BackgroundTasks) -
 def attach(req: AttachRequest, request: Request) -> JSONResponse:
     """BUILD_SPEC 2.2: user shares the DM'd link back. Attaches it to the pending
     entry's Resources and flips Awaiting DM -> Inbox. Matches by shortcode or note
-    substring; falls back to the most-recent Awaiting DM entry if omitted."""
+    substring; falls back to the sole Awaiting DM entry if omitted.
+
+    SAFETY: never guesses among multiple candidates (see
+    store.AmbiguousGateMatch) — a 409 here means retry with an explicit
+    shortcode instead of risking a resource getting attached to the wrong entry.
+    """
     _check_rate_limit(request)
     _check_secret(req.secret)
 
-    row = store.find_pending_gate(req.shortcode_or_note)
+    try:
+        row = store.find_pending_gate(req.shortcode_or_note)
+    except store.AmbiguousGateMatch as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": (
+                    "ambiguous match — multiple pending entries matched; "
+                    "retry with an explicit shortcode"
+                ),
+                "candidates": exc.candidates,
+            },
+        ) from exc
     if not row:
         raise HTTPException(status_code=404, detail="no matching awaiting-DM entry")
 

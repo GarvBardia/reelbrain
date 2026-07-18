@@ -1,5 +1,49 @@
 # PROGRESS.md — hardening/deployment session log
 
+## URGENT SAFETY FIX — /attach refuses to guess instead of best-guessing
+
+**Tonight's real incident:** with many rows simultaneously `Awaiting DM`, `/attach`'s
+note/title substring fallback was too loose and attached a DM'd resource to the WRONG
+pending entry. **This replaces the previous "best guess" behavior with "refuse to
+guess" across every fallback path in `find_pending_gate`.** Nothing here silently picks
+a candidate anymore unless there is genuinely only one possible match.
+
+**The rule, everywhere in `store.find_pending_gate` and its Notion-fallback twin
+`_find_pending_gate_via_notion`:**
+- An **exact shortcode match** is always safe — shortcode is a primary key, so it can
+  never be ambiguous — and always wins outright over any substring match.
+- A **substring match** (against note OR title — title-matching locally is new: it's
+  derived from `extraction_json`'s `main_point`, since SQLite has no separate title
+  column) that hits **2+** rows now raises `store.AmbiguousGateMatch` instead of
+  returning the first/most-recent one.
+- The **omitted-shortcode fallback** ("just attach to whatever's pending") now only
+  auto-picks when there is **exactly one** row `Awaiting DM`. 2+ rows → same exception.
+- `/attach` (`app/main.py`) catches `AmbiguousGateMatch` and returns **HTTP 409** with
+  `{"detail": {"message": ..., "candidates": [...]}}` — every matching shortcode, so
+  the caller (the iOS Shortcut, or you by hand) retries with the exact one instead of
+  the ambiguous word. A 409 has **no side effects** — every candidate row is left
+  exactly as it was.
+
+**Six new direct unit tests in `tests/test_store.py`** against `store.find_pending_gate`
+itself (the two the task named exactly — 3 rows with omitted shortcode, and 2 rows
+sharing a word in their note — plus the title-substring equivalent, proof that an exact
+shortcode match is never ambiguous no matter how many other rows exist, proof that a
+substring match unique among many unrelated rows still safely auto-picks — ambiguity is
+about the **match** count, not the row count — and the single-row auto-pick case).
+**Plus 5 endpoint-level tests** in `tests/test_attach_endpoint.py` and
+`tests/test_coverage_gaps.py` proving the same guarantees through the actual HTTP
+`/attach` call (409 status code, `candidates` list, zero side effects on the rows), and
+2 more in `tests/test_notion_fallback.py` covering the same rule in the Notion-fallback
+path. Updated 3 pre-existing tests that had explicitly asserted the OLD "silently pick
+most-recent" behavior — that was the exact bug, so they were updated to assert the new
+409 instead, not reverted. **Full suite: 257 passed** (was 246). No live calls.
+
+**Also updated:** README's "Attach to ReelBrain" Shortcut section now documents the 409
+response shape and explains why it exists, so future-you (or anyone reading the setup
+doc) understands this isn't a bug when it happens.
+
+---
+
 ## Known limitations (plain English)
 
 Three things worth knowing about how this app behaves day-to-day — none of these are

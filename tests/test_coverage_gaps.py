@@ -145,7 +145,9 @@ def test_attach_note_match_beats_most_recent(monkeypatch):
     assert resp.json()["shortcode"] == "OLDNOTE"  # note match wins over recency
 
 
-def test_attach_no_match_falls_back_to_most_recent(monkeypatch):
+def test_attach_no_match_with_multiple_pending_refuses_to_guess(monkeypatch):
+    """A non-matching shortcode_or_note with 2+ rows Awaiting DM must 409, not
+    silently fall back to whichever is most recent (the safety fix)."""
     client = _attach_client(monkeypatch)
     _seed_awaiting("FIRST", note="alpha")
     _seed_awaiting("SECOND", note="beta")
@@ -153,7 +155,21 @@ def test_attach_no_match_falls_back_to_most_recent(monkeypatch):
     resp = client.post("/attach", json={
         "shortcode_or_note": "matches nothing at all", "resource_url": "https://x.com/r", "secret": "test-secret",
     })
-    assert resp.json()["shortcode"] == "SECOND"  # most-recent awaiting_dm
+    assert resp.status_code == 409
+    assert set(resp.json()["detail"]["candidates"]) == {"FIRST", "SECOND"}
+
+
+def test_attach_no_match_with_single_pending_still_auto_picks(monkeypatch):
+    """Unambiguous case: exactly one row Awaiting DM, so a non-matching search
+    term is still safe to fall through to it."""
+    client = _attach_client(monkeypatch)
+    _seed_awaiting("ONLYONE", note="alpha")
+
+    resp = client.post("/attach", json={
+        "shortcode_or_note": "matches nothing at all", "resource_url": "https://x.com/r", "secret": "test-secret",
+    })
+    assert resp.status_code == 200
+    assert resp.json()["shortcode"] == "ONLYONE"
 
 
 def test_attach_ignores_non_awaiting_rows_entirely(monkeypatch):

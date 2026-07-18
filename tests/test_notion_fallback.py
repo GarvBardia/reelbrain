@@ -3,6 +3,7 @@ directly (and re-persisting locally) when the local SQLite row is missing —
 Render wipes its ephemeral disk on every redeploy, Notion doesn't. All mocked;
 no live Notion calls anywhere in this file.
 """
+import pytest
 from fastapi.testclient import TestClient
 
 from app import main, notion_writer, store
@@ -247,18 +248,33 @@ def test_find_pending_gate_falls_back_to_title_substring(monkeypatch):
     assert row["shortcode"] == "RGTITLE"
 
 
-def test_find_pending_gate_falls_back_to_most_recent_when_nothing_matches(monkeypatch):
+def test_find_pending_gate_via_notion_refuses_to_guess_among_multiple(monkeypatch):
+    """Same safety rule applies to the Notion fallback path: 2+ candidates and
+    nothing matches -> AmbiguousGateMatch, never a silent 'most recent' pick."""
     class _DS:
         def query(self, **kwargs):
-            # already sorted most-recently-edited first, per find_awaiting_dm_pages
             return {"results": [_saves_page("MOSTRECENT"), _saves_page("OLDER")]}
 
     client = FakeClient()
     client.data_sources = _DS()
     monkeypatch.setattr(notion_writer, "_client", lambda: client)
 
+    with pytest.raises(store.AmbiguousGateMatch) as exc_info:
+        store.find_pending_gate("matches nothing at all")
+    assert set(exc_info.value.candidates) == {"MOSTRECENT", "OLDER"}
+
+
+def test_find_pending_gate_via_notion_auto_picks_when_exactly_one(monkeypatch):
+    class _DS:
+        def query(self, **kwargs):
+            return {"results": [_saves_page("ONLYONE")]}
+
+    client = FakeClient()
+    client.data_sources = _DS()
+    monkeypatch.setattr(notion_writer, "_client", lambda: client)
+
     row = store.find_pending_gate("matches nothing at all")
-    assert row["shortcode"] == "MOSTRECENT"
+    assert row["shortcode"] == "ONLYONE"
 
 
 def test_find_pending_gate_both_miss_returns_none(monkeypatch):

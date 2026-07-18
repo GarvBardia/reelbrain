@@ -251,12 +251,18 @@ Instagram DM (or Messages/any app), accepting URLs.
    - URL: `https://<your-render-app>/attach`
    - Headers: `Content-Type: application/json`
    - Request body (JSON): `{"shortcode_or_note": null, "resource_url": <the URL from step 1>, "secret": "<CAPTURE_SECRET>"}`
-   - Leaving `shortcode_or_note` as `null` matches the most-recently-gated entry — fine
-     if you only ever have one reel waiting on a DM at a time. If you might have several,
-     add a text-entry step asking for a word from the original caption/note and pass that
-     instead (matched as a substring against the note you attached at capture time).
-3. **Show Notification** confirming `{"status": "attached", ...}` (or the 404 if nothing
-   matched — check the Notion "Awaiting DM" view for what's actually still pending).
+   - Leaving `shortcode_or_note` as `null` only works when exactly **one** reel is
+     currently `Awaiting DM` — with a word from the original caption/note, matched as a
+     substring against that entry's note or title.
+3. **Show Notification** confirming `{"status": "attached", ...}`.
+   - **404** means nothing matched at all — check the Notion "Awaiting DM" view.
+   - **409** means the match was ambiguous — 2+ pending entries matched (either because
+     you omitted `shortcode_or_note` with several reels waiting, or your word appears in
+     more than one). The response body lists every matching shortcode under
+     `detail.candidates`; retry with the exact shortcode from that list instead of one
+     of the ambiguous words. **This is deliberate** — a real mismatch happened once from
+     guessing among multiple candidates, so the endpoint now refuses to guess rather
+     than risk attaching a resource to the wrong reel.
 
 Successfully attaching flips the entry `⏳ Awaiting DM → 📥 Inbox` and records the DM'd
 link on the Notion page's **Gate resource** field.

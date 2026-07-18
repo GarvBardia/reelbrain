@@ -1,3 +1,5 @@
+import json
+
 from fastapi.testclient import TestClient
 
 from app import main, notion_writer, store
@@ -52,19 +54,41 @@ def test_attach_by_explicit_shortcode(monkeypatch):
     assert update_call["properties"]["Gate resource"]["url"] == RESOURCE_URL
 
 
-def test_attach_falls_back_to_most_recent_awaiting_dm(monkeypatch):
+def test_attach_omitted_shortcode_auto_picks_when_exactly_one_pending(monkeypatch):
+    """Safe to auto-pick ONLY when there's no ambiguity to begin with."""
     client, fake = _client(monkeypatch)
-    _seed_awaiting_dm("OLD001")
-    _seed_awaiting_dm("NEW001")  # inserted later -> more recently updated
+    _seed_awaiting_dm("SOLE001")
 
     resp = client.post(
         "/attach",
         json={"shortcode_or_note": None, "resource_url": RESOURCE_URL, "secret": "test-secret"},
     )
     assert resp.status_code == 200
-    assert resp.json()["shortcode"] == "NEW001"
-    assert store.get_by_shortcode("NEW001")["status"] == "done"
-    assert store.get_by_shortcode("OLD001")["status"] == "awaiting_dm"  # untouched
+    assert resp.json()["shortcode"] == "SOLE001"
+    assert store.get_by_shortcode("SOLE001")["status"] == "done"
+
+
+def test_attach_omitted_shortcode_with_multiple_pending_refuses_to_guess(monkeypatch):
+    """The safety fix itself: with 2+ rows Awaiting DM and no shortcode given,
+    refuse to guess — 409 listing every candidate, never a silent pick.
+    (Requirement #3's 3-row case is covered directly against store.find_pending_gate
+    in tests/test_notion_fallback.py; this is the same guarantee through the
+    actual HTTP endpoint.)
+    """
+    client, fake = _client(monkeypatch)
+    _seed_awaiting_dm("OLD001")
+    _seed_awaiting_dm("NEW001")  # inserted later -> more recently updated, but that no longer matters
+
+    resp = client.post(
+        "/attach",
+        json={"shortcode_or_note": None, "resource_url": RESOURCE_URL, "secret": "test-secret"},
+    )
+    assert resp.status_code == 409
+    body = resp.json()["detail"]
+    assert set(body["candidates"]) == {"OLD001", "NEW001"}
+    # neither row was touched — a 409 must never have a side effect
+    assert store.get_by_shortcode("OLD001")["status"] == "awaiting_dm"
+    assert store.get_by_shortcode("NEW001")["status"] == "awaiting_dm"
 
 
 def test_attach_matches_by_note_substring(monkeypatch):
@@ -77,6 +101,45 @@ def test_attach_matches_by_note_substring(monkeypatch):
     )
     assert resp.status_code == 200
     assert resp.json()["shortcode"] == "NOTE001"
+
+
+def test_attach_ambiguous_note_substring_refuses_to_guess(monkeypatch):
+    """The exact reported bug: two rows both containing the same word in their
+    note — must 409 with both listed, not silently attach to whichever matched
+    first."""
+    client, fake = _client(monkeypatch)
+    _seed_awaiting_dm("DUPNOTE1", note="check out this ai workflow doc from Jane")
+    _seed_awaiting_dm("DUPNOTE2", note="another ai workflow tip from Bob")
+
+    resp = client.post(
+        "/attach",
+        json={"shortcode_or_note": "ai workflow", "resource_url": RESOURCE_URL, "secret": "test-secret"},
+    )
+    assert resp.status_code == 409
+    body = resp.json()["detail"]
+    assert set(body["candidates"]) == {"DUPNOTE1", "DUPNOTE2"}
+    assert "message" in body
+    assert store.get_by_shortcode("DUPNOTE1")["status"] == "awaiting_dm"
+    assert store.get_by_shortcode("DUPNOTE2")["status"] == "awaiting_dm"
+
+
+def test_attach_ambiguous_title_substring_refuses_to_guess(monkeypatch):
+    """Same as the note case, but the shared word is in the (locally-derived)
+    title — extraction_json's main_point — rather than the note."""
+    client, fake = _client(monkeypatch)
+    for shortcode in ("DUPTITLE1", "DUPTITLE2"):
+        _seed_awaiting_dm(shortcode)
+        store.update_save(
+            shortcode,
+            extraction_json=json.dumps({"main_point": f"Growth hacking secret #{shortcode[-1]}"}),
+        )
+
+    resp = client.post(
+        "/attach",
+        json={"shortcode_or_note": "growth hacking", "resource_url": RESOURCE_URL, "secret": "test-secret"},
+    )
+    assert resp.status_code == 409
+    assert set(resp.json()["detail"]["candidates"]) == {"DUPTITLE1", "DUPTITLE2"}
 
 
 def test_attach_404_when_nothing_pending(monkeypatch):
