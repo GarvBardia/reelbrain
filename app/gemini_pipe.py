@@ -158,3 +158,18 @@ def _merge_comment_gate(extraction: Extraction, caption: Optional[str]) -> None:
         extraction.comment_gate.keyword = extraction.comment_gate.keyword or regex_keyword
     elif regex_keyword and not extraction.comment_gate.keyword:
         extraction.comment_gate.keyword = regex_keyword
+
+    # INVARIANT (BUG 2 incident: DajFASZODlj had gate_keyword="International"
+    # but comment_gate=False; DaQIJHnP6zn had gate_keyword="CODING" with the
+    # same mismatch). Both fields describe the same fact and must never
+    # disagree. The mismatch wasn't introduced by the merge logic above — it's
+    # Gemini's own structured output occasionally setting a keyword while
+    # leaving detected=False, and when the regex ALSO finds nothing (a gate
+    # phrasing our patterns don't cover), nothing here used to correct it. A
+    # keyword is a stronger signal than the model's own boolean, so force
+    # agreement here, at the single point both fields are finalized.
+    if extraction.comment_gate.keyword and not extraction.comment_gate.detected:
+        extraction.comment_gate.detected = True
+    assert extraction.comment_gate.detected or not extraction.comment_gate.keyword, (
+        "comment_gate invariant violated: keyword set without detected=True"
+    )

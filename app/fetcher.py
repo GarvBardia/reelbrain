@@ -48,6 +48,26 @@ COMMENT_GATE_RE = re.compile(
     r"|([A-Z]{2,12})\b)"
 )
 
+# Third gate style: an EMOJI drop instead of a text keyword — "Drop your 🔥
+# emoji to grab all in ur dms" — never contains the literal word "comment", so
+# COMMENT_GATE_RE can't catch it (see Dap3IoNo4Kt, missed on the success path).
+#
+# Deliberately narrow: requires ALL of "drop" + an actual non-alphanumeric
+# (emoji-shaped) token + the literal word "emoji" + "dm"/"dms" within the same
+# ~40-char clause. Ordinary reaction-bait captions like "Drop a 🔥 if you agree"
+# are common and unrelated to a DM gate — they're excluded by requiring the
+# word "emoji" to immediately follow the token. "Drop your comment below,
+# I'll dm you" is excluded by requiring the token itself to be non-alphanumeric
+# (a plain word can't match). Scoped this tight on purpose per BUG 2's
+# instruction to weigh false-positive risk — broaden only if real missed
+# examples show this is too narrow.
+EMOJI_DM_GATE_RE = re.compile(
+    r"(?i:drop)\s+(?:your|a|the)?\s*"
+    r"([^\sA-Za-z0-9\"'“”‘’]{1,4})"
+    r"\s*(?i:emoji)\b"
+    r"(?=[^.!?\n]{0,40}(?i:\bdms?\b))"
+)
+
 # Errors that mean "Instagram is stonewalling this request" and are worth a
 # cookie-backed retry, as opposed to a genuine hard error (bad URL, deleted post).
 # The bottom four are how a datacenter-IP soft-block actually presents in the wild:
@@ -161,13 +181,18 @@ def normalize_url(url: str) -> str:
 
 
 def detect_comment_gate(caption: Optional[str]) -> Optional[str]:
-    """Returns the gate keyword if the caption regex-matches a comment-gate pattern."""
+    """Returns the gate keyword if the caption regex-matches a comment-gate
+    pattern — either a text keyword (COMMENT_GATE_RE) or an emoji-drop-for-DM
+    style (EMOJI_DM_GATE_RE)."""
     if not caption:
         return None
     match = COMMENT_GATE_RE.search(caption)
-    if not match:
-        return None
-    return match.group(1) or match.group(2)
+    if match:
+        return match.group(1) or match.group(2)
+    emoji_match = EMOJI_DM_GATE_RE.search(caption)
+    if emoji_match:
+        return emoji_match.group(1)
+    return None
 
 
 def _check_burner_guard() -> None:

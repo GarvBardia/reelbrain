@@ -95,3 +95,34 @@ def test_merge_comment_gate_noop_when_neither_detects():
     _merge_comment_gate(extraction, "just a normal caption")
     assert extraction.comment_gate.detected is False
     assert extraction.comment_gate.keyword is None
+
+
+# --- BUG 2 regression: detected/keyword must never disagree -------------------
+#
+# Real incident: DajFASZODlj had gate_keyword="International" with
+# comment_gate=False in Notion; DaQIJHnP6zn had gate_keyword="CODING" with the
+# same mismatch. Root cause: Gemini's own structured output can set a keyword
+# while independently leaving detected=False, and when the caption's gate
+# phrasing also doesn't match our regex, nothing corrected it.
+
+def test_merge_comment_gate_forces_detected_true_when_model_sets_keyword_without_detected():
+    extraction = Extraction(
+        main_point="x", comment_gate=CommentGate(detected=False, keyword="International")
+    )
+    _merge_comment_gate(extraction, "just a normal caption with no gate phrasing our regex covers")
+    assert extraction.comment_gate.detected is True
+    assert extraction.comment_gate.keyword == "International"
+
+
+def test_merge_comment_gate_invariant_holds_across_all_input_combinations():
+    """Exhaustive: whatever detected/keyword the model hands in, and whatever
+    the regex does or doesn't find, the merged result must never end up with a
+    keyword set and detected False."""
+    for detected in (True, False):
+        for keyword in (None, "SOMEWORD"):
+            for caption in (None, "no gate phrasing here", "comment 'SEND' for the guide"):
+                extraction = Extraction(
+                    main_point="x", comment_gate=CommentGate(detected=detected, keyword=keyword)
+                )
+                _merge_comment_gate(extraction, caption)
+                assert extraction.comment_gate.detected or not extraction.comment_gate.keyword
