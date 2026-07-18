@@ -208,6 +208,35 @@ def test_photo_carousel_post_still_captured_not_dropped(monkeypatch, tutorial_re
     assert row["permalink"] == tutorial_reel.permalink
 
 
+def test_bug1_reported_shortcode_danilwobzdja_never_vanishes(monkeypatch):
+    """BUG 1 verification: confirms the fix from test_photo_carousel_post_still_
+    captured_not_dropped against the literal shortcode reported as vanishing
+    (DaNiWoBzdja, 'No video formats found') rather than a generic fixture, tied
+    to a fresh /capture-style insert with no pre-existing note."""
+    fake = _install_fake_notion(monkeypatch)
+    monkeypatch.setattr(fetcher, "resolve_cookies_file", lambda: "cookies.txt")
+    monkeypatch.setattr(fetcher, "BACKOFF_SECONDS", [0, 0, 0])
+    monkeypatch.setattr(fetcher, "fetch_og_metadata", lambda p: None)  # login-walled
+
+    def _no_video(url, cookiefile):
+        raise RuntimeError("ERROR: [Instagram] DaNiWoBzdja: No video formats found!")
+
+    monkeypatch.setattr(fetcher, "_run_ytdlp", _no_video)
+
+    shortcode = "DaNiWoBzdja"
+    permalink = f"https://www.instagram.com/reel/{shortcode}/"
+    store.insert_processing(shortcode, permalink)
+    run_pipeline(shortcode, permalink, note=None)
+
+    save_calls = save_page_calls(fake)
+    assert len(save_calls) == 1  # never silently dropped
+    assert _props_of(save_calls[0])["Status"]["select"]["name"] == "📷 Photo — manual"
+
+    row = store.get_by_shortcode(shortcode)
+    assert row["status"] == "photo_manual"
+    assert row["notion_page_id"]
+
+
 def test_failed_row_writes_reason_into_my_note(monkeypatch, tutorial_reel):
     """A Failed row should say WHY on the Notion page — no log access needed."""
     from app.fetcher import FetchDegraded
