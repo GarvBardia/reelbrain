@@ -39,6 +39,24 @@ def _never_construct_real_genai_client(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _never_construct_real_notion_client(monkeypatch):
+    """Defense-in-depth: block real Notion client construction in every test.
+    store.py's ephemeral-disk-recovery fallbacks (and, since the BUG 3 fix,
+    find_pending_gate's exact-shortcode check whenever nothing matches locally)
+    reach notion_writer._client() on their own -- a test that forgets to
+    monkeypatch notion_writer._client would otherwise construct a live,
+    authenticated notion_client.Client and could hit the real workspace.
+    Tests wanting a Notion double patch notion_writer._client explicitly."""
+    import notion_client
+
+    class _BlockedNotionClient:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("live Notion client construction blocked in tests")
+
+    monkeypatch.setattr(notion_client, "Client", _BlockedNotionClient)
+
+
+@pytest.fixture(autouse=True)
 def _never_make_real_http_requests(monkeypatch):
     """Defense-in-depth: block real outbound HTTP in every test. The OG-tag
     fallback (fetcher.fetch_og_metadata) calls httpx.get, so a test that reaches

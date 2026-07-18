@@ -2,7 +2,18 @@ import json
 
 import pytest
 
-from app import store
+from app import notion_writer, store
+from tests.test_pipeline import FakeClient
+
+
+@pytest.fixture(autouse=True)
+def _empty_notion_by_default(monkeypatch):
+    """find_pending_gate's exact-shortcode check (the BUG 3 fix, see
+    store._resolve_exact_shortcode) now always tries Notion directly whenever
+    a shortcode_or_note doesn't match anything locally. This file is about the
+    LOCAL substring/ambiguity logic, so give it an empty Notion by default —
+    the Notion-fallback behavior itself is covered in test_notion_fallback.py."""
+    monkeypatch.setattr(notion_writer, "_client", lambda: FakeClient())
 
 
 def test_insert_and_get_by_shortcode():
@@ -146,3 +157,61 @@ def test_omitted_shortcode_with_single_row_still_auto_picks():
     _seed_gate("SOLE1")
     row = store.find_pending_gate(None)
     assert row["shortcode"] == "SOLE1"
+
+
+# --- find_pending_gate: exact shortcode NEVER resolves to a different row -----
+#
+# CRITICAL incident (BUG 3): /attach with an explicit shortcode_or_note=
+# "DZSFkNppVW_" landed the resource on a completely unrelated row
+# (Dap3IoNo4Kt) instead. Root cause: the exact-shortcode check was scoped to
+# only rows already in `awaiting_dm` status. If the requested row wasn't in
+# that set for any reason, the exact-match search silently found nothing and
+# execution fell through to the "single remaining awaiting_dm row" auto-pick
+# meant only for an OMITTED shortcode_or_note. These tests reproduce that
+# exact shape locally and assert the fixed, non-negotiable safety property:
+# an explicit exact shortcode resolves to THAT row, or to nothing — never a
+# substitute.
+
+def test_exact_shortcode_not_awaiting_dm_never_substitutes_a_different_row():
+    """The precise incident shape: the requested shortcode's row EXISTS locally
+    but isn't awaiting_dm (e.g. already attached, or never gated), while a
+    totally unrelated OTHER row is the sole awaiting_dm entry. Must return
+    None (404) — never silently attach to the unrelated row."""
+    store.insert_processing("TARGET1", "https://www.instagram.com/reel/TARGET1/")
+    store.update_save("TARGET1", status="done")  # not awaiting_dm
+    _seed_gate("UNRELATED1")  # the only awaiting_dm row
+
+    row = store.find_pending_gate("TARGET1")
+    assert row is None
+
+
+def test_exact_shortcode_not_awaiting_dm_never_substitutes_among_many_others():
+    """Same as above, but with several OTHER awaiting_dm rows (the ambiguous-
+    fallback path) to prove the explicit shortcode still refuses to guess even
+    when the fallback-if-omitted logic would otherwise raise/pick among them."""
+    store.insert_processing("TARGET2", "https://www.instagram.com/reel/TARGET2/")
+    store.update_save("TARGET2", status="failed")
+    _seed_gate("UNRELATED2")
+    _seed_gate("UNRELATED3")
+
+    row = store.find_pending_gate("TARGET2")
+    assert row is None
+
+
+def test_exact_shortcode_awaiting_dm_wins_even_with_other_rows_present():
+    """Sanity companion: when the requested shortcode genuinely IS awaiting_dm,
+    it must still resolve correctly regardless of other awaiting_dm rows."""
+    _seed_gate("REALTARGET")
+    _seed_gate("OTHERROW")
+
+    row = store.find_pending_gate("REALTARGET")
+    assert row["shortcode"] == "REALTARGET"
+
+
+def test_shortcode_missing_everywhere_falls_through_to_substring_as_before():
+    """A value that isn't a real shortcode anywhere (local or Notion) must still
+    work as a plain note/title search fragment — the fix must not break the
+    ordinary substring-match use case."""
+    _seed_gate("SUBROW1", note="the ai workflow doc one")
+    row = store.find_pending_gate("ai workflow")
+    assert row["shortcode"] == "SUBROW1"

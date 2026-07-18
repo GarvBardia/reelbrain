@@ -37,6 +37,28 @@ class _RaisingDataSources:
         raise AssertionError(f"Notion should not have been queried: {kwargs}")
 
 
+class _FilteringDataSources:
+    """A Notion data-source fake that actually respects the query filter, mirroring
+    real server-side filtering. find_page_by_shortcode trusts results[0] without
+    any client-side re-filtering (unlike the old local Python fallback logic it's
+    now used from — see store._resolve_exact_shortcode), so a fake that just
+    returns a fixed page list regardless of filter would silently "match" on
+    values that aren't the requested shortcode at all."""
+
+    def __init__(self, pages):
+        self.pages = pages
+
+    def query(self, **kwargs):
+        filt = kwargs.get("filter", {})
+        if filt.get("property") == "Shortcode":
+            wanted = filt["rich_text"]["equals"]
+            return {"results": [
+                p for p in self.pages
+                if notion_writer.extract_saves_fields(p)["shortcode"] == wanted
+            ]}
+        return {"results": self.pages}
+
+
 # =================================================================================
 # notion_writer.py: the read-back helpers
 # =================================================================================
@@ -207,28 +229,55 @@ def test_find_pending_gate_local_hit_never_touches_notion(monkeypatch):
 
 
 def test_find_pending_gate_falls_back_by_exact_shortcode(monkeypatch):
-    class _DS:
-        def query(self, **kwargs):
-            return {"results": [_saves_page("REMOTEGATE1"), _saves_page("REMOTEGATE2")]}
-
     client = FakeClient()
-    client.data_sources = _DS()
+    client.data_sources = _FilteringDataSources(
+        [_saves_page("REMOTEGATE1"), _saves_page("REMOTEGATE2")]
+    )
     monkeypatch.setattr(notion_writer, "_client", lambda: client)
 
     row = store.find_pending_gate("REMOTEGATE2")
     assert row["shortcode"] == "REMOTEGATE2"
 
 
-def test_find_pending_gate_falls_back_by_note_substring(monkeypatch):
-    class _DS:
-        def query(self, **kwargs):
-            return {"results": [
-                _saves_page("RG1", note="nothing relevant here"),
-                _saves_page("RG2", note="the ai workflow doc one"),
-            ]}
+def test_find_pending_gate_exact_shortcode_recovers_via_notion_not_local_row(monkeypatch):
+    """CRITICAL regression (BUG 3): the target shortcode is absent from local
+    SQLite entirely (e.g. ephemeral disk wiped) but IS Awaiting DM in Notion,
+    while a totally different row IS locally awaiting_dm. Must resolve to the
+    Notion-recovered row for the REQUESTED shortcode — never the local one."""
+    store.insert_processing("LOCALDECOY", "https://www.instagram.com/reel/LOCALDECOY/")
+    store.update_save("LOCALDECOY", status="awaiting_dm")
 
     client = FakeClient()
-    client.data_sources = _DS()
+    client.data_sources = _FilteringDataSources([_saves_page("REALTARGET", status="⏳ Awaiting DM")])
+    monkeypatch.setattr(notion_writer, "_client", lambda: client)
+
+    row = store.find_pending_gate("REALTARGET")
+    assert row["shortcode"] == "REALTARGET"
+
+
+def test_find_pending_gate_exact_shortcode_found_but_not_awaiting_never_substitutes(monkeypatch):
+    """CRITICAL regression (BUG 3): the target shortcode exists in Notion but
+    isn't Awaiting DM (already attached, or never gated), while a different row
+    IS locally awaiting_dm. Must return None — never silently attach to the
+    unrelated local row."""
+    store.insert_processing("LOCALDECOY2", "https://www.instagram.com/reel/LOCALDECOY2/")
+    store.update_save("LOCALDECOY2", status="awaiting_dm")
+
+    client = FakeClient()
+    client.data_sources = _FilteringDataSources(
+        [_saves_page("ALREADYDONE", status="📥 Inbox")]
+    )
+    monkeypatch.setattr(notion_writer, "_client", lambda: client)
+
+    assert store.find_pending_gate("ALREADYDONE") is None
+
+
+def test_find_pending_gate_falls_back_by_note_substring(monkeypatch):
+    client = FakeClient()
+    client.data_sources = _FilteringDataSources([
+        _saves_page("RG1", note="nothing relevant here"),
+        _saves_page("RG2", note="the ai workflow doc one"),
+    ])
     monkeypatch.setattr(notion_writer, "_client", lambda: client)
 
     row = store.find_pending_gate("ai workflow")
@@ -236,12 +285,10 @@ def test_find_pending_gate_falls_back_by_note_substring(monkeypatch):
 
 
 def test_find_pending_gate_falls_back_to_title_substring(monkeypatch):
-    class _DS:
-        def query(self, **kwargs):
-            return {"results": [_saves_page("RGTITLE", note=None, title="The Growth Hacking Secret")]}
-
     client = FakeClient()
-    client.data_sources = _DS()
+    client.data_sources = _FilteringDataSources(
+        [_saves_page("RGTITLE", note=None, title="The Growth Hacking Secret")]
+    )
     monkeypatch.setattr(notion_writer, "_client", lambda: client)
 
     row = store.find_pending_gate("growth hacking")
@@ -251,12 +298,10 @@ def test_find_pending_gate_falls_back_to_title_substring(monkeypatch):
 def test_find_pending_gate_via_notion_refuses_to_guess_among_multiple(monkeypatch):
     """Same safety rule applies to the Notion fallback path: 2+ candidates and
     nothing matches -> AmbiguousGateMatch, never a silent 'most recent' pick."""
-    class _DS:
-        def query(self, **kwargs):
-            return {"results": [_saves_page("MOSTRECENT"), _saves_page("OLDER")]}
-
     client = FakeClient()
-    client.data_sources = _DS()
+    client.data_sources = _FilteringDataSources(
+        [_saves_page("MOSTRECENT"), _saves_page("OLDER")]
+    )
     monkeypatch.setattr(notion_writer, "_client", lambda: client)
 
     with pytest.raises(store.AmbiguousGateMatch) as exc_info:
@@ -265,12 +310,8 @@ def test_find_pending_gate_via_notion_refuses_to_guess_among_multiple(monkeypatc
 
 
 def test_find_pending_gate_via_notion_auto_picks_when_exactly_one(monkeypatch):
-    class _DS:
-        def query(self, **kwargs):
-            return {"results": [_saves_page("ONLYONE")]}
-
     client = FakeClient()
-    client.data_sources = _DS()
+    client.data_sources = _FilteringDataSources([_saves_page("ONLYONE")])
     monkeypatch.setattr(notion_writer, "_client", lambda: client)
 
     row = store.find_pending_gate("matches nothing at all")

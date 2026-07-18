@@ -404,6 +404,14 @@ def _row_title(row: sqlite3.Row) -> str:
 
 
 def _find_pending_gate_via_notion(shortcode_or_note: Optional[str]) -> Optional[sqlite3.Row]:
+    """Notion-side substring/fallback search. By the time find_pending_gate calls
+    this, it has already exhaustively checked for an exact shortcode match (both
+    locally, across ALL statuses, and directly against Notion) and found nothing
+    anywhere — so shortcode_or_note here, if not None, is only ever a note/title
+    search fragment, never a candidate exact shortcode. No exact-match branch is
+    needed (or safe to re-add): re-scoping it to this function's own
+    find_awaiting_dm_pages() listing is exactly the bug that made BUG 3 possible
+    in the sibling local path (see find_pending_gate / _resolve_exact_shortcode)."""
     from app import notion_writer
 
     try:
@@ -417,10 +425,6 @@ def _find_pending_gate_via_notion(shortcode_or_note: Optional[str]) -> Optional[
     entries = [(page, notion_writer.extract_saves_fields(page)) for page in pages]
 
     if shortcode_or_note:
-        exact = [p for p, f in entries if f["shortcode"] == shortcode_or_note]
-        if exact:
-            return _persist_notion_page(exact[0])  # shortcode is unique -> never ambiguous
-
         needle = shortcode_or_note.lower()
         matches = [
             (p, f) for p, f in entries
@@ -436,26 +440,88 @@ def _find_pending_gate_via_notion(shortcode_or_note: Optional[str]) -> Optional[
     return _persist_notion_page(pages[0])
 
 
+def _resolve_exact_shortcode(shortcode: str) -> tuple[bool, Optional[sqlite3.Row]]:
+    """The critical safety property (post BUG-3 incident): an explicit, exact
+    shortcode must resolve to THAT row, or to nothing at all — NEVER a
+    different row.
+
+    Returns (exists, row):
+      (False, None) -> this shortcode doesn't exist anywhere (local, any
+          status, or Notion) -- the caller should fall through and treat
+          shortcode_or_note as a note/title search fragment instead.
+      (True, None)  -> a row/page for this EXACT shortcode was found, but it
+          isn't awaiting_dm right now -- the caller must return this as-is
+          (None) and must NOT fall through to guessing among other rows.
+      (True, row)   -> the exact row, and it IS awaiting_dm.
+
+    THE BUG THIS FIXES: the previous version only ever looked for an exact
+    shortcode match within the caller's already-status-filtered awaiting_dm
+    list. If the requested row wasn't in that list for any reason — most
+    plausibly, Render's ephemeral disk had wiped local SQLite and this
+    specific shortcode hadn't been re-synced from Notion yet — the exact-match
+    check silently found nothing and execution fell through to the
+    single-remaining-row auto-pick meant only for an OMITTED shortcode_or_note,
+    attaching the resource to a totally unrelated pending row. Checking the
+    full local table (any status) first, then Notion directly by shortcode
+    (also status-unscoped, via the same primitive /retry already uses) closes
+    that gap: this shortcode is now searched for everywhere BEFORE any
+    other-row fallback is even considered.
+    """
+    local_row = get_by_shortcode(shortcode)
+    if local_row is not None:
+        return True, (local_row if local_row["status"] == "awaiting_dm" else None)
+
+    from app import notion_writer
+
+    try:
+        page = notion_writer.find_page_by_shortcode(shortcode)
+    except Exception:
+        # Fail CLOSED, not open: we couldn't verify one way or the other, so the
+        # safe answer is "this shortcode is spoken for" (refuse), never silently
+        # falling through to guess among unrelated awaiting_dm rows.
+        logger.warning(
+            "Notion exact-shortcode lookup failed for %s — refusing to fall "
+            "back to guessing a different row", shortcode, exc_info=True,
+        )
+        return True, None
+    if page is None:
+        return False, None
+
+    fields = notion_writer.extract_saves_fields(page)
+    if notion_writer.status_label_from_notion(fields["status_label"]) != "awaiting_dm":
+        return True, None
+    return True, _persist_notion_page(page)
+
+
 def find_pending_gate(shortcode_or_note: Optional[str]) -> Optional[sqlite3.Row]:
     """BUILD_SPEC 2.2: match /attach's target row.
 
-    SAFETY (post-incident, see AmbiguousGateMatch): never guesses when more
+    SAFETY (post-incident #1, see AmbiguousGateMatch): never guesses when more
     than one candidate matches — raises AmbiguousGateMatch instead.
 
-    Priority, each level restricted to currently awaiting_dm rows:
-      1. Exact shortcode match — always unambiguous (shortcode is a primary key).
-      2. Substring match against note OR title. 2+ matches -> AmbiguousGateMatch.
+    SAFETY (post-incident #2, CRITICAL, see _resolve_exact_shortcode): an
+    explicit shortcode_or_note that IS a real shortcode resolves to THAT row,
+    or to nothing — NEVER a different row, regardless of what else happens to
+    be awaiting_dm at the time.
+
+    Priority:
+      1. Exact shortcode match — checked across the FULL local saves table
+         (any status), then directly against Notion if absent locally. Always
+         unambiguous (shortcode is a primary key) and never substituted.
+      2. Substring match against note OR title, restricted to awaiting_dm rows.
+         2+ matches -> AmbiguousGateMatch.
       3. If shortcode_or_note was omitted, or matched nothing above: the single
          awaiting_dm row, if there is exactly one. 2+ rows -> AmbiguousGateMatch.
          Falls back to Notion (ephemeral-disk recovery) only when local has NONE.
     """
+    if shortcode_or_note:
+        exists, row = _resolve_exact_shortcode(shortcode_or_note)
+        if exists:
+            return row  # the correct row, or None — never a substitute
+
     local_rows = _awaiting_dm_rows()
 
     if shortcode_or_note:
-        exact = [r for r in local_rows if r["shortcode"] == shortcode_or_note]
-        if exact:
-            return exact[0]  # shortcode is unique -> never ambiguous
-
         needle = shortcode_or_note.lower()
         matches = [
             r for r in local_rows
