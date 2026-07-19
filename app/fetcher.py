@@ -11,6 +11,7 @@ import html as html_lib
 import logging
 import os
 import re
+import threading
 import time
 from typing import Optional
 
@@ -31,6 +32,20 @@ REAL_ACCOUNT_GUARD = os.environ.get("REAL_ACCOUNT_GUARD", "").strip()
 RENDER_SECRETS_COOKIES_FILE = "/etc/secrets/cookies.txt"
 
 BACKOFF_SECONDS = [20, 40, 80]  # bounded — never an unbounded retry loop
+
+# Serializes the entire fetch_reel body (INCIDENT: see PROGRESS.md). FastAPI's
+# BackgroundTasks run sync functions in a threadpool, so two overlapping
+# /capture calls (or a /retry landing while a fresh capture is still running)
+# could previously call fetch_reel concurrently in different threads — nothing
+# actually enforced the ">=20s spacing" safety guarantee against a SECOND
+# fetch_reel call, only against sequential ones sharing the same thread. Two
+# concurrent yt-dlp/ffmpeg runs interleave their log lines in Render's single
+# combined log stream, which is what made an unrelated reel's ffmpeg failure
+# look like it was reading THIS reel's still-downloading file. Holding this
+# lock for the whole function (including its backoff sleeps) is intentional —
+# that's exactly the serialization CLAUDE.md's fetch-safety rule already
+# assumed was happening.
+_FETCH_LOCK = threading.Lock()
 
 SHORTCODE_RE = re.compile(r"instagram\.com/(?:reel|reels|p|tv)/([A-Za-z0-9_-]+)")
 
@@ -262,6 +277,12 @@ def cookie_health_status() -> str:
 
 
 def _run_ytdlp(url: str, cookiefile: Optional[str]) -> dict:
+    """NOTE (see PROGRESS.md's timing-bug investigation): this call is fully
+    synchronous — no progress_hooks, no threading, no postprocessors
+    configured. extract_info(download=True) blocks until the download (and
+    any yt-dlp-internal merge) is completely finished before returning; there
+    is nothing in this function that could hand control back early. Confirmed
+    by reading the code, not assumed."""
     import yt_dlp
 
     outtmpl = os.path.join("data", "videos", "%(id)s.%(ext)s")
@@ -281,6 +302,22 @@ def _run_ytdlp(url: str, cookiefile: Optional[str]) -> dict:
     return info
 
 
+def _expected_download_size(info: dict) -> Optional[int]:
+    """yt-dlp's own reported size (bytes) for what it just downloaded —
+    requested_downloads (the actual format used) if present, falling back to
+    the top-level info dict. None if yt-dlp never reported a size at all
+    (common for some formats) — nothing to compare a downloaded file against
+    in that case, so the defensive check in gemini_pipe.py is skipped rather
+    than false-flagging every such reel."""
+    downloads = info.get("requested_downloads") or []
+    if downloads:
+        size = downloads[0].get("filesize") or downloads[0].get("filesize_approx")
+        if size:
+            return int(size)
+    size = info.get("filesize") or info.get("filesize_approx")
+    return int(size) if size else None
+
+
 def _info_to_reel_data(shortcode: str, permalink: str, info: dict) -> ReelData:
     taken_at = None
     if info.get("timestamp"):
@@ -296,6 +333,7 @@ def _info_to_reel_data(shortcode: str, permalink: str, info: dict) -> ReelData:
         creator_fullname=info.get("uploader"),
         taken_at=taken_at,
         like_count=info.get("like_count"),
+        expected_video_size=_expected_download_size(info),
     )
 
 
@@ -444,41 +482,45 @@ def fetch_reel(shortcode: str, permalink: str) -> ReelData:
             partial=ReelData(shortcode=shortcode, permalink=permalink),
         )
 
-    _enforce_rate_discipline(shortcode, permalink)
+    # Serialized end to end (see _FETCH_LOCK) — this is what actually enforces
+    # ">=20s spacing" against a SECOND concurrent capture, not just sequential
+    # ones on the same thread.
+    with _FETCH_LOCK:
+        _enforce_rate_discipline(shortcode, permalink)
 
-    try:
-        store.record_fetch()
-        info = _run_ytdlp(permalink, cookiefile=None)
-        return _info_to_reel_data(shortcode, permalink, info)
-    except Exception as first_exc:  # noqa: BLE001 - yt-dlp raises assorted errors
-        if not _looks_like_challenge(first_exc):
-            return _og_fallback_or_degrade(
-                shortcode, permalink, f"fetch failed: {first_exc}", first_exc
-            )
-
-    last_exc: Optional[Exception] = None
-    for delay in BACKOFF_SECONDS:
-        time.sleep(delay)
         try:
             store.record_fetch()
-            info = _run_ytdlp(permalink, cookiefile=cookies_file)
-            record_cookie_auth_success()
+            info = _run_ytdlp(permalink, cookiefile=None)
             return _info_to_reel_data(shortcode, permalink, info)
-        except Exception as exc:  # noqa: BLE001
-            last_exc = exc
-            if _is_cookie_auth_failure(exc):
-                record_cookie_auth_failure()
-            if not _looks_like_challenge(exc):
-                return _og_fallback_or_degrade(shortcode, permalink, f"fetch failed: {exc}", exc)
+        except Exception as first_exc:  # noqa: BLE001 - yt-dlp raises assorted errors
+            if not _looks_like_challenge(first_exc):
+                return _og_fallback_or_degrade(
+                    shortcode, permalink, f"fetch failed: {first_exc}", first_exc
+                )
 
-    # Include last_exc's own text, not just the generic framing: a photo/carousel
-    # post keeps reporting "no video formats found" on every retry regardless of
-    # cookies (retrying can't turn a photo into a video), and that signature has
-    # to survive into the reason string for _is_photo_or_carousel to catch it —
-    # otherwise every such post would get misclassified as a genuine soft-block.
-    return _og_fallback_or_degrade(
-        shortcode,
-        permalink,
-        f"repeated challenges from Instagram — refresh burner cookies (last error: {last_exc})",
-        last_exc,
-    )
+        last_exc: Optional[Exception] = None
+        for delay in BACKOFF_SECONDS:
+            time.sleep(delay)
+            try:
+                store.record_fetch()
+                info = _run_ytdlp(permalink, cookiefile=cookies_file)
+                record_cookie_auth_success()
+                return _info_to_reel_data(shortcode, permalink, info)
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                if _is_cookie_auth_failure(exc):
+                    record_cookie_auth_failure()
+                if not _looks_like_challenge(exc):
+                    return _og_fallback_or_degrade(shortcode, permalink, f"fetch failed: {exc}", exc)
+
+        # Include last_exc's own text, not just the generic framing: a photo/carousel
+        # post keeps reporting "no video formats found" on every retry regardless of
+        # cookies (retrying can't turn a photo into a video), and that signature has
+        # to survive into the reason string for _is_photo_or_carousel to catch it —
+        # otherwise every such post would get misclassified as a genuine soft-block.
+        return _og_fallback_or_degrade(
+            shortcode,
+            permalink,
+            f"repeated challenges from Instagram — refresh burner cookies (last error: {last_exc})",
+            last_exc,
+        )

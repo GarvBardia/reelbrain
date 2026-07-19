@@ -1,5 +1,58 @@
 # PROGRESS.md — hardening/deployment session log
 
+## Timing bug: ffmpeg reading a truncated file — real mechanism found and fixed
+
+**The evidence:** ffmpeg's `CalledProcessError` fired at the exact Render-log moment
+a download's progress showed 63.9%, with that same download's progress continuing to
+100% afterward. This looked like ffmpeg reading a still-being-written file. Mocked
+tests only, 336 tests passing.
+
+**What I checked first, and ruled out:** `app/fetcher.py`'s `_run_ytdlp` — read the
+actual code, not assumed. It registers no `progress_hooks`, no `postprocessors`, spawns
+no thread, awaits nothing. `yt_dlp.YoutubeDL.extract_info(url, download=True)` is a
+synchronous, blocking call with this exact `opts` dict — there is no mechanism inside
+`_run_ytdlp` that could hand control back to the caller before the file is completely
+written. (A structural test now asserts this directly — `test_run_ytdlp_registers_
+no_hooks_or_threading` in `tests/test_fetch_hardening.py` — not just a comment claim.)
+
+**The real mechanism:** `fetch_reel` had **no lock**. FastAPI's `BackgroundTasks` runs
+sync functions (like `run_pipeline`) in a threadpool, so two overlapping `/capture`
+calls — or a `/retry` landing while a fresh capture was still processing — could run
+`fetch_reel` **concurrently in two different threads**. Nothing enforced the intended
+"≥20s spacing" safety rule against a second *concurrent* call, only against sequential
+ones sharing a single thread — `_enforce_rate_discipline`'s check-then-act on
+`get_last_fetch_at()` has a real TOCTOU gap with no lock guarding it.
+
+Two concurrent yt-dlp/ffmpeg runs write their log lines into Render's **single combined
+log stream**, interleaved. That's what made it look like ffmpeg was reading THIS reel's
+still-downloading file: the "63.9%... ffmpeg error... 100%" sequence most likely
+belonged to **two different, unrelated reels** being processed at the same time, not
+one reel's download racing its own audio extraction. `_extract_audio` is only ever
+called from `gemini_pipe.run_extraction`, which only runs *after* `fetch_reel` has
+already returned within the *same* thread — there's no path for one reel's own
+ffmpeg call to run before its own download finished. The confusion was across reels,
+not within one.
+
+**Fixed:** `_FETCH_LOCK` (a `threading.Lock`) now wraps the entire `fetch_reel` body
+(rate-discipline check through the final fallback, including its backoff sleeps) —
+this is a deliberate, full serialization: at <25 fetches/day this costs nothing, and
+it's exactly the guarantee the burner-account safety rule already assumed existed.
+`test_fetch_reel_serializes_concurrent_calls` proves three concurrent calls' internal
+intervals never overlap.
+
+**Defensive check added regardless (per instruction — never rely on the workaround
+alone):** `fetcher._expected_download_size()` reads yt-dlp's own reported file size
+(`requested_downloads[0].filesize`/`filesize_approx`, falling back to the top-level
+info dict) and threads it through a new `ReelData.expected_video_size` field.
+`gemini_pipe._check_video_file_size()` compares the actual file on disk against it
+**before** `_extract_audio` is ever called — a truncated/missing file now degrades
+with an explicit, actionable log line (`"...looks truncated: N bytes on disk vs M
+expected..."`) instead of surfacing as an opaque `CalledProcessError`. This is a
+safety net for ANY future truncation cause (disk issues, a container restart
+mid-download), not a substitute for the lock fix above.
+
+---
+
 ## All four scheduled jobs now genuinely wired (supersedes the "not automatic yet" note below)
 
 The entry directly below this one ("Daily reflection digest added") said the daily

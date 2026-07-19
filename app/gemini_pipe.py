@@ -168,6 +168,29 @@ def _degraded(caption: Optional[str]) -> Extraction:
     return extraction
 
 
+def _check_video_file_size(video_path: str, expected_size: Optional[int]) -> Optional[str]:
+    """Defensive check (see PROGRESS.md's timing-bug investigation): confirms
+    the file on disk actually matches the size yt-dlp itself reported as
+    expected, BEFORE ffmpeg ever touches it. Returns an explanatory message if
+    it looks truncated/missing, or None if it's fine (or there's nothing to
+    compare against — not every format gets a reported size from yt-dlp).
+    Converts a silently-truncated file into an explicit, actionable log line
+    instead of an opaque ffmpeg CalledProcessError downstream."""
+    if not expected_size:
+        return None
+    try:
+        actual_size = os.path.getsize(video_path)
+    except OSError as exc:
+        return f"video file {video_path} is missing or unreadable ({exc})"
+    if actual_size < expected_size:
+        pct = actual_size / expected_size * 100
+        return (
+            f"video file {video_path} looks truncated: {actual_size} bytes on disk vs "
+            f"{expected_size} expected ({pct:.1f}%) — likely still being written"
+        )
+    return None
+
+
 def run_extraction(
     reel: ReelData, note: Optional[str], taxonomy: list[str]
 ) -> Extraction:
@@ -185,6 +208,14 @@ def run_extraction(
             "(expected for an OG-tag-recovered reel; a problem if this reel "
             "should have had a real video download)",
             reel.shortcode,
+        )
+        return _degraded(reel.caption)
+
+    size_issue = _check_video_file_size(reel.video_path, reel.expected_video_size)
+    if size_issue:
+        logger.warning(
+            "run_extraction: %s for %s — degrading to caption-only without "
+            "calling ffmpeg", size_issue, reel.shortcode,
         )
         return _degraded(reel.caption)
 

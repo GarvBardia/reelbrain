@@ -341,3 +341,99 @@ def test_cookie_retry_uses_resolved_path(monkeypatch, tmp_path):
         fetcher.fetch_reel("OGTEST01", PERMALINK)
 
     assert seen == [None, str(cookies)]  # anonymous first, then the RESOLVED path
+
+
+# --- timing-bug investigation: expected download size + concurrent-fetch lock ----
+#
+# Real incident: ffmpeg's CalledProcessError fired at the exact Render-log moment
+# a download showed 63.9% progress, with that download's progress continuing to
+# 100% afterward. Confirmed by reading _run_ytdlp: it's fully synchronous, no
+# progress_hooks, no threading -- extract_info(download=True) cannot return before
+# the file is completely written. The real bug: fetch_reel had no lock, so two
+# background-task threads (FastAPI's BackgroundTasks run sync functions in a
+# threadpool) could run yt-dlp/ffmpeg concurrently, interleaving their Render log
+# lines -- making an unrelated reel's ffmpeg failure look like it belonged to
+# THIS reel's still-downloading file. See PROGRESS.md for the full writeup.
+
+def test_expected_download_size_from_requested_downloads():
+    info = {"requested_downloads": [{"filesize": 5_000_000}], "filesize": 999}
+    assert fetcher._expected_download_size(info) == 5_000_000
+
+
+def test_expected_download_size_falls_back_to_filesize_approx():
+    info = {"requested_downloads": [{"filesize_approx": 4_200_000}]}
+    assert fetcher._expected_download_size(info) == 4_200_000
+
+
+def test_expected_download_size_falls_back_to_top_level_info():
+    info = {"requested_downloads": [], "filesize": 3_100_000}
+    assert fetcher._expected_download_size(info) == 3_100_000
+
+
+def test_expected_download_size_none_when_nothing_reported():
+    assert fetcher._expected_download_size({}) is None
+    assert fetcher._expected_download_size({"requested_downloads": [{}]}) is None
+
+
+def test_info_to_reel_data_carries_expected_video_size():
+    info = {
+        "_video_path": "/tmp/SIZE01.mp4",
+        "requested_downloads": [{"filesize": 12_345}],
+    }
+    reel = fetcher._info_to_reel_data("SIZE01", PERMALINK, info)
+    assert reel.expected_video_size == 12_345
+
+
+def test_fetch_reel_serializes_concurrent_calls(monkeypatch, tmp_path):
+    """The actual fix: two fetch_reel calls from different threads must never
+    run their yt-dlp bodies concurrently -- proving the lock genuinely
+    serializes, not just that it exists."""
+    import threading
+    import time as time_module
+
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# netscape cookie file")
+    monkeypatch.setattr(fetcher, "BURNER_COOKIES_FILE", str(cookies))
+    monkeypatch.setattr(fetcher, "_enforce_rate_discipline", lambda s, p: None)
+
+    intervals: list[tuple[float, float]] = []
+    lock_for_list = threading.Lock()
+
+    def _slow_ytdlp(url, cookiefile):
+        start = time_module.monotonic()
+        time_module.sleep(0.05)
+        end = time_module.monotonic()
+        with lock_for_list:
+            intervals.append((start, end))
+        return {"_video_path": "/tmp/x.mp4"}
+
+    monkeypatch.setattr(fetcher, "_run_ytdlp", _slow_ytdlp)
+
+    threads = [
+        threading.Thread(target=fetcher.fetch_reel, args=(f"CONC{i}", PERMALINK))
+        for i in range(3)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(intervals) == 3
+    intervals.sort()
+    for (_s1, e1), (s2, _e2) in zip(intervals, intervals[1:]):
+        assert e1 <= s2  # each interval fully finishes before the next starts
+
+
+def test_run_ytdlp_registers_no_hooks_or_threading():
+    """Structural confirmation (not just a claim in a comment): _run_ytdlp's
+    opts dict registers no progress_hooks/postprocessors keys, and the
+    function body itself spawns no threads and awaits nothing -- nothing that
+    could hand control back before the file is fully written. Checks the
+    function body only (not the docstring, which discusses these terms)."""
+    import inspect
+
+    source = inspect.getsource(fetcher._run_ytdlp)
+    body = source.split('"""', 2)[-1]  # strip the docstring, keep only the code
+    assert '"progress_hooks"' not in body
+    assert '"postprocessors"' not in body
+    assert "Thread" not in body and "await " not in body and "async " not in body

@@ -63,6 +63,11 @@ class ReelData(BaseModel):
     # success/failure (see main.py's _note_with_failure_reason). No emoji prefix
     # here — that's added uniformly by the note-building helper.
     fetch_note: Optional[str] = None
+    # yt-dlp's own reported size (bytes) for the file it just downloaded, if it
+    # reported one (see fetcher._expected_download_size). gemini_pipe.py checks
+    # the actual file on disk against this before invoking ffmpeg — a defensive
+    # check against a truncated/still-being-written file (see PROGRESS.md).
+    expected_video_size: Optional[int] = None
 
 
 class ResourceMentioned(BaseModel):

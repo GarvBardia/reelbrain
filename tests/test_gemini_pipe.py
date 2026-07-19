@@ -423,3 +423,91 @@ def test_caption_only_gemini_failure_also_logs(monkeypatch, caplog):
 
     assert result.content_type == "unknown"
     assert "gemini 500" in caplog.text
+
+
+# --- timing-bug fix: truncated/still-being-written file caught before ffmpeg ----
+#
+# Real incident: ffmpeg's CalledProcessError fired while a download's progress
+# was still at 63.9% in the Render log, continuing to 100% afterward. Root
+# cause turned out to be a missing lock letting two fetch_reel calls run
+# concurrently (fixed in app/fetcher.py) rather than _run_ytdlp itself
+# returning early -- but this defensive check stays regardless, so ANY future
+# truncated-file cause (disk issues, a container restart mid-download, etc.)
+# is caught explicitly instead of surfacing as an opaque ffmpeg error.
+
+def test_check_video_file_size_flags_a_truncated_file(tmp_path):
+    video = tmp_path / "truncated.mp4"
+    video.write_bytes(b"x" * 1000)  # far smaller than "expected"
+
+    issue = gemini_pipe._check_video_file_size(str(video), expected_size=5_000_000)
+
+    assert issue is not None
+    assert "truncated" in issue
+    assert "1000" in issue and "5000000" in issue
+
+
+def test_check_video_file_size_passes_when_size_matches(tmp_path):
+    video = tmp_path / "complete.mp4"
+    video.write_bytes(b"x" * 5000)
+
+    assert gemini_pipe._check_video_file_size(str(video), expected_size=5000) is None
+    assert gemini_pipe._check_video_file_size(str(video), expected_size=4000) is None  # bigger than expected is fine
+
+
+def test_check_video_file_size_skipped_without_an_expected_size(tmp_path):
+    video = tmp_path / "unknown_size.mp4"
+    video.write_bytes(b"x" * 10)
+    assert gemini_pipe._check_video_file_size(str(video), expected_size=None) is None
+    assert gemini_pipe._check_video_file_size(str(video), expected_size=0) is None
+
+
+def test_check_video_file_size_flags_a_missing_file():
+    issue = gemini_pipe._check_video_file_size("/tmp/does-not-exist-at-all.mp4", expected_size=1000)
+    assert issue is not None
+    assert "missing or unreadable" in issue
+
+
+def test_run_extraction_catches_truncated_file_before_calling_ffmpeg(monkeypatch, tmp_path, caplog):
+    """The exact requirement: a video file that exists but is smaller than
+    yt-dlp reported must be caught explicitly -- and ffmpeg must never even
+    be invoked for it."""
+    video = tmp_path / "TRUNC1.mp4"
+    video.write_bytes(b"x" * 100)  # tiny -- nowhere near expected_video_size
+
+    reel = ReelData(
+        shortcode="TRUNC1", permalink="https://www.instagram.com/reel/TRUNC1/",
+        video_path=str(video), caption="a caption", expected_video_size=10_000_000,
+    )
+
+    def _must_not_be_called(video_path):
+        raise AssertionError("ffmpeg must not be invoked on a known-truncated file")
+
+    monkeypatch.setattr(gemini_pipe, "_extract_audio", _must_not_be_called)
+
+    with caplog.at_level(logging.WARNING, logger="reelbrain.gemini"):
+        result = run_extraction(reel, note=None, taxonomy=[])
+
+    assert result.content_type == "unknown"  # degraded path
+    assert "TRUNC1" in caplog.text
+    assert "truncated" in caplog.text
+
+
+def test_run_extraction_proceeds_normally_when_file_size_matches(monkeypatch, tmp_path):
+    """Regression guard: a genuinely complete file (or one with no reported
+    expected size) must still reach ffmpeg as before -- this check must not
+    block normal, healthy extraction."""
+    video = tmp_path / "OK1.mp4"
+    video.write_bytes(b"x" * 5000)
+
+    reel = ReelData(
+        shortcode="OK1", permalink="https://www.instagram.com/reel/OK1/",
+        video_path=str(video), caption="a caption", expected_video_size=5000,
+    )
+    monkeypatch.setattr(gemini_pipe, "_extract_audio", lambda p: "/tmp/OK1.m4a")
+    monkeypatch.setattr(
+        gemini_pipe, "_call_gemini",
+        lambda a, p: Extraction(main_point="fine", value_score=4).model_dump_json(),
+    )
+
+    result = run_extraction(reel, note=None, taxonomy=[])
+    assert result.main_point == "fine"
