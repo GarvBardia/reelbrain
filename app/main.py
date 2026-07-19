@@ -398,6 +398,19 @@ def daily_digest_endpoint(req: NightlyRequest, request: Request) -> JSONResponse
     return JSONResponse(status_code=200, content=result)
 
 
+@app.post("/weekly-digest")
+def weekly_digest_endpoint(req: NightlyRequest, request: Request) -> JSONResponse:
+    """HTTP trigger for the weekly digest (see PROGRESS.md) — same mechanism
+    as /nightly and /daily-digest, on its own weekly cron schedule; see
+    SCHEDULING.md. A third, independent scheduled job — does not replace
+    /nightly or /daily-digest. Reuses NightlyRequest since the body shape
+    ({secret}) is identical."""
+    _check_rate_limit(request)
+    _check_secret(req.secret)
+    result = digest.run()
+    return JSONResponse(status_code=200, content=result)
+
+
 if __name__ == "__main__":
     import uvicorn
 

@@ -1,0 +1,17 @@
+name: daily-digest
+on:
+  schedule:
+    - cron: "0 16 * * *"   # 16:00 UTC = 21:30 IST - evening
+  workflow_dispatch: {}      # allows manual "Run workflow" for testing
+jobs:
+  daily-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger daily reflection digest
+        run: |
+          curl -sf -X POST "$RENDER_URL/daily-digest" \
+            -H "Content-Type: application/json" \
+            -d "{\"secret\": \"$CAPTURE_SECRET\"}"
+        env:
+          RENDER_URL: ${{ secrets.RENDER_URL }}
+          CAPTURE_SECRET: ${{ secrets.CAPTURE_SECRET }}

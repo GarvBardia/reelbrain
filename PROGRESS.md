@@ -1,5 +1,36 @@
 # PROGRESS.md — hardening/deployment session log
 
+## All four scheduled jobs now genuinely wired (supersedes the "not automatic yet" note below)
+
+The entry directly below this one ("Daily reflection digest added") said the daily
+digest workflow file didn't exist yet and you'd need to add it yourself. **That's no
+longer true** — all four GitHub Actions workflow files are now committed:
+`.github/workflows/{keepalive,nightly,daily-digest,weekly-digest}.yml`. Mocked tests
+only, 323 tests passing.
+
+**What changed:**
+- Added `POST /weekly-digest` (secret-protected, mirrors `/nightly` and
+  `/daily-digest` exactly) — the weekly digest's own docstring always claimed it'd be
+  "scheduled the same way as nightly," but until now that was never actually built.
+  It is now.
+- Committed all four workflow files — previously only `nightly.yml`'s and
+  `daily-digest.yml`'s YAML existed as copy-paste blocks *inside* SCHEDULING.md, never
+  as real files in `.github/workflows/`.
+- `keepalive.yml` deliberately deviates slightly from SCHEDULING.md's old
+  Option-B snippet: instead of a hardcoded placeholder URL baked into the committed
+  file, it uses the same `RENDER_URL` repo secret as the other three — one less place
+  to remember to edit, and consistent with everything else.
+- Picked **Sunday 21:00 IST (15:30 UTC)** for the new weekly-digest workflow — a
+  natural week-wrap-up slot, offset 30 minutes from the daily digest's 21:30 IST so
+  the two don't land in the same Actions-runner minute on the Sunday they both fire.
+
+**⚠️ The one remaining manual step, same as before, just smaller:** add the two
+repository secrets once — `RENDER_URL` and `CAPTURE_SECRET` — under **Settings →
+Secrets and variables → Actions**. Every workflow's `curl` step fails without them;
+nothing else needs adding. SCHEDULING.md has the full table of what fires when.
+
+---
+
 ## Daily reflection digest added — here's exactly when/where to look for it
 
 New: a daily digest alongside the existing weekly one (`app/digest.py`'s `run_daily()`),

@@ -1,0 +1,17 @@
+name: nightly-cleanup
+on:
+  schedule:
+    - cron: "30 21 * * *"   # 21:30 UTC = 03:00 IST
+  workflow_dispatch: {}      # allows manual "Run workflow" for testing
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger nightly cleanup
+        run: |
+          curl -sf -X POST "$RENDER_URL/nightly" \
+            -H "Content-Type: application/json" \
+            -d "{\"secret\": \"$CAPTURE_SECRET\"}"
+        env:
+          RENDER_URL: ${{ secrets.RENDER_URL }}
+          CAPTURE_SECRET: ${{ secrets.CAPTURE_SECRET }}

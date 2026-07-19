@@ -92,3 +92,42 @@ def test_daily_digest_empty_day_still_succeeds(monkeypatch):
     body = resp.json()
     assert body["save_count"] == 0
     assert "Nothing saved today." in body["markdown"]
+
+
+def test_weekly_digest_rejects_bad_secret(monkeypatch):
+    client = _client(monkeypatch)
+    resp = client.post("/weekly-digest", json={"secret": "wrong"})
+    assert resp.status_code == 401
+
+
+def test_weekly_digest_runs_and_reports(monkeypatch):
+    from app import digest
+    monkeypatch.setattr(digest, "NOTION_PARENT_PAGE_ID", "parent-page-id")
+    client = _client(monkeypatch)
+
+    store.insert_processing("HTTPWEEKLY1", "https://www.instagram.com/reel/HTTPWEEKLY1/")
+    store.update_save(
+        "HTTPWEEKLY1", creator="jane", status="done",
+        extraction_json='{"main_point": "a weekly point"}',
+        notion_page_url="https://notion.so/page-HTTPWEEKLY1",
+    )
+    store.set_tags("HTTPWEEKLY1", ["sleep"])
+
+    resp = client.post("/weekly-digest", json={"secret": "test-secret"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["save_count"] == 1
+    assert body["notion_page"] is not None
+    assert "a weekly point" in body["markdown"]
+
+
+def test_weekly_digest_empty_week_still_succeeds(monkeypatch):
+    from app import digest
+    monkeypatch.setattr(digest, "NOTION_PARENT_PAGE_ID", "parent-page-id")
+    client = _client(monkeypatch)
+
+    resp = client.post("/weekly-digest", json={"secret": "test-secret"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["save_count"] == 0
+    assert "No reels saved this week." in body["markdown"]

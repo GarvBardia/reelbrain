@@ -1,0 +1,21 @@
+name: weekly-digest
+on:
+  schedule:
+    # 30 15 * * 0 = 15:30 UTC every Sunday = 21:00 IST Sunday evening.
+    # Sunday evening: a natural week-wrap-up slot, and deliberately 30 minutes
+    # before the daily digest's 21:30 IST so the two never fire in the same
+    # GitHub Actions minute on the day they overlap.
+    - cron: "30 15 * * 0"
+  workflow_dispatch: {}      # allows manual "Run workflow" for testing
+jobs:
+  weekly-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger weekly digest
+        run: |
+          curl -sf -X POST "$RENDER_URL/weekly-digest" \
+            -H "Content-Type: application/json" \
+            -d "{\"secret\": \"$CAPTURE_SECRET\"}"
+        env:
+          RENDER_URL: ${{ secrets.RENDER_URL }}
+          CAPTURE_SECRET: ${{ secrets.CAPTURE_SECRET }}
