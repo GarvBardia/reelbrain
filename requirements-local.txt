@@ -1,7 +1,0 @@
-# Local-only tooling dependencies. NEVER installed on Render — render.yaml's
-# buildCommand only runs `pip install -r requirements.txt`, not this file.
-# Install with: pip install -r requirements-local.txt
-
-# scripts/refresh_cookies.py: reads Instagram session cookies directly out of
-# a local Chrome/Edge cookie store.
-browser_cookie3==0.20.1

@@ -1,46 +1,30 @@
 # PROGRESS.md — hardening/deployment session log
 
-## One-command cookie refresh tool — LOCAL ONLY, and NOT verified end-to-end
+## Cookie refresh automation removed — Chrome's App-Bound Encryption blocks it
 
-New: `scripts/refresh_cookies.py`. Reads Instagram cookies straight out of your
-local Chrome (default profile, per your confirmation) via `browser_cookie3`,
-exports Netscape format, PUTs to Render's real Secret Files API
-(`api-docs.render.com/reference/add-or-update-secret-file`), then polls
-`/health` to confirm the restart picked it up. Full steps in COOKIES.md.
-Never deployed to Render, never called by the live app.
+The `scripts/refresh_cookies.py` tool from a previous pass (reading Chrome cookies via
+`browser_cookie3` and pushing them to Render's API automatically) has been **deleted
+entirely**, along with `requirements-local.txt`, its test file, the
+`RENDER_API_KEY`/`RENDER_SERVICE_ID` entries in `.env.example`, and every mention of it
+in COOKIES.md. This isn't a bug fix or a deferred improvement — it's confirmed
+fundamentally unworkable on Windows: Chrome 127+'s **App-Bound Encryption** (mid-2024)
+deliberately ties a profile's saved cookies to the specific app that encrypted them,
+specifically to stop tools like `browser_cookie3` from reading a browser's cookie
+store from outside the browser — the same technique infostealer malware uses. No
+library workaround changes that; the realistic options are downgrading Chrome (not a
+reasonable security tradeoff) or moving the burner account to Firefox (which doesn't
+have this protection — a real option if this is ever worth revisiting, not attempted
+now). COOKIES.md documents this reasoning directly and goes back to the manual
+export → paste-into-Render-dashboard process as the only, permanent method.
 
-**Tested (mocked, 13 tests, all passing):** the Netscape export shape (a real
-file, readable back by `http.cookiejar.MozillaCookieJar`, matching what yt-dlp
-expects), the Render PUT request shape (URL/headers/body) and its
-missing-credentials / non-2xx error handling, and the `/health` polling loop
-(immediate success, eventual success, exhausting attempts, surviving a
-request exception mid-poll, skipping entirely when `REELBRAIN_URL` isn't set).
-
-**⚠️ NOT and CANNOT be tested from here — said plainly, not glossed over:**
-this script fundamentally needs your real local Chrome profile (with the
-burner account actually logged in) and real Render credentials to do anything
-useful. I have never run it against your actual browser or your actual Render
-service, and can't from this environment. The mocked tests prove the *shape*
-of each piece is right; they prove nothing about whether `browser_cookie3`
-can actually decrypt Chrome's cookie store on your machine, whether a real
-`RENDER_API_KEY` authorizes against your real service, or whether the full
-push → restart → health-check sequence actually completes in practice.
-**You'll be the first one to actually run this end-to-end — try `--dry-run`
-first** (writes `cookies.txt` locally, skips Render entirely) to isolate the
-browser-read step before trusting it with the live push.
-
-**⚠️ REQUIRED MANUAL SETUP before this can run at all:**
-1. `pip install -r requirements-local.txt` (adds `browser_cookie3` — a
-   local-only dependency, deliberately kept out of the main `requirements.txt`
-   Render installs).
-2. `RENDER_API_KEY` in `.env` — Render dashboard → Account Settings → API Keys.
-   Not committed anywhere; treat it like a password, it can modify your service.
-3. `RENDER_SERVICE_ID` in `.env` — Render dashboard → your service → Settings,
-   or the `srv-...` segment of the service's dashboard URL.
-4. Browser/profile: **confirmed with you as Chrome, default profile** — if
-   that ever changes (e.g. the burner account moves to a separate profile),
-   the script will need a `--profile` argument added; it doesn't have one yet
-   since you confirmed the default profile is correct today.
+**What actually solves the practical problem here isn't automating the refresh — it's
+already-built and still fully in place: the cookie-health alert system** (`app/fetcher.py`'s
+consecutive-auth-failure counter, `/health`'s `cookie_health` field, and `app/alerts.py`'s
+daily Notion + optional ntfy.sh push). That's what answers the real question, "when do I
+need to do this 2-minute manual step," so expiry is never discovered by noticing failed
+captures days later. The manual export itself was never the bottleneck worth automating —
+knowing *when* to do it was, and that part was solved before this cookie-refresh-tool
+detour even started.
 
 ---
 

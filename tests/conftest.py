@@ -62,9 +62,6 @@ def _never_make_real_http_requests(monkeypatch):
     fallback (fetcher.fetch_og_metadata) calls httpx.get, so a test that reaches
     the fetch-failure path would otherwise hit instagram.com for real. Tests that
     exercise the fallback patch httpx.get or fetch_og_metadata themselves.
-    scripts/refresh_cookies.py is the first thing to use httpx.put (pushing to
-    Render's API) and httpx.get (polling /health) — blocked here too, for the
-    same reason; its own tests patch both explicitly.
 
     Only the module-level convenience function is patched — FastAPI's TestClient
     drives its own httpx.Client with an in-process transport and is unaffected.
@@ -78,8 +75,6 @@ def _never_make_real_http_requests(monkeypatch):
     # scripts/bulk_import.py posts to the deployed /capture endpoint — block that
     # too. Its own tests always inject a fake submit_fn, never the real one.
     monkeypatch.setattr(httpx, "post", _blocked)
-    # scripts/refresh_cookies.py PUTs the new cookies.txt to Render's API.
-    monkeypatch.setattr(httpx, "put", _blocked)
 
 
 @pytest.fixture(autouse=True)
