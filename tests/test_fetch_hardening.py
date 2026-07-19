@@ -437,3 +437,59 @@ def test_run_ytdlp_registers_no_hooks_or_threading():
     assert '"progress_hooks"' not in body
     assert '"postprocessors"' not in body
     assert "Thread" not in body and "await " not in body and "async " not in body
+
+
+# --- format selection must guarantee an audio track (the actual root cause) ------
+#
+# Real incident: ffmpeg exit 1 on a fully-downloaded, existing file. Root cause:
+# yt-dlp's plain "best" selected a VIDEO-ONLY DASH stream for some IG posts, so
+# the file had no audio for ffmpeg -vn to extract. Fixed by preferring
+# bestvideo+bestaudio MERGED.
+
+class _FakeYoutubeDL:
+    """Captures the opts dict _run_ytdlp constructs, and returns a fake info
+    dict, without touching the network or a real yt-dlp."""
+    captured_opts: dict = {}
+
+    def __init__(self, opts):
+        type(self).captured_opts = opts
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def extract_info(self, url, download):
+        assert download is True
+        return {
+            "id": "FMT01",
+            "requested_downloads": [{"filepath": "data/videos/FMT01.mp4", "filesize": 1234}],
+        }
+
+    def prepare_filename(self, info):
+        return "data/videos/FMT01.mp4"
+
+
+def test_run_ytdlp_format_string_prefers_audio(monkeypatch):
+    import sys
+    import types
+
+    fake_module = types.ModuleType("yt_dlp")
+    fake_module.YoutubeDL = _FakeYoutubeDL
+    monkeypatch.setitem(sys.modules, "yt_dlp", fake_module)
+
+    info = fetcher._run_ytdlp("https://www.instagram.com/reel/FMT01/", cookiefile=None)
+
+    opts = _FakeYoutubeDL.captured_opts
+    # the corrected selector: best video + best audio, merged, with a combined fallback
+    assert opts["format"] == "bestvideo*+bestaudio/best"
+    assert opts["merge_output_format"] == "mp4"
+    # and the actual post-merge filepath is used, not just the derived name
+    assert info["_video_path"] == "data/videos/FMT01.mp4"
+
+
+def test_run_ytdlp_matches_module_level_format_constant():
+    """Guards against the opts format silently drifting from the documented
+    constant -- they must stay the same value."""
+    assert fetcher.YTDLP_FORMAT == "bestvideo*+bestaudio/best"

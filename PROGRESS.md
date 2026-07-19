@@ -1,5 +1,50 @@
 # PROGRESS.md — hardening/deployment session log
 
+## ffmpeg exit-1 root cause: yt-dlp was downloading video-only files (no audio)
+
+**ROOT CAUSE (of the three candidates investigated, this was the real one — #2):**
+`fetcher._run_ytdlp` used `format: "best"`. For Instagram posts that only expose DASH
+streams (no single progressive file), yt-dlp's `best` falls through to a **video-only**
+stream — so the downloaded file genuinely had no audio track, and ffmpeg's `-vn` audio
+extraction then failed with exit 1 on a file that had downloaded to 100% and opened
+fine. This was never a truncation/timing problem (that earlier lock fix was a real but
+*separate* bug); this is the download grabbing the wrong stream. Mocked tests only,
+345 tests passing.
+
+**Fix #2 (the actual fix — get audio into the download):** `fetcher.YTDLP_FORMAT` is
+now `"bestvideo*+bestaudio/best"` with `merge_output_format: "mp4"` — prefer best video
++ best audio *merged* (so the file actually contains audio), with `/best` as a
+last-resort fallback for the rare post that only has one combined format. `_video_path`
+now resolves from `requested_downloads[0].filepath` (the actual post-merge path) rather
+than a name derived from the pre-merge format, so the merged `.mp4` is found correctly.
+
+**Safety net #1 (graceful handling if audio is genuinely absent):**
+`gemini_pipe._has_audio_stream()` runs `ffprobe -select_streams a` *before* ffmpeg. If
+a video genuinely has no audio (returns `False`), `run_extraction` skips ffmpeg
+entirely and routes to `run_caption_only_extraction`, setting a distinct note on the
+reel — **"no audio track in source video — summarized from caption only, no
+transcript"** — which main.py surfaces on the Notion row. This is deliberately distinct
+from the generic degrade, and from the photo/carousel note, so a no-audio video is
+identifiable at a glance. If ffprobe itself can't run (missing/unreadable), it returns
+`None` and the code falls through to attempting ffmpeg anyway — never wrongly skipping a
+fetchable transcript just because the probe failed.
+
+**Diagnostic #3 (make any remaining failure obvious):** when ffmpeg extraction *does*
+still fail, the log line now appends `ffprobe streams: <layout>` —
+`gemini_pipe._ffprobe_streams()` lists each stream's `codec_type`/`codec_name` — so a
+future failure shows immediately whether the file has audio and in what codec, instead
+of only an opaque `CalledProcessError`.
+
+**Why #2 is the fix and #1/#3 are the net, not the other way round:** working around
+missing audio downstream alone would have masked the real problem — every affected reel
+would silently become caption-only forever, losing a transcript it *could* have had.
+Fixing the format string means those reels now download *with* audio and get a real
+transcript; #1 only ever triggers for videos that truly have no audio track at all
+(some screen-recordings, silent clips), and #3 exists so the next surprise is
+diagnosable in one log line.
+
+---
+
 ## Timing bug: ffmpeg reading a truncated file — real mechanism found and fixed
 
 **The evidence:** ffmpeg's `CalledProcessError` fired at the exact Render-log moment

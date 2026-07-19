@@ -509,5 +509,116 @@ def test_run_extraction_proceeds_normally_when_file_size_matches(monkeypatch, tm
         lambda a, p: Extraction(main_point="fine", value_score=4).model_dump_json(),
     )
 
+    monkeypatch.setattr(gemini_pipe, "_has_audio_stream", lambda p: True)
     result = run_extraction(reel, note=None, taxonomy=[])
     assert result.main_point == "fine"
+
+
+# --- no-audio-stream handling: video-only IG downloads (the actual root cause) --
+#
+# Real incident: ffmpeg exit 1 on a fully-downloaded, existing file. Root cause
+# was yt-dlp selecting a VIDEO-ONLY format for some IG posts (fixed at the
+# source in fetcher.YTDLP_FORMAT). This is the downstream safety net: even if a
+# genuinely audio-less video ever arrives, ffprobe catches it and we route to
+# caption-only with a specific note instead of crashing ffmpeg's -vn extraction.
+
+
+class _ProbeResult:
+    def __init__(self, stdout: str):
+        self.stdout = stdout
+
+
+def test_has_audio_stream_true_when_ffprobe_lists_a_stream(monkeypatch):
+    monkeypatch.setattr(
+        gemini_pipe.subprocess, "run", lambda *a, **kw: _ProbeResult("0\n")
+    )
+    assert gemini_pipe._has_audio_stream("/tmp/x.mp4") is True
+
+
+def test_has_audio_stream_false_when_ffprobe_lists_nothing(monkeypatch):
+    monkeypatch.setattr(
+        gemini_pipe.subprocess, "run", lambda *a, **kw: _ProbeResult("   \n")
+    )
+    assert gemini_pipe._has_audio_stream("/tmp/x.mp4") is False
+
+
+def test_has_audio_stream_none_when_ffprobe_cannot_run(monkeypatch):
+    def _boom(*a, **kw):
+        raise FileNotFoundError("ffprobe not installed")
+    monkeypatch.setattr(gemini_pipe.subprocess, "run", _boom)
+    assert gemini_pipe._has_audio_stream("/tmp/x.mp4") is None
+
+
+def test_has_audio_stream_none_when_ffprobe_errors_on_file(monkeypatch):
+    def _boom(*a, **kw):
+        raise subprocess.CalledProcessError(1, "ffprobe")
+    monkeypatch.setattr(gemini_pipe.subprocess, "run", _boom)
+    assert gemini_pipe._has_audio_stream("/tmp/x.mp4") is None
+
+
+def test_no_audio_video_routes_to_caption_only_with_specific_note(monkeypatch, tmp_path, caplog):
+    """The exact requirement: a video file that EXISTS and is complete but has
+    no audio stream must be detected via ffprobe and routed to caption-only,
+    with a distinct 'no audio track' note — ffmpeg must never be invoked."""
+    video = tmp_path / "NOAUDIO1.mp4"
+    video.write_bytes(b"x" * 5000)
+
+    reel = ReelData(
+        shortcode="NOAUDIO1", permalink="https://www.instagram.com/reel/NOAUDIO1/",
+        video_path=str(video),
+        caption="A substantial caption with plenty of words to summarize from here today.",
+    )
+
+    monkeypatch.setattr(gemini_pipe, "_has_audio_stream", lambda p: False)
+    monkeypatch.setattr(gemini_pipe, "_extract_audio", lambda p: (_ for _ in ()).throw(
+        AssertionError("ffmpeg must not run when there's no audio stream")
+    ))
+    # caption-only path's Gemini call -> a real structured extraction
+    monkeypatch.setattr(
+        gemini_pipe, "_call_gemini_text_only",
+        lambda prompt: Extraction(main_point="caption-derived point", topic_tags=["sleep"], value_score=4).model_dump_json(),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="reelbrain.gemini"):
+        result = run_extraction(reel, note=None, taxonomy=[])
+
+    # real caption-only extraction, not the generic degrade
+    assert result.main_point == "caption-derived point"
+    assert result.topic_tags == ["sleep"]
+    # the distinct note is set on the reel so main.py surfaces it on the Notion row
+    assert reel.fetch_note == "no audio track in source video — summarized from caption only, no transcript"
+    assert "no audio stream in NOAUDIO1" in caplog.text
+
+
+def test_ffmpeg_failure_log_includes_ffprobe_stream_layout(monkeypatch, tmp_path, caplog):
+    """Diagnostic #3: when ffmpeg DOES fail (for some reason other than no
+    audio), the log must include ffprobe's actual stream layout so the failure
+    is immediately diagnosable."""
+    video = tmp_path / "FFPROBELOG.mp4"
+    video.write_bytes(b"x" * 5000)
+
+    reel = ReelData(
+        shortcode="FFPROBELOG", permalink="https://www.instagram.com/reel/FFPROBELOG/",
+        video_path=str(video), caption="a caption",
+    )
+    monkeypatch.setattr(gemini_pipe, "_has_audio_stream", lambda p: True)  # probe says audio present
+    monkeypatch.setattr(gemini_pipe, "_ffprobe_streams", lambda p: "0,video,h264|1,audio,aac")
+
+    def _ffmpeg_boom(video_path):
+        raise subprocess.CalledProcessError(1, "ffmpeg", stderr=b"some ffmpeg error")
+
+    monkeypatch.setattr(gemini_pipe, "_extract_audio", _ffmpeg_boom)
+
+    with caplog.at_level(logging.WARNING, logger="reelbrain.gemini"):
+        result = run_extraction(reel, note=None, taxonomy=[])
+
+    assert result.content_type == "unknown"  # degraded
+    assert "ffprobe streams: 0,video,h264|1,audio,aac" in caplog.text
+
+
+def test_ffprobe_streams_never_raises_when_ffprobe_missing(monkeypatch):
+    def _boom(*a, **kw):
+        raise FileNotFoundError("no ffprobe")
+    monkeypatch.setattr(gemini_pipe.subprocess, "run", _boom)
+    out = gemini_pipe._ffprobe_streams("/tmp/x.mp4")
+    assert "ffprobe unavailable" in out

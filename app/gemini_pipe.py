@@ -44,6 +44,60 @@ MIN_CAPTION_WORDS_FOR_EXTRACTION = 10
 _GEMINI_SEMAPHORE = threading.Semaphore(2)
 
 
+def _has_audio_stream(video_path: str) -> Optional[bool]:
+    """ffprobe: does this file actually contain an audio stream?
+    (INCIDENT: see PROGRESS.md — some Instagram downloads are video-only, and
+    ffmpeg's -vn audio extraction fails outright on them.)
+
+    Returns:
+      True  — at least one audio stream present.
+      False — probe succeeded and found NO audio stream.
+      None  — probe couldn't run (ffprobe missing, unreadable file, etc.); the
+              caller then falls through to attempting ffmpeg anyway rather than
+              wrongly concluding "no audio" and skipping a fetchable transcript.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-select_streams", "a",  # audio streams only
+                "-show_entries", "stream=index",
+                "-of", "csv=p=0",
+                video_path,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:
+        logger.warning("ffprobe audio-stream check could not run for %s: %s", video_path, exc)
+        return None
+    return bool(result.stdout.strip())
+
+
+def _ffprobe_streams(video_path: str) -> str:
+    """Human-readable stream summary (codec_type + codec_name per stream) for
+    logging when ffmpeg extraction fails — makes 'why did ffmpeg fail on a file
+    that exists' immediately diagnosable (audio present? what codecs?). Never
+    raises; returns a short explanation if ffprobe itself can't run."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-show_entries", "stream=index,codec_type,codec_name",
+                "-of", "csv=p=0",
+                video_path,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except (FileNotFoundError, OSError) as exc:
+        return f"(ffprobe unavailable: {exc})"
+    out = (result.stdout or "").strip()
+    return out or "(ffprobe reported no streams)"
+
+
 def _extract_audio(video_path: str) -> str:
     """ffmpeg: strip to 16kHz mono m4a so reels <=90s upload as ~200-400KB."""
     audio_path = str(Path(video_path).with_suffix(".m4a"))
@@ -219,13 +273,30 @@ def run_extraction(
         )
         return _degraded(reel.caption)
 
+    # No audio stream at all (INCIDENT: see PROGRESS.md — some IG downloads are
+    # video-only, and ffmpeg's -vn extraction then fails with exit 1). This is
+    # NOT a technical failure: there's genuinely nothing to transcribe, so route
+    # to a real caption-only extraction with a distinct note, not the generic
+    # degrade. _has_audio_stream returns None ("couldn't probe") -> fall through
+    # and let ffmpeg try, preserving prior behavior when ffprobe is unavailable.
+    if _has_audio_stream(reel.video_path) is False:
+        logger.warning(
+            "run_extraction: no audio stream in %s (video_path=%s) — routing to "
+            "caption-only extraction instead of failing on ffmpeg -vn",
+            reel.shortcode, reel.video_path,
+        )
+        reel.fetch_note = "no audio track in source video — summarized from caption only, no transcript"
+        return run_caption_only_extraction(reel.caption, reel.creator_username, note, taxonomy)
+
     try:
         audio_path = _extract_audio(reel.video_path)
     except subprocess.CalledProcessError as exc:
         logger.exception(
             "run_extraction: ffmpeg audio extraction failed for %s "
-            "(video_path=%s, returncode=%s) — degrading to caption-only. stderr: %s",
-            reel.shortcode, reel.video_path, exc.returncode, _decode(exc.stderr)[:2000],
+            "(video_path=%s, returncode=%s) — degrading to caption-only. "
+            "stderr: %s | ffprobe streams: %s",
+            reel.shortcode, reel.video_path, exc.returncode,
+            _decode(exc.stderr)[:2000], _ffprobe_streams(reel.video_path),
         )
         return _degraded(reel.caption)
 

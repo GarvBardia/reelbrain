@@ -276,13 +276,25 @@ def cookie_health_status() -> str:
     return "degraded" if get_consecutive_auth_failures() >= AUTH_FAILURE_THRESHOLD else "ok"
 
 
+# Format selection MUST guarantee an audio track (INCIDENT: see PROGRESS.md).
+# Plain "best" selects the single best PROGRESSIVE file — fine when Instagram
+# offers one, but for some posts IG only exposes DASH streams and "best" then
+# falls through to a VIDEO-ONLY stream, producing a file ffmpeg's audio
+# extraction (-vn) then fails on with exit 1 (there is no audio to strip). This
+# selector prefers best video + best audio MERGED, so the downloaded file
+# actually contains audio; "/best" is the last-resort fallback for the rare
+# post that only has a single combined format. merge_output_format pins the
+# merged container so downstream sees a predictable .mp4.
+YTDLP_FORMAT = "bestvideo*+bestaudio/best"
+
+
 def _run_ytdlp(url: str, cookiefile: Optional[str]) -> dict:
     """NOTE (see PROGRESS.md's timing-bug investigation): this call is fully
-    synchronous — no progress_hooks, no threading, no postprocessors
-    configured. extract_info(download=True) blocks until the download (and
-    any yt-dlp-internal merge) is completely finished before returning; there
-    is nothing in this function that could hand control back early. Confirmed
-    by reading the code, not assumed."""
+    synchronous — no progress_hooks, no threading. extract_info(download=True)
+    blocks until the download AND any yt-dlp-internal audio/video merge are
+    completely finished before returning; there is nothing in this function
+    that could hand control back early. Confirmed by reading the code, not
+    assumed."""
     import yt_dlp
 
     outtmpl = os.path.join("data", "videos", "%(id)s.%(ext)s")
@@ -291,14 +303,22 @@ def _run_ytdlp(url: str, cookiefile: Optional[str]) -> dict:
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
-        "format": "best",
+        "format": YTDLP_FORMAT,
+        "merge_output_format": "mp4",
         "outtmpl": outtmpl,
     }
     if cookiefile:
         opts["cookiefile"] = cookiefile
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
-        info["_video_path"] = ydl.prepare_filename(info)
+        # After a merge, the on-disk file's extension (mp4) can differ from what
+        # prepare_filename() derives from the pre-merge format — prefer the
+        # actual final path yt-dlp records in requested_downloads when present.
+        downloads = info.get("requested_downloads") or []
+        if downloads and downloads[0].get("filepath"):
+            info["_video_path"] = downloads[0]["filepath"]
+        else:
+            info["_video_path"] = ydl.prepare_filename(info)
     return info
 
 
