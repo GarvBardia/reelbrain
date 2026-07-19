@@ -14,42 +14,51 @@ fix.
 
 ## The fix
 
-1. **Log into the burner account** in a normal browser (the one you use for the burner,
-   not your real account — don't mix sessions). instagram.com → log in as usual.
+**Keep Chrome logged into the burner account** (its default profile — no separate
+profile needed), then run one command:
 
-2. **Export fresh cookies** with the same browser extension you used originally (the
-   "cookies.txt" / "Get cookies.txt LOCALLY" extension). Export for `instagram.com`,
-   save as `cookies.txt`.
+```bash
+python scripts/refresh_cookies.py
+```
 
-3. **Sanity-check locally first** (catches a bad export before it goes to prod):
-   ```bash
-   yt-dlp --cookies cookies.txt --dump-json https://www.instagram.com/reel/<any_public_reel>/
-   ```
-   Should print JSON metadata, not an error. If it errors, the export didn't work —
-   re-check you're logged in as the burner and re-export.
+That's it. It reads fresh `instagram.com` cookies straight out of Chrome's local
+cookie store, exports them in the Netscape format yt-dlp expects, pushes them to
+Render's `cookies.txt` Secret File via Render's API (same effect as pasting into the
+dashboard by hand — Render auto-restarts the service on any Secret File change), and
+polls `/health` a few times afterward to confirm `cookies_file: true` post-restart,
+printing a clear SUCCESS/COULD NOT CONFIRM message.
 
-4. **Update the Render Secret File:**
-   - Render dashboard → your service → **Environment** tab → **Secret Files**.
-   - Find the existing `cookies.txt` entry → **Edit** → paste the new file's full
-     contents, replacing the old ones → **Save**.
-   - (First time setting this up instead of refreshing it? Same screen: **Add Secret
-     File**, filename `cookies.txt`, paste contents. See DEPLOYMENT.md's "Burner
-     cookies on Render" section.)
+**One-time setup**, before the first run:
+1. `pip install -r requirements-local.txt` (this pulls in `browser_cookie3`, a
+   local-only dependency — never installed on Render, see that file's header comment).
+2. In `.env`, set `RENDER_API_KEY` (Render dashboard → Account Settings → API Keys →
+   Create API key — treat it like a password) and `RENDER_SERVICE_ID` (Render
+   dashboard → your service → Settings, or the `srv-...` segment of the service's
+   dashboard URL). See `.env.example`.
 
-5. **Render auto-restarts the service** when a Secret File changes — no manual redeploy
-   needed. Give it ~1 minute.
+**Useful flags:**
+- `--browser edge` — if the burner session is in Edge instead of Chrome.
+- `--dry-run` — writes `cookies.txt` locally and stops before touching Render, so you
+  can sanity-check it first:
+  ```bash
+  yt-dlp --cookies cookies.txt --dump-json https://www.instagram.com/reel/<any_public_reel>/
+  ```
+  Should print JSON metadata, not an error. If it errors, you're likely not logged
+  into the burner account in that browser.
 
-6. **Verify the fix:**
-   ```bash
-   curl https://<your-service>.onrender.com/health
-   ```
-   `cookie_health` should read `"ok"` again. It won't flip back automatically until the
-   *next* successful cookie-backed fetch resets the counter (see below) — if it's still
-   `"degraded"` right after restart, that's expected; it clears on the next real capture.
+**Why this doesn't increase Instagram-side risk.** This script never logs into
+Instagram, never authenticates, never does anything IG's bot-detection would notice —
+it only *reads* cookies that already exist in Chrome's local cookie store, because you
+logged into the burner account normally, through a real browser, at some point before
+running it. It automates exactly one thing: the copy-cookies-and-paste-into-Render
+step, which was always just moving bytes from one place you already trust (your own
+logged-in browser) to another (Render's Secret File). Same trust boundary as the
+manual extension-export process it replaces — nothing new is exposed to Instagram.
 
-7. **Optional immediate confirmation:** trigger one capture (share a reel, or
-   `POST /retry/<some-shortcode>` on a previously-failed row) and check it lands in
-   Notion normally instead of `⚠️ Failed — retry`.
+**If it doesn't work:** the fallback is still the manual path — Render dashboard →
+your service → **Environment** tab → **Secret Files** → edit `cookies.txt` directly,
+using any cookie-export extension of your choice. This script is a convenience layer
+over that same mechanism, not a replacement dependency.
 
 ## Why this matters / what happens if you ignore the alert
 
