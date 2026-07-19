@@ -212,7 +212,17 @@ def run_pipeline(
             taken_at=reel.taken_at,
         )
         taxonomy = store.get_taxonomy()
-        extraction = gemini_pipe.run_extraction(reel, note, taxonomy)
+        if reel.is_photo_or_carousel:
+            # No video ever exists for these (yt-dlp is video-only) — a lighter
+            # caption-only Gemini call replaces the bare-caption placeholder the
+            # earlier fix used, so these rows get a real summary instead of
+            # being permanently second-class. run_extraction itself is neither
+            # called nor touched here — normal video reels are unaffected.
+            extraction = gemini_pipe.run_caption_only_extraction(
+                reel.caption, reel.creator_username, note, taxonomy
+            )
+        else:
+            extraction = gemini_pipe.run_extraction(reel, note, taxonomy)
         related_page_ids = _apply_embeddings_and_related(shortcode, extraction)
         if extraction.topic_tags:
             store.set_tags(shortcode, extraction.topic_tags)

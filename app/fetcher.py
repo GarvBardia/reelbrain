@@ -373,14 +373,19 @@ def _og_fallback_or_degrade(
     yields a caption, continue the pipeline caption-only rather than failing the
     row outright.
 
-    If OG also fails AND the original failure was yt-dlp's "no video formats
-    found" signature, this is almost certainly a photo/carousel post — not a
-    technical failure at all, just a kind of post yt-dlp (video-only) can never
-    fetch. Retrying that can never succeed, so it must not land as "Failed —
-    retry": return a URL-only ReelData instead so the pipeline still produces a
-    captured row (📷 Photo — manual), never a dropped capture. Any OTHER kind of
-    total failure still raises FetchDegraded as before — those may genuinely be
-    worth a human retry.
+    If the original failure was yt-dlp's "no video formats found" signature,
+    this is almost certainly a photo/carousel post — not a technical failure at
+    all, just a kind of post yt-dlp (video-only) can never fetch. Retrying that
+    can never succeed, so it must not land as "Failed — retry" regardless of
+    whether the OG-tag scrape recovers a caption or not:
+      - OG succeeds: is_photo_or_carousel is tagged here too (previously only
+        the OG-also-fails branch below tagged it), so downstream a caption-only
+        Gemini extraction runs instead of silently treating this as an ordinary
+        capture with no distinguishing note.
+      - OG also fails: return a URL-only ReelData instead so the pipeline still
+        produces a captured row (📷 Photo — manual), never a dropped capture.
+    Any OTHER kind of total failure still raises FetchDegraded as before —
+    those may genuinely be worth a human retry.
     """
     tags = fetch_og_metadata(permalink)
     if tags:
@@ -390,6 +395,14 @@ def _og_fallback_or_degrade(
                 "yt-dlp failed for %s (%s) — continuing caption-only from OG tags",
                 shortcode, reason,
             )
+            if _is_photo_or_carousel(reason):
+                reel = reel.model_copy(update={
+                    "is_photo_or_carousel": True,
+                    "fetch_note": (
+                        "photo/carousel post — summarized from caption only, "
+                        "no video transcript available"
+                    ),
+                })
             return reel
 
     if _is_photo_or_carousel(reason):

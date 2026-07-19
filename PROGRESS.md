@@ -1,5 +1,40 @@
 # PROGRESS.md — hardening/deployment session log
 
+## Photo/carousel posts get a real summary instead of a bare caption placeholder
+
+Photo/carousel posts (yt-dlp can never fetch these — video-only) landed with
+just "no transcript/caption" placeholder text even when a real caption WAS
+recoverable via the OG-tag fallback. Mocked tests only — no live calls. 295
+tests passing.
+
+**What changed:**
+- `app/fetcher.py`: `_og_fallback_or_degrade` now tags `is_photo_or_carousel`
+  (and sets a distinguishing `fetch_note`) even when the OG-tag scrape
+  succeeds and recovers a caption — previously that tag only fired when the OG
+  scrape ALSO failed, so a photo/carousel post with a recoverable caption was
+  silently treated as an ordinary caption-only capture with no distinguishing
+  status/note at all.
+- `app/gemini_pipe.py`: new `run_caption_only_extraction()` — the SAME
+  structured-output Gemini call as a normal video reel (`response_schema=
+  Extraction`), just without any audio/video upload (`_call_gemini_text_only`,
+  a new prompt template `prompts/extraction_caption_only.md` that doesn't
+  frame the task as transcription since there's no audio at all). A caption
+  under `MIN_CAPTION_WORDS_FOR_EXTRACTION` (10) words falls back to the
+  existing honest placeholder rather than risking Gemini hallucinating content
+  from almost nothing.
+- `app/main.py`: `run_pipeline` branches to `run_caption_only_extraction` when
+  `reel.is_photo_or_carousel`, instead of `run_extraction` — an addition for
+  the fallback case only; `run_extraction` itself, and normal video reel
+  processing, are completely untouched.
+- Notion: these rows now get a real Title/Main Point, Topics, Value score, and
+  Priority exactly like a video capture, plus the note "photo/carousel post —
+  summarized from caption only, no video transcript available" so the row is
+  honest about its source rather than indistinguishable from a full
+  video-based save. Status stays `📷 Photo — manual` either way (unchanged) —
+  only the underlying content richness changed.
+
+---
+
 ## Priority system — computed field replacing decorative-only value_score
 
 `value_score` existed but nothing acted on it. **Priority now drives real

@@ -25,6 +25,16 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest").strip()
 GEMINI_EMBEDDING_MODEL = os.environ.get("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001").strip()
 GEMINI_EMBEDDING_DIM = 768
 PROMPT_TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "prompts" / "extraction.md"
+# Photo/carousel posts (yt-dlp is video-only, can never fetch these): a lighter
+# caption-only prompt, no transcription framing since there's no audio at all.
+CAPTION_ONLY_PROMPT_TEMPLATE_PATH = (
+    Path(__file__).resolve().parent.parent / "prompts" / "extraction_caption_only.md"
+)
+# Below this many words, a caption is too thin to extract anything meaningful
+# from — fall back to the honest placeholder rather than risking Gemini
+# hallucinating content from almost nothing (e.g. a caption that's just a
+# single hashtag or emoji).
+MIN_CAPTION_WORDS_FOR_EXTRACTION = 10
 
 # Free tier is ~10-15 RPM at <20 fetches/day total — this just prevents bursts
 # if /retry and /capture happen to overlap.
@@ -46,9 +56,10 @@ def _extract_audio(video_path: str) -> str:
     return audio_path
 
 
-def _build_prompt(caption: Optional[str], creator: Optional[str], note: Optional[str],
-                   taxonomy: list[str], validation_errors: Optional[str] = None) -> str:
-    template = PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
+def _fill_prompt_template(template_path: Path, caption: Optional[str], creator: Optional[str],
+                           note: Optional[str], taxonomy: list[str],
+                           validation_errors: Optional[str] = None) -> str:
+    template = template_path.read_text(encoding="utf-8")
     prompt = (
         template
         .replace("{creator}", creator or "unknown")
@@ -64,6 +75,18 @@ def _build_prompt(caption: Optional[str], creator: Optional[str], note: Optional
     return prompt
 
 
+def _build_prompt(caption: Optional[str], creator: Optional[str], note: Optional[str],
+                   taxonomy: list[str], validation_errors: Optional[str] = None) -> str:
+    return _fill_prompt_template(PROMPT_TEMPLATE_PATH, caption, creator, note, taxonomy, validation_errors)
+
+
+def _build_caption_only_prompt(caption: Optional[str], creator: Optional[str], note: Optional[str],
+                                taxonomy: list[str], validation_errors: Optional[str] = None) -> str:
+    return _fill_prompt_template(
+        CAPTION_ONLY_PROMPT_TEMPLATE_PATH, caption, creator, note, taxonomy, validation_errors
+    )
+
+
 def _call_gemini(audio_path: str, prompt: str) -> str:
     from google import genai
     from google.genai import types
@@ -74,6 +97,25 @@ def _call_gemini(audio_path: str, prompt: str) -> str:
         response = client.models.generate_content(
             model=GEMINI_MODEL,
             contents=[prompt, uploaded],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=Extraction,
+            ),
+        )
+    return response.text
+
+
+def _call_gemini_text_only(prompt: str) -> str:
+    """Same structured-output call as _call_gemini, but no audio/video upload —
+    used for photo/carousel posts, where only the caption is ever available."""
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    with _GEMINI_SEMAPHORE:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[prompt],
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=Extraction,
@@ -148,6 +190,50 @@ def run_extraction(
         return _degraded(reel.caption)
 
     _merge_comment_gate(extraction, reel.caption)
+    extraction.priority = compute_priority(extraction.topic_tags, extraction.value_score)
+    return extraction
+
+
+def run_caption_only_extraction(
+    caption: Optional[str], creator: Optional[str], note: Optional[str], taxonomy: list[str]
+) -> Extraction:
+    """Photo/carousel posts: yt-dlp can never fetch these (video-only), but a
+    caption is often still recoverable via the OG-tag fallback (fetcher.py).
+    Rather than storing that caption raw as a bare placeholder, this runs it
+    through the SAME structured extraction Gemini call as a normal reel — just
+    without any audio/video upload — so these rows get a real Main Point,
+    Topics, Value score, and Priority instead of being permanently
+    second-class. Degrades gracefully rather than raising, same contract as
+    run_extraction.
+
+    A caption below MIN_CAPTION_WORDS_FOR_EXTRACTION words is too thin to
+    extract anything meaningful from — falls back to the honest placeholder
+    rather than risking Gemini hallucinating content from almost nothing.
+    """
+    if not caption or len(caption.split()) < MIN_CAPTION_WORDS_FOR_EXTRACTION:
+        return _degraded(caption)
+
+    prompt = _build_caption_only_prompt(caption, creator, note, taxonomy)
+
+    extraction: Optional[Extraction] = None
+    validation_errors: Optional[str] = None
+    for attempt in range(2):  # one retry, per BUILD_SPEC 1.4's existing convention
+        try:
+            raw = _call_gemini_text_only(prompt)
+            extraction = _parse(raw)
+            break
+        except (json.JSONDecodeError, ValidationError) as exc:
+            validation_errors = str(exc)
+            prompt = _build_caption_only_prompt(
+                caption, creator, note, taxonomy, validation_errors=validation_errors,
+            )
+        except Exception:  # noqa: BLE001 - network/API errors: no retry budget for these
+            break
+
+    if extraction is None:
+        return _degraded(caption)
+
+    _merge_comment_gate(extraction, caption)
     extraction.priority = compute_priority(extraction.topic_tags, extraction.value_score)
     return extraction
 

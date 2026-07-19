@@ -189,3 +189,137 @@ def test_compute_priority_no_topics_at_all():
     assert gemini_pipe.compute_priority([], 4) == "High"
     assert gemini_pipe.compute_priority([], 3) == "Medium"
     assert gemini_pipe.compute_priority([], 1) == "Low"
+
+
+# --- run_caption_only_extraction: photo/carousel posts get a real summary -----
+#
+# Fix: yt-dlp can never fetch photo/carousel posts (video-only), but a caption
+# is often recoverable via the OG-tag fallback. Previously that caption was
+# just stored raw as a bare placeholder. This runs it through the SAME
+# structured Gemini call as a video reel, minus the audio/video upload.
+
+SUBSTANTIAL_CAPTION = (
+    "New free guide dropping today! I break down the exact 5-step morning "
+    "routine that finally fixed my sleep schedule after years of insomnia. "
+    "Comment 'SEND' and I'll DM you the full PDF."
+)
+
+
+def test_caption_only_extraction_produces_structured_output(monkeypatch):
+    extraction_out = Extraction(
+        main_point="A 5-step morning routine that fixed the creator's sleep schedule.",
+        topic_tags=["sleep", "habits"],
+        content_type="resource_drop",
+        comment_gate=CommentGate(detected=True, keyword="SEND", promised_resource="sleep routine PDF"),
+        value_score=4,
+    )
+    monkeypatch.setattr(
+        gemini_pipe, "_call_gemini_text_only", lambda prompt: extraction_out.model_dump_json()
+    )
+
+    result = gemini_pipe.run_caption_only_extraction(
+        SUBSTANTIAL_CAPTION, creator="sleepcoachjane", note=None, taxonomy=[],
+    )
+
+    assert result.main_point == "A 5-step morning routine that fixed the creator's sleep schedule."
+    assert result.topic_tags == ["sleep", "habits"]
+    assert result.value_score == 4
+    assert result.priority == "High"          # via value_score >= 4
+    assert result.comment_gate.detected is True
+    assert result.comment_gate.keyword == "SEND"
+    assert result.transcript == ""
+    assert result.has_speech is False
+
+
+def test_caption_only_extraction_prompt_carries_no_audio_upload(monkeypatch):
+    """The whole point: no file upload, just the prompt text — confirms the
+    text-only call path is actually being used, not the audio one."""
+    calls = []
+
+    def _fake_call(prompt):
+        calls.append(prompt)
+        return Extraction(main_point="x", value_score=2).model_dump_json()
+
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_text_only", _fake_call)
+    monkeypatch.setattr(gemini_pipe, "_call_gemini", lambda *a, **kw: (_ for _ in ()).throw(
+        AssertionError("must not call the audio/video extraction path")
+    ))
+
+    gemini_pipe.run_caption_only_extraction(SUBSTANTIAL_CAPTION, "someone", None, [])
+    assert len(calls) == 1
+    assert SUBSTANTIAL_CAPTION in calls[0]
+
+
+def test_caption_only_extraction_merges_comment_gate_and_sets_priority(monkeypatch):
+    """Same finalization steps as the video path: regex-merge + priority."""
+    extraction_out = Extraction(main_point="x", value_score=1, topic_tags=["cooking"])
+    monkeypatch.setattr(
+        gemini_pipe, "_call_gemini_text_only", lambda prompt: extraction_out.model_dump_json()
+    )
+
+    result = gemini_pipe.run_caption_only_extraction(
+        "Comment 'LINK' below and I'll send you the resource, promise, this caption is long enough!",
+        creator=None, note=None, taxonomy=[],
+    )
+    assert result.comment_gate.detected is True
+    assert result.comment_gate.keyword == "LINK"
+    assert result.priority == "Low"  # value_score 1, no Claude-related topic -> Low, computed either way
+
+
+def test_caption_only_extraction_falls_back_to_degraded_when_thin(monkeypatch):
+    """Caption under MIN_CAPTION_WORDS_FOR_EXTRACTION words -> honest placeholder,
+    never a Gemini call (no risk of hallucinating content from almost nothing)."""
+    def _must_not_be_called(prompt):
+        raise AssertionError("must not call Gemini for a too-thin caption")
+
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_text_only", _must_not_be_called)
+
+    result = gemini_pipe.run_caption_only_extraction("just a few words here", None, None, [])
+    assert result.main_point == "just a few words here"
+    assert result.content_type == "unknown"  # confirms the degraded path, not a real extraction
+
+
+def test_caption_only_extraction_falls_back_to_degraded_when_caption_is_none(monkeypatch):
+    def _must_not_be_called(prompt):
+        raise AssertionError("must not call Gemini with no caption at all")
+
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_text_only", _must_not_be_called)
+
+    result = gemini_pipe.run_caption_only_extraction(None, None, None, [])
+    assert result.content_type == "unknown"
+    assert result.main_point == "No caption or transcript available."
+
+
+def test_caption_only_extraction_falls_back_when_gemini_call_fails(monkeypatch):
+    def _boom(prompt):
+        raise RuntimeError("gemini 500")
+
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_text_only", _boom)
+
+    result = gemini_pipe.run_caption_only_extraction(SUBSTANTIAL_CAPTION, None, None, [])
+    assert result.content_type == "unknown"  # degraded path
+    # gate regex still fires even on the degraded path (mirrors run_extraction's guarantee)
+    assert result.comment_gate.detected is True
+    assert result.comment_gate.keyword == "SEND"
+
+
+def test_video_extraction_path_completely_unaffected_by_caption_only_addition(monkeypatch):
+    """Regression guard: a normal video reel must still go through _call_gemini
+    (audio path), never _call_gemini_text_only — this is purely an addition
+    for the photo/carousel fallback, not a change to normal reel processing."""
+    reel = ReelData(
+        shortcode="STILLVID", permalink="https://www.instagram.com/reel/STILLVID/",
+        video_path="/tmp/STILLVID.mp4", caption=SUBSTANTIAL_CAPTION,
+    )
+    monkeypatch.setattr(gemini_pipe, "_extract_audio", lambda p: "/tmp/STILLVID.m4a")
+
+    def _fake_audio_call(audio_path, prompt):
+        return Extraction(main_point="video-derived summary", value_score=4).model_dump_json()
+
+    monkeypatch.setattr(gemini_pipe, "_call_gemini", _fake_audio_call)
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_text_only", lambda *a, **kw: (_ for _ in ()).throw(
+        AssertionError("must not call the caption-only path for a normal video reel")
+    ))
+
+    result = run_extraction(reel, note=None, taxonomy=[])
+    assert result.main_point == "video-derived summary"

@@ -203,6 +203,43 @@ def test_exhausted_challenges_fall_back_to_og(monkeypatch, tmp_path):
     assert "Comment 'SEND'" in reel.caption
 
 
+def test_exhausted_challenges_with_og_success_tags_photo_or_carousel(monkeypatch, tmp_path):
+    """Caption-only extraction fix: when yt-dlp's failure is the photo/carousel
+    signature AND the OG-tag scrape DOES recover a caption, the reel must still
+    be tagged is_photo_or_carousel (previously only the OG-also-fails branch
+    tagged it) so main.py routes it to the caption-only Gemini extraction
+    instead of silently treating it as an ordinary video-equivalent capture."""
+    _with_cookies(monkeypatch, tmp_path)
+    # at least one retry so last_exc (and thus "no video formats found") is
+    # actually captured into the final reason string -- BACKOFF_SECONDS=[]
+    # would skip the retry loop entirely and lose the classifying signature.
+    monkeypatch.setattr(fetcher, "BACKOFF_SECONDS", [0])
+    monkeypatch.setattr(fetcher, "_run_ytdlp", lambda url, cookiefile: (_ for _ in ()).throw(
+        RuntimeError("No video formats found")
+    ))
+    monkeypatch.setattr(fetcher, "fetch_og_metadata", lambda p: fetcher._parse_og_tags(IG_HTML))
+
+    reel = fetcher.fetch_reel("OGTEST01", PERMALINK)
+    assert reel.is_photo_or_carousel is True
+    assert reel.caption is not None
+    assert "no video transcript available" in reel.fetch_note
+
+
+def test_non_photo_failure_with_og_success_is_not_tagged(monkeypatch, tmp_path):
+    """Regression guard: a genuine soft-block (not photo/carousel) whose OG
+    scrape happens to succeed must NOT be misclassified as photo/carousel."""
+    _with_cookies(monkeypatch, tmp_path)
+    monkeypatch.setattr(fetcher, "BACKOFF_SECONDS", [])
+    monkeypatch.setattr(fetcher, "_run_ytdlp", lambda url, cookiefile: (_ for _ in ()).throw(
+        RuntimeError("checkpoint required")
+    ))
+    monkeypatch.setattr(fetcher, "fetch_og_metadata", lambda p: fetcher._parse_og_tags(IG_HTML))
+
+    reel = fetcher.fetch_reel("OGTEST01", PERMALINK)
+    assert reel.is_photo_or_carousel is False
+    assert reel.fetch_note is None
+
+
 def test_og_fallback_failure_still_degrades_with_reason(monkeypatch, tmp_path):
     _with_cookies(monkeypatch, tmp_path)
 

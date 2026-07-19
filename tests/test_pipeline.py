@@ -228,6 +228,70 @@ def test_photo_carousel_post_still_captured_not_dropped(monkeypatch, tutorial_re
     assert row["permalink"] == tutorial_reel.permalink
 
 
+def test_photo_carousel_with_recovered_caption_gets_real_summary_not_placeholder(monkeypatch):
+    """The fix: when yt-dlp fails with 'no video formats found' (photo/carousel)
+    AND the OG-tag scrape DOES recover a caption, the row must get a real Main
+    Point/Topics/Priority/Value score from Gemini -- not the bare-caption
+    placeholder -- plus a clear note distinguishing it from a video-based save.
+
+    Runs the REAL app.fetcher.fetch_reel (only yt-dlp/OG internals mocked) so
+    this proves the actual fetcher->main.py wiring, not just the unit.
+    """
+    fake = _install_fake_notion(monkeypatch)
+    monkeypatch.setattr(fetcher, "resolve_cookies_file", lambda: "cookies.txt")
+    monkeypatch.setattr(fetcher, "BACKOFF_SECONDS", [0])
+
+    def _no_video(url, cookiefile):
+        raise RuntimeError("No video formats found")
+
+    monkeypatch.setattr(fetcher, "_run_ytdlp", _no_video)
+    monkeypatch.setattr(
+        fetcher, "fetch_og_metadata",
+        lambda p: {
+            "og:title": "Jane Doe (@sleepcoachjane) on Instagram",
+            "og:description": "3 steps to fix your sleep schedule for good, save this!",
+        },
+    )
+
+    caption_extraction = Extraction(
+        main_point="Three steps to fix a broken sleep schedule.",
+        topic_tags=["sleep", "habits"],
+        content_type="tutorial",
+        comment_gate=CommentGate(detected=False),
+        value_score=4,
+        priority="High",
+    )
+    monkeypatch.setattr(
+        "app.main.gemini_pipe.run_caption_only_extraction",
+        lambda caption, creator, note, taxonomy: caption_extraction,
+    )
+    monkeypatch.setattr(
+        "app.main.gemini_pipe.run_extraction",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("must not call the video path")),
+    )
+
+    shortcode = "PHOTOCAP1"
+    permalink = f"https://www.instagram.com/reel/{shortcode}/"
+    store.insert_processing(shortcode, permalink)
+    run_pipeline(shortcode, permalink, note=None)
+
+    save_calls = save_page_calls(fake)
+    assert len(save_calls) == 1
+    props = _props_of(save_calls[0])
+    # real extraction, not a placeholder
+    assert props["Title"]["title"][0]["text"]["content"] == "Three steps to fix a broken sleep schedule."
+    assert {"name": "sleep"} in props["Topics"]["multi_select"]
+    assert props["Value score"]["select"]["name"] == "4"
+    assert props["Priority"]["select"]["name"] == "High"
+    # still distinctly marked as photo/carousel, not indistinguishable from a video save
+    assert props["Status"]["select"]["name"] == "📷 Photo — manual"
+    note_text = props["My note"]["rich_text"][0]["text"]["content"]
+    assert "summarized from caption only, no video transcript available" in note_text
+
+    row = store.get_by_shortcode(shortcode)
+    assert row["status"] == "photo_manual"
+
+
 def test_bug1_reported_shortcode_danilwobzdja_never_vanishes(monkeypatch):
     """BUG 1 verification: confirms the fix from test_photo_carousel_post_still_
     captured_not_dropped against the literal shortcode reported as vanishing
