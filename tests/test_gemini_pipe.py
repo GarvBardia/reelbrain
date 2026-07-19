@@ -1,3 +1,6 @@
+import logging
+import subprocess
+
 import app.gemini_pipe as gemini_pipe
 from app.gemini_pipe import _merge_comment_gate, run_extraction
 from app.models import CommentGate, Extraction, ReelData
@@ -323,3 +326,100 @@ def test_video_extraction_path_completely_unaffected_by_caption_only_addition(mo
 
     result = run_extraction(reel, note=None, taxonomy=[])
     assert result.main_point == "video-derived summary"
+
+
+# --- silent-degradation incident: every degrade point must log the real error -
+#
+# Real incident: reel captures with a successfully-downloaded video were landing
+# as degraded/caption-only saves (no Topics, flat value_score=3, caption-as-
+# title) with ZERO error logged anywhere explaining why — subprocess.
+# CalledProcessError and Gemini call/parse exceptions were all being swallowed
+# silently. Confirmed via git diff that _extract_audio and run_extraction's
+# try/except skeleton were byte-for-byte unchanged by the photo/carousel,
+# priority, and comment-gate commits from the same night — so this silent
+# swallowing pre-dates those changes, it just went unnoticed until now. Every
+# branch below must now log the actual exception before degrading.
+
+def test_ffmpeg_failure_logs_the_actual_error(monkeypatch, caplog):
+    """The exact reported regression: a video that downloaded successfully
+    (video_path is set) but whose ffmpeg audio-extraction step fails must log
+    ffmpeg's real stderr — not degrade in total silence."""
+    reel = ReelData(
+        shortcode="FFMPEGLOG1", permalink="https://www.instagram.com/reel/FFMPEGLOG1/",
+        video_path="/tmp/FFMPEGLOG1.mp4", caption="a caption",
+    )
+
+    def _ffmpeg_boom(video_path):
+        raise subprocess.CalledProcessError(
+            1, "ffmpeg", stderr=b"Unknown encoder 'aac' -- codec not found in this build"
+        )
+
+    monkeypatch.setattr(gemini_pipe, "_extract_audio", _ffmpeg_boom)
+
+    with caplog.at_level(logging.WARNING, logger="reelbrain.gemini"):
+        result = run_extraction(reel, note=None, taxonomy=[])
+
+    assert result.content_type == "unknown"  # confirms the degraded path was taken
+    assert "FFMPEGLOG1" in caplog.text
+    assert "Unknown encoder 'aac' -- codec not found in this build" in caplog.text
+
+
+def test_no_video_path_logs_a_warning(monkeypatch, caplog):
+    reel = ReelData(
+        shortcode="NOVIDLOG1", permalink="https://www.instagram.com/reel/NOVIDLOG1/",
+        video_path=None, caption="a caption",
+    )
+    with caplog.at_level(logging.WARNING, logger="reelbrain.gemini"):
+        run_extraction(reel, note=None, taxonomy=[])
+    assert "NOVIDLOG1" in caplog.text
+    assert "no video_path" in caplog.text
+
+
+def test_gemini_call_exception_logs_the_actual_error(monkeypatch, caplog):
+    reel = ReelData(
+        shortcode="GEMLOG1", permalink="https://www.instagram.com/reel/GEMLOG1/",
+        video_path="/tmp/GEMLOG1.mp4", caption="a caption",
+    )
+    monkeypatch.setattr(gemini_pipe, "_extract_audio", lambda p: "/tmp/GEMLOG1.m4a")
+
+    def _boom(audio_path, prompt):
+        raise RuntimeError("503 Service Unavailable from Gemini")
+
+    monkeypatch.setattr(gemini_pipe, "_call_gemini", _boom)
+
+    with caplog.at_level(logging.WARNING, logger="reelbrain.gemini"):
+        result = run_extraction(reel, note=None, taxonomy=[])
+
+    assert result.content_type == "unknown"
+    assert "GEMLOG1" in caplog.text
+    assert "503 Service Unavailable from Gemini" in caplog.text
+
+
+def test_schema_validation_failure_logs_the_validation_error(monkeypatch, caplog):
+    reel = ReelData(
+        shortcode="VALIDLOG1", permalink="https://www.instagram.com/reel/VALIDLOG1/",
+        video_path="/tmp/VALIDLOG1.mp4", caption="a caption",
+    )
+    monkeypatch.setattr(gemini_pipe, "_extract_audio", lambda p: "/tmp/VALIDLOG1.m4a")
+    monkeypatch.setattr(gemini_pipe, "_call_gemini", lambda a, p: "not valid json at all")
+
+    with caplog.at_level(logging.WARNING, logger="reelbrain.gemini"):
+        result = run_extraction(reel, note=None, taxonomy=[])
+
+    assert result.content_type == "unknown"
+    assert "VALIDLOG1" in caplog.text
+    # two attempts (one retry) -> two validation-failure log lines
+    assert caplog.text.count("failed schema validation") == 2
+
+
+def test_caption_only_gemini_failure_also_logs(monkeypatch, caplog):
+    def _boom(prompt):
+        raise RuntimeError("gemini 500")
+
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_text_only", _boom)
+
+    with caplog.at_level(logging.WARNING, logger="reelbrain.gemini"):
+        result = gemini_pipe.run_caption_only_extraction(SUBSTANTIAL_CAPTION, None, None, [])
+
+    assert result.content_type == "unknown"
+    assert "gemini 500" in caplog.text

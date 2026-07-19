@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import threading
@@ -12,6 +13,8 @@ from pydantic import ValidationError
 
 from app.fetcher import detect_comment_gate
 from app.models import Extraction, ReelData, degraded_extraction
+
+logger = logging.getLogger("reelbrain.gemini")
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 # gemini-2.0-flash is no longer reliably on the free tier (returns immediate 429s).
@@ -141,6 +144,15 @@ def embed_text(text: str) -> list[float]:
     return list(response.embeddings[0].values)
 
 
+def _decode(text_or_bytes) -> str:
+    """subprocess.run(capture_output=True) hands back bytes; ffmpeg's stderr is
+    what actually says WHY it failed, so this must survive into the log even
+    when it's not valid UTF-8 (ffmpeg output isn't guaranteed clean text)."""
+    if isinstance(text_or_bytes, bytes):
+        return text_or_bytes.decode("utf-8", errors="replace")
+    return text_or_bytes or ""
+
+
 def _parse(raw: str) -> Extraction:
     data = json.loads(raw)
     return Extraction.model_validate(data)
@@ -159,13 +171,31 @@ def _degraded(caption: Optional[str]) -> Extraction:
 def run_extraction(
     reel: ReelData, note: Optional[str], taxonomy: list[str]
 ) -> Extraction:
-    """Returns a validated Extraction, degrading gracefully rather than raising."""
+    """Returns a validated Extraction, degrading gracefully rather than raising.
+
+    INCIDENT (see PROGRESS.md): every degradation point here used to be
+    completely silent — a successfully-downloaded video could land as a bare
+    caption placeholder (no Topics, flat value_score=3) with zero indication
+    anywhere of why. Every branch that calls _degraded() now logs the actual
+    exception first — this must never be invisible again.
+    """
     if not reel.video_path:
+        logger.warning(
+            "run_extraction: no video_path for %s — degrading to caption-only "
+            "(expected for an OG-tag-recovered reel; a problem if this reel "
+            "should have had a real video download)",
+            reel.shortcode,
+        )
         return _degraded(reel.caption)
 
     try:
         audio_path = _extract_audio(reel.video_path)
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as exc:
+        logger.exception(
+            "run_extraction: ffmpeg audio extraction failed for %s "
+            "(video_path=%s, returncode=%s) — degrading to caption-only. stderr: %s",
+            reel.shortcode, reel.video_path, exc.returncode, _decode(exc.stderr)[:2000],
+        )
         return _degraded(reel.caption)
 
     prompt = _build_prompt(reel.caption, reel.creator_username, note, taxonomy)
@@ -179,14 +209,26 @@ def run_extraction(
             break
         except (json.JSONDecodeError, ValidationError) as exc:
             validation_errors = str(exc)
+            logger.warning(
+                "run_extraction: Gemini response failed schema validation for %s "
+                "(attempt %d/2): %s", reel.shortcode, attempt + 1, validation_errors,
+            )
             prompt = _build_prompt(
                 reel.caption, reel.creator_username, note, taxonomy,
                 validation_errors=validation_errors,
             )
-        except Exception:  # noqa: BLE001 - network/API errors: no retry budget for these
+        except Exception as exc:  # noqa: BLE001 - network/API errors: no retry budget for these
+            logger.exception(
+                "run_extraction: Gemini extraction call failed for %s (attempt %d/2): %s "
+                "— degrading to caption-only", reel.shortcode, attempt + 1, exc,
+            )
             break
 
     if extraction is None:
+        logger.warning(
+            "run_extraction: degrading to caption-only for %s after exhausting "
+            "extraction attempts (see the error logged above for why)", reel.shortcode,
+        )
         return _degraded(reel.caption)
 
     _merge_comment_gate(extraction, reel.caption)
@@ -211,6 +253,11 @@ def run_caption_only_extraction(
     rather than risking Gemini hallucinating content from almost nothing.
     """
     if not caption or len(caption.split()) < MIN_CAPTION_WORDS_FOR_EXTRACTION:
+        logger.info(
+            "run_caption_only_extraction: caption too thin (%d words) for %r — "
+            "degrading to placeholder without calling Gemini",
+            len((caption or "").split()), (caption or "")[:80],
+        )
         return _degraded(caption)
 
     prompt = _build_caption_only_prompt(caption, creator, note, taxonomy)
@@ -224,13 +271,28 @@ def run_caption_only_extraction(
             break
         except (json.JSONDecodeError, ValidationError) as exc:
             validation_errors = str(exc)
+            logger.warning(
+                "run_caption_only_extraction: Gemini response failed schema "
+                "validation for caption %r (attempt %d/2): %s",
+                caption[:80], attempt + 1, validation_errors,
+            )
             prompt = _build_caption_only_prompt(
                 caption, creator, note, taxonomy, validation_errors=validation_errors,
             )
-        except Exception:  # noqa: BLE001 - network/API errors: no retry budget for these
+        except Exception as exc:  # noqa: BLE001 - network/API errors: no retry budget for these
+            logger.exception(
+                "run_caption_only_extraction: Gemini call failed for caption %r "
+                "(attempt %d/2): %s — degrading to placeholder",
+                caption[:80], attempt + 1, exc,
+            )
             break
 
     if extraction is None:
+        logger.warning(
+            "run_caption_only_extraction: degrading to placeholder for caption %r "
+            "after exhausting extraction attempts (see the error logged above for why)",
+            caption[:80],
+        )
         return _degraded(caption)
 
     _merge_comment_gate(extraction, caption)

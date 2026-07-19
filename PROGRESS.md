@@ -1,5 +1,52 @@
 # PROGRESS.md — hardening/deployment session log
 
+## URGENT: silent extraction failures now logged — root cause still open
+
+**Reported:** reels with a successfully-downloaded video (confirmed via Render's
+own "[download] 100% of X MiB" log line) were landing in Notion as
+degraded/caption-only saves — no Topics, flat `value_score=3`, caption used as
+the title — with **zero error logged anywhere**. Suspected tied to tonight's
+photo/carousel and Priority changes.
+
+**Fixed immediately, deployed regardless of root cause (per instruction):**
+every silent degradation point in `app/gemini_pipe.py`'s `run_extraction` and
+`run_caption_only_extraction` now logs the actual exception before falling
+back — `logger.exception(...)` with ffmpeg's real `stderr` for
+`subprocess.CalledProcessError`, the real exception for a failed Gemini call,
+and the validation error text for a schema-validation failure. Previously all
+of these were caught and silently swallowed with no log line at all. 5 new
+regression tests in `tests/test_gemini_pipe.py` assert the actual error text
+lands in the log (via `caplog`) for each degrade path.
+
+**Investigated whether tonight's changes caused this — inconclusive, reported
+honestly rather than guessed:**
+- Diffed tonight's three commits (photo/carousel `484b650`, Priority `429fe69`,
+  comment-gate `04f4c99`) against the prior baseline. **`_extract_audio` and
+  `run_extraction`'s entire try/except skeleton are byte-for-byte unchanged**
+  by any of them — ffmpeg's invocation, args, and the surrounding exception
+  handling are exactly what they were before tonight.
+- The one real structural change in the call chain: `main.py`'s `run_pipeline`
+  now routes `reel.is_photo_or_carousel=True` reels to the new
+  `run_caption_only_extraction` instead of `run_extraction`. But
+  `is_photo_or_carousel` is set **only** by `fetcher.py`, and only on a
+  **failed** yt-dlp fetch — never on a successful download. A reel whose video
+  genuinely downloaded (video_path set, `is_photo_or_carousel=False`) cannot be
+  misrouted into the caption-only path by tonight's change; it still goes
+  through the unchanged `run_extraction`.
+- Most likely explanation: `run_extraction`'s silent `except
+  subprocess.CalledProcessError` / `except Exception` catches were **already
+  silent before tonight** — this specific bug isn't new, it just went
+  unnoticed until now (it never crashes anything, it just produces a
+  degraded-looking-but-plausible Notion row). Something is making ffmpeg or
+  the Gemini call actually fail on these specific reels, and that "something"
+  is still unknown — genuinely can't tell without live logs, which this
+  mocked-only session can't produce.
+- **The next real capture that degrades will now show the actual error in
+  Render logs** — that's what will actually answer this. Report back what it
+  says and I can fix the real cause directly instead of theorizing further.
+
+---
+
 ## Cookie refresh automation removed — Chrome's App-Bound Encryption blocks it
 
 The `scripts/refresh_cookies.py` tool from a previous pass (reading Chrome cookies via
