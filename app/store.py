@@ -568,6 +568,19 @@ def get_saves_since(days: int = 7) -> list[sqlite3.Row]:
         ).fetchall()
 
 
+def get_saves_since_hours(hours: int = 24) -> list[sqlite3.Row]:
+    """All saves created in the past N hours, newest first (daily digest).
+    A separate function from get_saves_since (rather than get_saves_since(days=1))
+    so the 24-hour window is exact and independently testable, not an
+    assumption riding on days-to-hours equivalence."""
+    cutoff = (_utc_naive_now() - timedelta(hours=hours)).isoformat()
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT * FROM saves WHERE created_at >= ? ORDER BY created_at DESC",
+            (cutoff,),
+        ).fetchall()
+
+
 def get_tags_for_shortcodes(shortcodes: list[str]) -> dict[str, list[str]]:
     if not shortcodes:
         return {}

@@ -54,3 +54,41 @@ def test_nightly_empty_run_returns_empty_lists(monkeypatch):
     assert body["marked_gate_expired"] == []
     assert body["marked_archived"] == []
     assert body["cookie_alert"] == {"cookie_health": "ok", "alert_sent": False}
+
+
+def test_daily_digest_rejects_bad_secret(monkeypatch):
+    client = _client(monkeypatch)
+    resp = client.post("/daily-digest", json={"secret": "wrong"})
+    assert resp.status_code == 401
+
+
+def test_daily_digest_runs_and_reports(monkeypatch):
+    from app import digest
+    monkeypatch.setattr(digest, "NOTION_PARENT_PAGE_ID", "parent-page-id")
+    client = _client(monkeypatch)
+
+    store.insert_processing("HTTPDIGEST1", "https://www.instagram.com/reel/HTTPDIGEST1/")
+    store.update_save(
+        "HTTPDIGEST1", status="done",
+        extraction_json='{"main_point": "a daily point", "topic_tags": ["sleep"], "priority": "High", "value_score": 5}',
+    )
+
+    resp = client.post("/daily-digest", json={"secret": "test-secret"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["save_count"] == 1
+    assert body["high_priority_count"] == 1
+    assert body["notion_page"] is not None
+    assert "a daily point" in body["markdown"]
+
+
+def test_daily_digest_empty_day_still_succeeds(monkeypatch):
+    from app import digest
+    monkeypatch.setattr(digest, "NOTION_PARENT_PAGE_ID", "parent-page-id")
+    client = _client(monkeypatch)
+
+    resp = client.post("/daily-digest", json={"secret": "test-secret"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["save_count"] == 0
+    assert "Nothing saved today." in body["markdown"]

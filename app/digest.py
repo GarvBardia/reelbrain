@@ -17,8 +17,15 @@ from app.store import _utc_naive_now
 logger = logging.getLogger("reelbrain.digest")
 
 NOTION_PARENT_PAGE_ID = os.environ.get("NOTION_PARENT_PAGE_ID", "").strip()
+NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "").strip()
+NTFY_BASE_URL = "https://ntfy.sh"
+NTFY_TIMEOUT_SECONDS = 10.0
 
 DIGEST_DAYS = 7
+DAILY_DIGEST_HOURS = 24
+DAILY_DIGEST_TOP_TOPICS = 3
+DAILY_TITLE_MAX_LEN = 80
+DAILY_PRIORITY_ORDER = ["High", "Medium", "Low"]
 
 
 def collect_week() -> dict:
@@ -160,4 +167,179 @@ def run() -> dict:
         "save_count": len(data["saves"]),
         "ai_summary_included": ai_summary is not None,
         "notion_page": page,
+    }
+
+
+# --- Daily reflection digest ---------------------------------------------------
+#
+# Same delivery mechanism as the weekly digest (Notion page under
+# NOTION_PARENT_PAGE_ID), plus an ntfy.sh push if NTFY_TOPIC is configured
+# (weekly digest itself doesn't use ntfy today — only the cookie-health alert
+# in app/alerts.py does; see PROGRESS.md). A second, independent scheduled
+# job — see SCHEDULING.md — not a replacement for the weekly one.
+
+
+def _clean_title(main_point: str, max_len: int = DAILY_TITLE_MAX_LEN) -> str:
+    """Collapses whitespace/newlines (raw Instagram captions are often full of
+    them) and truncates to a short heading. Never the raw caption dump — for a
+    degraded/placeholder row, main_point IS the caption, so this is the one
+    place that keeps even that case readable as a digest entry."""
+    text = " ".join((main_point or "").split())
+    if len(text) <= max_len:
+        return text
+    return text[:max_len].rstrip() + "…"
+
+
+def collect_day() -> dict:
+    """Past-24-hours saves, each carrying priority/topics/main_point parsed
+    from extraction_json — the daily digest's data source."""
+    rows = store.get_saves_since_hours(hours=DAILY_DIGEST_HOURS)
+    saves = []
+    for row in rows:
+        extraction = {}
+        if row["extraction_json"]:
+            try:
+                extraction = json.loads(row["extraction_json"])
+            except (json.JSONDecodeError, AttributeError):
+                extraction = {}
+        main_point = extraction.get("main_point") or row["caption"] or row["permalink"]
+        saves.append({
+            "shortcode": row["shortcode"],
+            "title": _clean_title(main_point),
+            "main_point": main_point,
+            "topics": extraction.get("topic_tags") or [],
+            "priority": extraction.get("priority") or "Low",
+            "url": row["notion_page_url"] or row["permalink"],
+        })
+    return {"saves": saves}
+
+
+def _daily_synthesis_line(saves: list[dict]) -> str:
+    total = len(saves)
+    high_count = sum(1 for s in saves if s["priority"] == "High")
+
+    topic_counts: dict[str, int] = {}
+    for save in saves:
+        for topic in save["topics"]:
+            topic_counts[topic] = topic_counts.get(topic, 0) + 1
+    top_topics = [
+        topic for topic, _count in
+        sorted(topic_counts.items(), key=lambda kv: -kv[1])[:DAILY_DIGEST_TOP_TOPICS]
+    ]
+
+    line = f"{total} {'reel' if total == 1 else 'reels'} saved today"
+    if high_count:
+        line += f", {high_count} flagged High priority"
+    if top_topics:
+        line += f" — common themes: {', '.join(top_topics)}"
+    return line + "."
+
+
+def _format_daily_entry(save: dict) -> str:
+    topics_part = ", ".join(save["topics"]) if save["topics"] else "no topics"
+    line = f"- **{save['title']}**"
+    if save["main_point"] and save["main_point"] != save["title"]:
+        line += f" — {save['main_point']}"
+    line += f" — _{topics_part}_ — [Open reel]({save['url']})"
+    return line
+
+
+def render_daily_markdown(data: dict) -> str:
+    """Reads like something worth reading, not a raw dump: a one-line
+    synthesis up top, then entries grouped by Priority (High first). Zero
+    saves today -> a short honest note, not an empty or broken digest (see
+    PROGRESS.md for why: a "nothing happened" day is itself informative,
+    and skipping delivery silently would look identical to the job failing)."""
+    day_of = _utc_naive_now().date().isoformat()
+    lines = [f"# Daily reflection — {day_of}", ""]
+
+    saves = data["saves"]
+    if not saves:
+        lines.append("Nothing saved today.")
+        return "\n".join(lines) + "\n"
+
+    lines.append(_daily_synthesis_line(saves))
+    lines.append("")
+
+    by_priority: dict[str, list[dict]] = {p: [] for p in DAILY_PRIORITY_ORDER}
+    for save in saves:
+        by_priority.setdefault(save["priority"], []).append(save)
+
+    for priority in DAILY_PRIORITY_ORDER:
+        entries = by_priority.get(priority) or []
+        if not entries:
+            continue
+        lines.append(f"## {priority} priority")
+        lines.append("")
+        for save in entries:
+            lines.append(_format_daily_entry(save))
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def create_daily_notion_page(markdown: str, has_saves: bool) -> Optional[dict]:
+    """Same mechanism as the weekly digest's create_notion_page: a page
+    directly under NOTION_PARENT_PAGE_ID, not in a database."""
+    if not NOTION_PARENT_PAGE_ID:
+        logger.warning("NOTION_PARENT_PAGE_ID not set — daily digest not written to Notion")
+        return None
+    day_of = _utc_naive_now().date().isoformat()
+    title_prefix = "🌙 Daily reflection" if has_saves else "🌙 Daily reflection (nothing saved)"
+    try:
+        client = notion_writer._client()
+        page = client.pages.create(
+            parent={"type": "page_id", "page_id": NOTION_PARENT_PAGE_ID},
+            properties={"title": {"title": notion_writer._rich_text(f"{title_prefix} — {day_of}")}},
+            children=_markdown_to_blocks(markdown),
+        )
+        return {"page_id": page["id"], "url": page["url"]}
+    except Exception:  # noqa: BLE001 - fail soft; digest markdown still exists
+        logger.exception("daily digest Notion write failed")
+        return None
+
+
+def send_daily_ntfy(save_count: int, synthesis_line: Optional[str]) -> bool:
+    """POST to ntfy.sh/{NTFY_TOPIC} — same topic as the cookie-health alert
+    (app/alerts.py), since that's the only ntfy topic this app configures.
+    Best-effort: returns False (never raises) if NTFY_TOPIC isn't set or the
+    request fails."""
+    if not NTFY_TOPIC:
+        return False
+    try:
+        import httpx
+
+        if save_count == 0:
+            title = "ReelBrain: nothing saved today"
+            body = "No reels saved in the last 24 hours."
+        else:
+            title = f"ReelBrain: {save_count} saved today"
+            body = synthesis_line or f"{save_count} reels saved today."
+        response = httpx.post(
+            f"{NTFY_BASE_URL}/{NTFY_TOPIC}",
+            content=body.encode("utf-8"),
+            headers={"Title": title, "Tags": "clipboard,memo"},
+            timeout=NTFY_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        return True
+    except Exception:  # noqa: BLE001 - best-effort notification, never the critical path
+        logger.warning("daily digest ntfy.sh push failed", exc_info=True)
+        return False
+
+
+def run_daily() -> dict:
+    data = collect_day()
+    saves = data["saves"]
+    markdown = render_daily_markdown(data)
+    page = create_daily_notion_page(markdown, has_saves=bool(saves))
+    high_count = sum(1 for s in saves if s["priority"] == "High")
+    synthesis_line = _daily_synthesis_line(saves) if saves else None
+    ntfy_sent = send_daily_ntfy(save_count=len(saves), synthesis_line=synthesis_line)
+    return {
+        "markdown": markdown,
+        "save_count": len(saves),
+        "high_priority_count": high_count,
+        "notion_page": page,
+        "ntfy_sent": ntfy_sent,
     }

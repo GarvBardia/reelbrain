@@ -1,5 +1,55 @@
 # PROGRESS.md — hardening/deployment session log
 
+## Daily reflection digest added — here's exactly when/where to look for it
+
+New: a daily digest alongside the existing weekly one (`app/digest.py`'s `run_daily()`),
+grouped by Priority (High first), with a synthesis line up top ("X reels saved today,
+Y flagged High priority, common themes: ..."). Mocked tests only, 320 tests passing.
+
+**⏰ When it fires, once you add the GitHub Actions workflow (see below):**
+`.github/workflows/daily-digest.yml`'s cron is `0 16 * * *` = **16:00 UTC = 21:30 IST,
+every evening.** GitHub's schedule is best-effort (can lag a few minutes on busy
+runners) but that's the target time.
+
+**📍 Where to look:**
+- **Notion**, under your parent page: a new page titled
+  **`🌙 Daily reflection — <today's date>`** (or **`🌙 Daily reflection (nothing saved)
+  — <date>`** if nothing was captured that day — see the zero-saves decision below).
+- **Your phone**, if `NTFY_TOPIC` is set: a push titled `ReelBrain: N saved today` (or
+  `ReelBrain: nothing saved today`) — same ntfy topic as the cookie-health alert, no
+  new setup needed if you already did that.
+
+**⚠️ REQUIRED MANUAL SETUP before it actually fires — this is not automatic yet:**
+add `.github/workflows/daily-digest.yml` yourself (exact YAML in SCHEDULING.md's new
+"Daily reflection digest" section) using the same `RENDER_URL`/`CAPTURE_SECRET`
+repository secrets nightly already uses. Until that file exists, the only way to run
+it is manually: `python scripts/daily_digest.py`, or `POST /daily-digest` directly.
+
+**Honest finding while investigating the trigger mechanism (asked to confirm this,
+not assume it):** the weekly digest's own docstring claims it should be "scheduled
+weekly... the same way as the nightly job," but that was never actually built —
+there's no `/weekly-digest` endpoint and no `.github/workflows/*.yml` committed
+anywhere (nightly's workflow file isn't committed either, per SCHEDULING.md's own
+instructions — you add that one yourself too). Today, weekly digest is a
+manual-only `python scripts/weekly_digest.py` run. The **daily** digest, by
+contrast, gets a real `POST /daily-digest` endpoint (secret-protected, mirrors
+`/nightly` exactly) so it CAN be automated the moment you add the workflow file.
+Same pattern would work for weekly if you want that automated too — not done here
+since it wasn't what was asked.
+
+**Zero-saves choice (asked to note, not just decide silently):** sends a short
+"Nothing saved today" note rather than skipping delivery entirely. Reasoning: a
+day with nothing saved is itself informative (the habit lapsed, or you were busy),
+and silently skipping would look identical to the job having failed or never
+fired — you'd have no way to tell "nothing happened" from "it's broken" without
+checking logs. A short note costs nothing and removes that ambiguity.
+
+**Also new:** `store.get_saves_since_hours(hours=24)` — a dedicated, exactly-24-hour
+window (separate from the weekly digest's `get_saves_since(days=N)`, not just
+`days=1`, so the boundary is directly testable rather than an assumption).
+
+---
+
 ## URGENT: silent extraction failures now logged — root cause still open
 
 **Reported:** reels with a successfully-downloaded video (confirmed via Render's

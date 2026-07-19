@@ -87,3 +87,51 @@ keep-alive ping being active at 3am — expect that one request to take the cold
 Same as the keep-alive recipe but: method POST, header `Content-Type: application/json`,
 body `{"secret": "<CAPTURE_SECRET>"}`, schedule once daily. Works, but your secret then
 lives in cron-job.org's dashboard — GitHub Actions secrets are the tidier home for it.
+
+## Daily reflection digest (evening)
+
+**Note on the weekly digest first, since this was checked directly:** `scripts/
+weekly_digest.py`'s own docstring says to "schedule weekly... the same way as the
+nightly job," but that was never actually wired up — there's no `POST /weekly-digest`
+endpoint and no `.github/workflows/*.yml` committed anywhere in this repo (nightly's
+own workflow isn't committed either — per the nightly section above, you add that
+file yourself). Today, the weekly digest is a manual `python scripts/weekly_digest.py`
+run only. Worth doing the same for it if you want it automated too — not done here,
+since it wasn't what was asked.
+
+The **daily** digest, by contrast, DOES get a real endpoint: `POST /daily-digest`
+(secret-protected, same body shape as `/nightly` — `{"secret": "..."}"`), running
+`app.digest.run_daily()`. Wire it up exactly like nightly, on its own schedule:
+
+1. Reuses the same `RENDER_URL` / `CAPTURE_SECRET` repository secrets as nightly —
+   no new secrets needed if you already set those up.
+2. Add `.github/workflows/daily-digest.yml`:
+
+```yaml
+name: daily-digest
+on:
+  schedule:
+    - cron: "0 16 * * *"   # 16:00 UTC = 21:30 IST — evening
+  workflow_dispatch: {}      # allows manual "Run workflow" for testing
+jobs:
+  daily-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger daily reflection digest
+        run: |
+          curl -sf -X POST "$RENDER_URL/daily-digest" \
+            -H "Content-Type: application/json" \
+            -d "{\"secret\": \"$CAPTURE_SECRET\"}"
+        env:
+          RENDER_URL: ${{ secrets.RENDER_URL }}
+          CAPTURE_SECRET: ${{ secrets.CAPTURE_SECRET }}
+```
+
+3. Test it once via the **Actions** tab → daily-digest → **Run workflow**. Check for
+   a new Notion page titled `🌙 Daily reflection — <today's date>` under your parent
+   page (or `🌙 Daily reflection (nothing saved) — <date>` if nothing was captured
+   that day), and a phone push if `NTFY_TOPIC` is set (same topic as the cookie-health
+   alert — see COOKIES.md).
+
+This is a **second, independent** scheduled job — it does not replace `/nightly` or
+the weekly digest script; all three can run on their own schedules.

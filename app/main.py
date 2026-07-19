@@ -16,7 +16,7 @@ load_dotenv()
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from app import fetcher, gemini_pipe, nightly, notion_writer, store
+from app import digest, fetcher, gemini_pipe, nightly, notion_writer, store
 from app.models import AttachRequest, CaptureRequest, Extraction, NightlyRequest, ReelData
 
 logger = logging.getLogger("reelbrain")
@@ -382,6 +382,19 @@ def nightly_endpoint(req: NightlyRequest, request: Request) -> JSONResponse:
     _check_rate_limit(request)
     _check_secret(req.secret)
     result = nightly.run()
+    return JSONResponse(status_code=200, content=result)
+
+
+@app.post("/daily-digest")
+def daily_digest_endpoint(req: NightlyRequest, request: Request) -> JSONResponse:
+    """HTTP trigger for the daily reflection digest (see PROGRESS.md) — same
+    mechanism as /nightly (external scheduler, no built-in Render cron), on
+    its own evening cron schedule; see SCHEDULING.md. A second, independent
+    scheduled job — does not replace /nightly or the weekly digest script.
+    Reuses NightlyRequest since the body shape ({secret}) is identical."""
+    _check_rate_limit(request)
+    _check_secret(req.secret)
+    result = digest.run_daily()
     return JSONResponse(status_code=200, content=result)
 
 
