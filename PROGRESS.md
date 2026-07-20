@@ -1,5 +1,23 @@
 # PROGRESS.md — hardening/deployment session log
 
+## Batch-retry script for pre-FIX-1 raw-caption rows — ready for YOU to run
+
+`python scripts/batch_retry_stale_titles.py --dry-run` (verified live against real
+Notion data) found **11 candidates** — rows whose Title is still the raw caption
+dump and would benefit from FIX 1's caption-only extraction: DaS3SALCYAo,
+Da7iYBuiSEO, DZrQ7dMRx0m, DaQIJuYCMkv, DaloTsYCBGo, DaYwajdCPOX, DZKfop6R30d,
+DZVsGZGt8dd, DaRbl6qJxRM, DaxA0CdxSkW, DajFASZODlj. (Not 13: DZSFkNppVW_ was
+already fixed live tonight, and Dap3IoNo4Kt / DatJq40lVD_ don't use "comment …"
+phrasing so the agreed heuristic deliberately skips them — retry those two by
+hand if wanted.) 📷 Photo — manual rows are excluded by design: no caption exists
+for them, a retry can never improve them. Drop the `--dry-run` flag to run for
+real — same spacing/daily-cap/progress-file discipline as bulk_import.py, safely
+re-runnable, ~4 min for 11 rows at 20s spacing. **After running it, worth
+spot-checking a few of the 11 for quality, same as tonight's DZSFkNppVW_
+before/after.**
+
+---
+
 ## Four fixes, each verified against real live outcomes (not just HTTP 200s)
 
 All four deployed (commits `548b348`, `2c6f886`, `364c415` + Notion-side cleanup),
