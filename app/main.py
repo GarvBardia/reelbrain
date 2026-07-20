@@ -280,16 +280,24 @@ def capture(req: CaptureRequest, request: Request, background_tasks: BackgroundT
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    # BUILD_SPEC 1.1: dedupe on shortcode existing in SQLite at all — do not
-    # re-process, even if that row is a failed/degraded one. Re-running a failed
-    # capture is what POST /retry is for, not re-pasting the same URL.
+    # BUILD_SPEC 1.1: dedupe on shortcode existing at all — do not re-process,
+    # even if that row is a failed/degraded one. Re-running a failed capture is
+    # what POST /retry is for, not re-pasting the same URL.
+    #
+    # Checks local SQLite first, then falls back to Notion (the durable source)
+    # — the same pattern /retry and /attach already use. Local-only dedupe
+    # caused a REAL duplicate (DabVtQoCI2p, two identical Notion pages): a
+    # redeploy wiped the local row between two shares of the same post, and the
+    # second share sailed past the dedupe. Fail-open on Notion errors: if the
+    # fallback lookup itself fails, capture proceeds as new rather than
+    # rejecting a save over a Notion hiccup.
     #
     # BUILD_SPEC 2.2 (comment-gate assist): /capture responds before the gate is
     # even known (fetch+extraction happens in the background), so there's no way
     # to surface the keyword on the *first* share. Re-sharing the same link once
     # the pipeline has finished hits this dedupe path — that's where the keyword
     # and permalink come back, for the Shortcut to act on.
-    existing = store.get_by_shortcode(shortcode)
+    existing = store.get_by_shortcode_or_notion(shortcode)
     if existing:
         return JSONResponse(
             status_code=200,

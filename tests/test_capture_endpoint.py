@@ -113,3 +113,63 @@ def test_capture_dedupe_surfaces_gate_keyword_for_comment_gate_assist(
     assert body["capture_status"] == "awaiting_dm"
     assert body["gate_keyword"] == "SEND"
     assert body["permalink"] == GATED_URL
+
+
+# --- FIX: dedupe falls back to Notion (real DabVtQoCI2p duplicate incident) -----
+
+def _saves_page_for_dedupe(shortcode):
+    return {
+        "id": f"pg-{shortcode}", "url": f"https://notion.so/pg-{shortcode}",
+        "properties": {
+            "Shortcode": {"rich_text": [{"plain_text": shortcode}]},
+            "Title": {"title": [{"plain_text": "An existing save"}]},
+            "My note": {"rich_text": []},
+            "Status": {"select": {"name": "📥 Inbox"}},
+            "Reel URL": {"url": f"https://www.instagram.com/reel/{shortcode}/"},
+            "Gate keyword": {"rich_text": [{"plain_text": "SEND"}]},
+        },
+    }
+
+
+def test_capture_dedupes_via_notion_when_local_sqlite_wiped(
+    monkeypatch, tutorial_reel, tutorial_extraction
+):
+    """The exact incident: a redeploy wiped local SQLite between two shares of
+    the same post — the second share must come back 'duplicate' from the
+    Notion fallback, NOT create a second page."""
+    from tests.test_notion_fallback import _FilteringDataSources
+
+    client = _client(monkeypatch, tutorial_reel, tutorial_extraction)
+    fake = FakeClient()
+    fake.data_sources = _FilteringDataSources([_saves_page_for_dedupe("DUPWIPE01")])
+    monkeypatch.setattr(notion_writer, "_client", lambda: fake)
+    # local SQLite is empty (fresh tmp_db) — the wiped-disk condition
+
+    resp = client.post("/capture", json={
+        "url": "https://www.instagram.com/reel/DUPWIPE01/", "note": None, "secret": "test-secret",
+    })
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "duplicate"
+    assert body["url"] == "https://notion.so/pg-DUPWIPE01"
+    assert body["gate_keyword"] == "SEND"
+    assert len(fake.pages.created) == 0  # crucially: no second page
+
+
+def test_capture_proceeds_as_new_when_notion_lookup_fails(
+    monkeypatch, tutorial_reel, tutorial_extraction
+):
+    """Fail-open: a Notion hiccup during the dedupe lookup must not reject the
+    capture — it proceeds as new (the pre-fix behavior, worst case)."""
+    client = _client(monkeypatch, tutorial_reel, tutorial_extraction)
+
+    def _boom():
+        raise RuntimeError("notion down")
+    monkeypatch.setattr(notion_writer, "_client", _boom)
+
+    resp = client.post("/capture", json={
+        "url": "https://www.instagram.com/reel/NEWROW01/", "note": None, "secret": "test-secret",
+    })
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "processing"
