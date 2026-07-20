@@ -1,5 +1,35 @@
 # PROGRESS.md — hardening/deployment session log
 
+## Photo/carousel recovery: VIABLE from home IP — the audit's biggest gap is solvable
+
+**The live test result, definitively:** Instagram DOES serve OG caption tags to a
+residential IP — but only to link-preview bot user-agents (`facebookexternalhit`,
+`Twitterbot`). The browser UA gets a tag-less page even from home, so the block was
+never purely IP-based; it's IP+UA. Proven on real placeholder row `Dak-1xRnPXL`:
+recovered its actual caption ("Comment "agent" to get my free Claude code guides &
+skills", creator chase.h.ai). **The carousel problem is NOT a dead end.**
+
+`scripts/recover_photo_captions.py` (LOCAL-ONLY, never deployed) is built and
+dry-run-verified: **14 candidate rows**. It fetches each placeholder row's caption
+with the bot UA, runs the normal caption-only extraction, and updates the Notion row
+(title/topics/value/priority/gate fields + rebuilt body); Status honestly stays
+`📷 Photo — manual`. **Run it with: `python scripts/recover_photo_captions.py`**
+(~3 min for 14 rows at 10s spacing; safely re-runnable).
+
+Live end-to-end caveat, reported honestly: during the one-row full test, Gemini's
+free tier was in a sustained 503 spike, so the final extraction step couldn't be
+verified end-to-end tonight — the OG fetch and Notion write mechanics are proven,
+and the script was hardened from that exact failure (a degraded extraction is never
+written and stays retryable; the one row written before that guard gets re-picked).
+If your run shows rows erroring with "extraction degraded", just re-run later —
+that's Gemini load, not the script.
+
+**Also fixed (deployed):** `/capture` dedupe now falls back to Notion — the
+`DabVtQoCI2p` duplicate can't recur. (That existing duplicate pair still needs one
+page archived by hand, or ask and I'll do it via the API.)
+
+---
+
 ## Batch-retry script for pre-FIX-1 raw-caption rows — ready for YOU to run
 
 `python scripts/batch_retry_stale_titles.py --dry-run` (verified live against real
