@@ -314,6 +314,108 @@ def test_run_daily_zero_saves_still_writes_a_notion_note(monkeypatch):
     assert "nothing saved" in call["properties"]["title"]["title"][0]["text"]["content"]
 
 
+# --- FIX 2: digests are Notion-primary (ephemeral SQLite wipes made them lie) ---
+
+def _digest_page(shortcode, title, topics=(), priority="Low", value="3", status="📥 Inbox"):
+    return {
+        "id": f"pg-{shortcode}",
+        "url": f"https://notion.so/pg-{shortcode}",
+        "properties": {
+            "Shortcode": {"rich_text": [{"plain_text": shortcode}]},
+            "Title": {"title": [{"plain_text": title}]},
+            "Topics": {"multi_select": [{"name": t} for t in topics]},
+            "Priority": {"select": {"name": priority}},
+            "Value score": {"select": {"name": value}},
+            "Status": {"select": {"name": status}},
+            "Reel URL": {"url": f"https://www.instagram.com/reel/{shortcode}/"},
+        },
+    }
+
+
+class _DigestDS:
+    def __init__(self, pages):
+        self.pages = pages
+        self.filters = []
+
+    def query(self, **kwargs):
+        self.filters.append(kwargs.get("filter"))
+        return {"results": self.pages, "has_more": False}
+
+
+def test_collect_day_prefers_notion_over_empty_local_sqlite(monkeypatch):
+    """The exact incident: SQLite wiped by a redeploy, Notion still has the
+    day's saves — the digest must show them, not 'nothing saved'."""
+    client = FakeClient()
+    client.data_sources = _DigestDS([
+        _digest_page("NT1", "A real Notion-sourced point", topics=("mcp",), priority="High"),
+    ])
+    monkeypatch.setattr(notion_writer, "_client", lambda: client)
+    # local SQLite deliberately empty (fresh tmp_db) — the wiped-disk scenario
+
+    data = digest.collect_day()
+
+    assert len(data["saves"]) == 1
+    save = data["saves"][0]
+    assert save["shortcode"] == "NT1"
+    assert save["main_point"] == "A real Notion-sourced point"
+    assert save["topics"] == ["mcp"]
+    assert save["priority"] == "High"
+    assert save["url"] == "https://notion.so/pg-NT1"
+    # and the query was a created_time window filter
+    assert client.data_sources.filters[0]["timestamp"] == "created_time"
+    assert "on_or_after" in client.data_sources.filters[0]["created_time"]
+
+
+def test_collect_week_prefers_notion_and_groups_by_topic(monkeypatch):
+    client = FakeClient()
+    client.data_sources = _DigestDS([
+        _digest_page("WKN1", "Point one", topics=("sleep", "health")),
+        _digest_page("WKN2", "Point two", topics=("sleep",)),
+    ])
+    monkeypatch.setattr(notion_writer, "_client", lambda: client)
+
+    data = digest.collect_week()
+
+    assert {s["shortcode"] for s in data["saves"]} == {"WKN1", "WKN2"}
+    assert len(data["by_topic"]["sleep"]) == 2
+    assert data["saves"][0]["creator"] == "(unknown)"  # relation not resolvable post-wipe
+
+
+def test_collect_day_falls_back_to_local_when_notion_errors(monkeypatch):
+    def _boom():
+        raise RuntimeError("notion down")
+    monkeypatch.setattr(notion_writer, "_client", _boom)
+    _seed_daily_save("FB1", ["sleep"], "Local fallback point", priority="High")
+
+    data = digest.collect_day()
+    assert [s["shortcode"] for s in data["saves"]] == ["FB1"]
+
+
+def test_collect_day_notion_empty_and_local_empty_is_genuinely_zero(monkeypatch):
+    client = FakeClient()  # empty query results
+    monkeypatch.setattr(notion_writer, "_client", lambda: client)
+    assert digest.collect_day() == {"saves": []}
+
+
+def test_find_saves_pages_since_paginates(monkeypatch):
+    calls = []
+
+    class _PagedDS:
+        def query(self, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                return {"results": [_digest_page("P1", "one")], "has_more": True, "next_cursor": "c2"}
+            return {"results": [_digest_page("P2", "two")], "has_more": False}
+
+    client = FakeClient()
+    client.data_sources = _PagedDS()
+    monkeypatch.setattr(notion_writer, "_client", lambda: client)
+
+    pages = notion_writer.find_saves_pages_since("2026-07-18T00:00:00")
+    assert [notion_writer.extract_digest_fields(p)["shortcode"] for p in pages] == ["P1", "P2"]
+    assert calls[1]["start_cursor"] == "c2"
+
+
 def test_run_daily_survives_notion_failure(monkeypatch):
     def _boom():
         raise RuntimeError("notion down")

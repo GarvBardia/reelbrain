@@ -147,6 +147,51 @@ def find_awaiting_dm_pages() -> list[dict]:
     )["results"]
 
 
+def find_saves_pages_since(created_on_or_after_iso: str) -> list[dict]:
+    """Every Saves page created on/after the given ISO timestamp, newest first,
+    fully paginated. Used by the digests (FIX 2, see PROGRESS.md): Render's
+    ephemeral disk wipes local SQLite on every redeploy, which made digests
+    report false 'nothing saved' days — Notion is the durable source, so the
+    digest windows now come from here."""
+    client = _client()
+    saves_ds_id = _resolve_data_source_id(client, NOTION_DB_ID)
+    pages: list[dict] = []
+    cursor: Optional[str] = None
+    while True:
+        kwargs: dict = {
+            "data_source_id": saves_ds_id,
+            "filter": {
+                "timestamp": "created_time",
+                "created_time": {"on_or_after": created_on_or_after_iso},
+            },
+            "sorts": [{"timestamp": "created_time", "direction": "descending"}],
+        }
+        if cursor:
+            kwargs["start_cursor"] = cursor
+        response = client.data_sources.query(**kwargs)
+        pages.extend(response["results"])
+        if not response.get("has_more"):
+            return pages
+        cursor = response.get("next_cursor")
+
+
+def extract_digest_fields(page: dict) -> dict:
+    """The digest-relevant subset of a Saves page's properties. Title is the
+    extraction's main_point (that's exactly what _build_properties writes), so
+    it doubles as the digest entry's summary line."""
+    props = page.get("properties", {})
+    return {
+        "shortcode": _rt_text((props.get("Shortcode") or {}).get("rich_text")),
+        "title": _rt_text((props.get("Title") or {}).get("title")),
+        "topics": [t["name"] for t in (props.get("Topics") or {}).get("multi_select", [])],
+        "priority": (((props.get("Priority") or {}).get("select")) or {}).get("name", ""),
+        "value_score": (((props.get("Value score") or {}).get("select")) or {}).get("name", ""),
+        "status_label": (((props.get("Status") or {}).get("select")) or {}).get("name", ""),
+        "permalink": (props.get("Reel URL") or {}).get("url") or "",
+        "page_url": page.get("url", ""),
+    }
+
+
 def _build_properties(
     reel: ReelData,
     extraction: Optional[Extraction],

@@ -28,15 +28,32 @@ DAILY_TITLE_MAX_LEN = 80
 DAILY_PRIORITY_ORDER = ["High", "Medium", "Low"]
 
 
-def collect_week() -> dict:
-    """Past-7-days saves grouped by topic and creator."""
+def _notion_pages_since(hours: Optional[int] = None, days: Optional[int] = None) -> Optional[list[dict]]:
+    """Saves pages in the window, straight from Notion (the durable source —
+    FIX 2, see PROGRESS.md: local SQLite is wiped by every Render redeploy,
+    which made digests report false 'nothing saved' days). Returns None on any
+    Notion failure so callers can fall back to the local rows instead of
+    producing an empty digest over a transient API error."""
+    from datetime import timedelta
+
+    if hours is not None:
+        cutoff = _utc_naive_now() - timedelta(hours=hours)
+    else:
+        cutoff = _utc_naive_now() - timedelta(days=days or DIGEST_DAYS)
+    try:
+        return notion_writer.find_saves_pages_since(cutoff.isoformat())
+    except Exception:  # noqa: BLE001 - fall back to local rather than an empty digest
+        logger.warning("Notion digest query failed — falling back to local SQLite", exc_info=True)
+        return None
+
+
+def _collect_week_local() -> dict:
+    """The original SQLite-based weekly collection — now the fallback path."""
     rows = store.get_saves_since(days=DIGEST_DAYS)
     shortcodes = [row["shortcode"] for row in rows]
     tags_by_shortcode = store.get_tags_for_shortcodes(shortcodes)
 
     saves = []
-    by_topic: dict[str, list[dict]] = {}
-    by_creator: dict[str, list[dict]] = {}
     for row in rows:
         main_point = None
         if row["extraction_json"]:
@@ -44,20 +61,55 @@ def collect_week() -> dict:
                 main_point = json.loads(row["extraction_json"]).get("main_point")
             except (json.JSONDecodeError, AttributeError):
                 pass
-        save = {
+        saves.append({
             "shortcode": row["shortcode"],
             "main_point": main_point or row["caption"] or row["permalink"],
             "creator": row["creator"] or "(unknown)",
             "status": row["status"],
             "notion_page_url": row["notion_page_url"],
             "tags": tags_by_shortcode.get(row["shortcode"], []),
-        }
-        saves.append(save)
+        })
+    return _group_week(saves)
+
+
+def _group_week(saves: list[dict]) -> dict:
+    by_topic: dict[str, list[dict]] = {}
+    by_creator: dict[str, list[dict]] = {}
+    for save in saves:
         for tag in save["tags"]:
             by_topic.setdefault(tag, []).append(save)
         by_creator.setdefault(save["creator"], []).append(save)
-
     return {"saves": saves, "by_topic": by_topic, "by_creator": by_creator}
+
+
+def collect_week() -> dict:
+    """Past-7-days saves grouped by topic and creator. Notion-primary (durable);
+    falls back to local SQLite when Notion errors or comes back empty while
+    local rows exist (a Notion misconfiguration must not blank the digest)."""
+    pages = _notion_pages_since(days=DIGEST_DAYS)
+    if pages:
+        saves = []
+        for page in pages:
+            fields = notion_writer.extract_digest_fields(page)
+            if not fields["shortcode"]:
+                continue
+            # Creator is a Notion relation (not cheaply resolvable) — recover it
+            # from the local row when one survives; "(unknown)" after a wipe.
+            row = store.get_by_shortcode(fields["shortcode"])
+            creator = row["creator"] if row and row["creator"] else "(unknown)"
+            saves.append({
+                "shortcode": fields["shortcode"],
+                "main_point": fields["title"] or fields["permalink"],
+                "creator": creator,
+                "status": fields["status_label"],
+                "notion_page_url": fields["page_url"],
+                "tags": fields["topics"],
+            })
+        return _group_week(saves)
+    local = _collect_week_local()
+    if pages is not None and not local["saves"]:
+        return _group_week([])  # genuinely nothing saved this week
+    return local
 
 
 def try_ai_summary(data: dict) -> Optional[str]:
@@ -190,9 +242,8 @@ def _clean_title(main_point: str, max_len: int = DAILY_TITLE_MAX_LEN) -> str:
     return text[:max_len].rstrip() + "…"
 
 
-def collect_day() -> dict:
-    """Past-24-hours saves, each carrying priority/topics/main_point parsed
-    from extraction_json — the daily digest's data source."""
+def _collect_day_local() -> dict:
+    """The original SQLite-based daily collection — now the fallback path."""
     rows = store.get_saves_since_hours(hours=DAILY_DIGEST_HOURS)
     saves = []
     for row in rows:
@@ -212,6 +263,34 @@ def collect_day() -> dict:
             "url": row["notion_page_url"] or row["permalink"],
         })
     return {"saves": saves}
+
+
+def collect_day() -> dict:
+    """Past-24-hours saves for the daily digest. Notion-primary (durable —
+    FIX 2: a redeploy wipes local SQLite mid-day, which made evening digests
+    falsely report 'nothing saved'); falls back to local SQLite when Notion
+    errors or comes back empty while local rows exist."""
+    pages = _notion_pages_since(hours=DAILY_DIGEST_HOURS)
+    if pages:
+        saves = []
+        for page in pages:
+            fields = notion_writer.extract_digest_fields(page)
+            if not fields["shortcode"]:
+                continue
+            main_point = fields["title"] or fields["permalink"]
+            saves.append({
+                "shortcode": fields["shortcode"],
+                "title": _clean_title(main_point),
+                "main_point": main_point,
+                "topics": fields["topics"],
+                "priority": fields["priority"] or "Low",
+                "url": fields["page_url"] or fields["permalink"],
+            })
+        return {"saves": saves}
+    local = _collect_day_local()
+    if pages is not None and not local["saves"]:
+        return {"saves": []}  # genuinely nothing saved today
+    return local
 
 
 def _daily_synthesis_line(saves: list[dict]) -> str:
