@@ -514,6 +514,67 @@ def test_run_extraction_proceeds_normally_when_file_size_matches(monkeypatch, tm
     assert result.main_point == "fine"
 
 
+# --- FIX 1: no-video path routes through the caption-only extraction ------------
+#
+# The main complaint: OG-recovered reels (video_path=None, caption present) were
+# storing the raw caption as the title with no Topics — the no-video branch went
+# straight to _degraded() instead of run_caption_only_extraction, which already
+# existed and works. Now it routes exactly like the no-audio branch.
+
+def test_no_video_with_caption_routes_to_caption_only_extraction(monkeypatch):
+    reel = ReelData(
+        shortcode="NOVIDCAP1", permalink="https://www.instagram.com/reel/NOVIDCAP1/",
+        video_path=None, caption=SUBSTANTIAL_CAPTION,
+    )
+    monkeypatch.setattr(
+        gemini_pipe, "_call_gemini_text_only",
+        lambda prompt: Extraction(
+            main_point="Synthesized title from caption", topic_tags=["sleep", "habits"],
+            value_score=4,
+        ).model_dump_json(),
+    )
+    monkeypatch.setattr(gemini_pipe, "_call_gemini", lambda *a, **kw: (_ for _ in ()).throw(
+        AssertionError("audio path must not run without a video")
+    ))
+
+    result = run_extraction(reel, note=None, taxonomy=[])
+
+    assert result.main_point == "Synthesized title from caption"  # NOT the raw caption
+    assert result.topic_tags == ["sleep", "habits"]
+    assert result.value_score == 4
+    assert result.priority == "High"
+
+
+def test_no_video_and_no_caption_still_falls_back_to_placeholder(monkeypatch):
+    reel = ReelData(
+        shortcode="NOVIDNOCAP1", permalink="https://www.instagram.com/reel/NOVIDNOCAP1/",
+        video_path=None, caption=None,
+    )
+
+    def _must_not_call(prompt):
+        raise AssertionError("no caption -> Gemini must not be called at all")
+
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_text_only", _must_not_call)
+
+    result = run_extraction(reel, note=None, taxonomy=[])
+    assert result.main_point == "No caption or transcript available."
+    assert result.content_type == "unknown"
+
+
+def test_no_video_thin_caption_still_falls_back_to_placeholder(monkeypatch):
+    reel = ReelData(
+        shortcode="NOVIDTHIN1", permalink="https://www.instagram.com/reel/NOVIDTHIN1/",
+        video_path=None, caption="too few words here",
+    )
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_text_only", lambda p: (_ for _ in ()).throw(
+        AssertionError("thin caption -> Gemini must not be called")
+    ))
+
+    result = run_extraction(reel, note=None, taxonomy=[])
+    assert result.main_point == "too few words here"  # honest placeholder, unchanged
+    assert result.content_type == "unknown"
+
+
 # --- no-audio-stream handling: video-only IG downloads (the actual root cause) --
 #
 # Real incident: ffmpeg exit 1 on a fully-downloaded, existing file. Root cause

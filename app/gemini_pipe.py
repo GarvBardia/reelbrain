@@ -257,13 +257,21 @@ def run_extraction(
     exception first — this must never be invisible again.
     """
     if not reel.video_path:
+        # FIX 1 (see PROGRESS.md): this branch used to go straight to the bare
+        # _degraded() placeholder — caption stored raw as the title, no Topics,
+        # flat value_score — even though run_caption_only_extraction already
+        # existed and demonstrably produces real Topics/value_score/synthesized
+        # titles from a caption alone (proven live on the no-audio path).
+        # Route through it whenever a caption exists, exactly like the no-audio
+        # branch below; run_caption_only_extraction itself falls back to the
+        # placeholder when the caption is missing or too thin to summarize.
         logger.warning(
-            "run_extraction: no video_path for %s — degrading to caption-only "
-            "(expected for an OG-tag-recovered reel; a problem if this reel "
-            "should have had a real video download)",
+            "run_extraction: no video_path for %s — running caption-only "
+            "extraction (expected for an OG-tag-recovered reel; a problem if "
+            "this reel should have had a real video download)",
             reel.shortcode,
         )
-        return _degraded(reel.caption)
+        return run_caption_only_extraction(reel.caption, reel.creator_username, note, taxonomy)
 
     size_issue = _check_video_file_size(reel.video_path, reel.expected_video_size)
     if size_issue:
