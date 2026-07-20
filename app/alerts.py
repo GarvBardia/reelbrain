@@ -115,6 +115,39 @@ def send_notion_alert(message: str) -> Optional[dict]:
         return None
 
 
+def send_gate_nudge(entries: list[dict]) -> bool:
+    """FIX 3 (see PROGRESS.md): one plain ntfy push listing rows stuck in
+    Awaiting DM for >24h — title + gate keyword each — so pending comment-gates
+    don't silently rot. Deliberately NOT any form of DM automation (bot-DMing
+    risks the burner account); just a reminder to go do the manual step.
+    Best-effort: returns False (never raises) if NTFY_TOPIC isn't set or the
+    request fails."""
+    if not NTFY_TOPIC or not entries:
+        return False
+    lines = []
+    for entry in entries:
+        keyword = entry.get("gate_keyword") or "?"
+        title = (entry.get("title") or entry.get("shortcode") or "(untitled)")[:70]
+        lines.append(f'- "{title}" — comment keyword: {keyword}')
+    message = (
+        f"{len(entries)} reel(s) awaiting your DM for over 24h:\n" + "\n".join(lines)
+    )
+    try:
+        import httpx
+
+        response = httpx.post(
+            f"{NTFY_BASE_URL}/{NTFY_TOPIC}",
+            content=message.encode("utf-8"),
+            headers={"Title": "ReelBrain: comment gates awaiting DM", "Tags": "hourglass_flowing_sand"},
+            timeout=NTFY_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        return True
+    except Exception:  # noqa: BLE001 - best-effort notification, never the critical path
+        logger.warning("gate-nudge ntfy push failed", exc_info=True)
+        return False
+
+
 def check_and_alert() -> dict:
     """Called from the nightly job. Fires at most once per calendar day while
     fetcher.cookie_health_status() reports "degraded"."""

@@ -189,3 +189,116 @@ def test_row_without_extraction_not_archived(monkeypatch):
     store.update_save("NOEXTRACT", status="failed")
     _backdate("NOEXTRACT", created_minutes_ago=60 * 24 * 60, updated_minutes_ago=60 * 24 * 60)
     assert nightly.archive_stale_low_value() == []
+
+
+# --- FIX 3: Awaiting-DM nudge (>24h -> one ntfy push, no repeats) ---------------
+
+def _awaiting_page(shortcode, hours_old, title="Some gated reel", keyword="SEND"):
+    from datetime import datetime, timedelta, timezone
+    created = (datetime.now(timezone.utc) - timedelta(hours=hours_old)).isoformat().replace("+00:00", "Z")
+    return {
+        "id": f"pg-{shortcode}", "url": f"https://notion.so/pg-{shortcode}",
+        "created_time": created,
+        "properties": {
+            "Shortcode": {"rich_text": [{"plain_text": shortcode}]},
+            "Title": {"title": [{"plain_text": title}]},
+            "My note": {"rich_text": []},
+            "Status": {"select": {"name": "⏳ Awaiting DM"}},
+            "Reel URL": {"url": f"https://www.instagram.com/reel/{shortcode}/"},
+            "Gate keyword": {"rich_text": [{"plain_text": keyword}]},
+        },
+    }
+
+
+def _nudge_setup(monkeypatch, pages, ntfy_result=True):
+    monkeypatch.setattr(notion_writer, "find_awaiting_dm_pages", lambda: pages)
+    sent_batches = []
+
+    def _fake_send(entries):
+        sent_batches.append(entries)
+        return ntfy_result
+
+    from app import alerts
+    monkeypatch.setattr(alerts, "send_gate_nudge", _fake_send)
+    return sent_batches
+
+
+def test_nudge_fires_once_for_stale_gate_and_not_again(monkeypatch):
+    pages = [_awaiting_page("STALE1", hours_old=30, keyword="GUIDE")]
+    sent = _nudge_setup(monkeypatch, pages)
+
+    first = nightly.nudge_stale_gates()
+    assert first == {"nudged": ["STALE1"], "ntfy_sent": True}
+    assert sent[0][0]["gate_keyword"] == "GUIDE"
+    assert sent[0][0]["title"] == "Some gated reel"
+
+    second = nightly.nudge_stale_gates()  # same page still Awaiting DM next night
+    assert second == {"nudged": [], "ntfy_sent": False}
+    assert len(sent) == 1  # no repeat push
+
+
+def test_nudge_skips_rows_younger_than_24h(monkeypatch):
+    sent = _nudge_setup(monkeypatch, [_awaiting_page("FRESH1", hours_old=5)])
+    assert nightly.nudge_stale_gates() == {"nudged": [], "ntfy_sent": False}
+    assert sent == []
+
+
+def test_nudge_failed_push_retries_next_night(monkeypatch):
+    pages = [_awaiting_page("RETRY1", hours_old=48)]
+    sent = _nudge_setup(monkeypatch, pages, ntfy_result=False)
+
+    assert nightly.nudge_stale_gates() == {"nudged": [], "ntfy_sent": False}
+    # not marked as nudged -> a second run tries again
+    nightly.nudge_stale_gates()
+    assert len(sent) == 2
+
+
+def test_nudge_survives_notion_failure(monkeypatch):
+    def _boom():
+        raise RuntimeError("notion down")
+    monkeypatch.setattr(notion_writer, "find_awaiting_dm_pages", _boom)
+    assert nightly.nudge_stale_gates() == {"nudged": [], "ntfy_sent": False}
+
+
+def test_run_includes_gate_nudge_key(monkeypatch):
+    _install_fake_notion(monkeypatch)
+    monkeypatch.setattr(notion_writer, "find_awaiting_dm_pages", lambda: [])
+    result = nightly.run()
+    assert result["gate_nudge"] == {"nudged": [], "ntfy_sent": False}
+
+
+def test_send_gate_nudge_posts_one_message_with_titles_and_keywords(monkeypatch):
+    from app import alerts
+    monkeypatch.setattr(alerts, "NTFY_TOPIC", "test-topic")
+    calls = []
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+    def _fake_post(url, content=None, headers=None, timeout=None):
+        calls.append({"url": url, "content": content.decode("utf-8"), "headers": headers})
+        return _Resp()
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", _fake_post)
+
+    ok = alerts.send_gate_nudge([
+        {"shortcode": "A1", "title": "First gated reel", "gate_keyword": "GUIDE"},
+        {"shortcode": "B2", "title": "Second gated reel", "gate_keyword": None},
+    ])
+
+    assert ok is True
+    assert len(calls) == 1  # ONE notification, not one per row
+    body = calls[0]["content"]
+    assert "2 reel(s) awaiting your DM" in body
+    assert "First gated reel" in body and "GUIDE" in body
+    assert "Second gated reel" in body and "?" in body  # missing keyword shown honestly
+
+
+def test_send_gate_nudge_skips_without_topic_or_entries(monkeypatch):
+    from app import alerts
+    monkeypatch.setattr(alerts, "NTFY_TOPIC", "")
+    assert alerts.send_gate_nudge([{"shortcode": "X", "title": "t", "gate_keyword": "K"}]) is False
+    monkeypatch.setattr(alerts, "NTFY_TOPIC", "test-topic")
+    assert alerts.send_gate_nudge([]) is False
