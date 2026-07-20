@@ -1,5 +1,64 @@
 # PROGRESS.md — hardening/deployment session log
 
+## Four fixes, each verified against real live outcomes (not just HTTP 200s)
+
+All four deployed (commits `548b348`, `2c6f886`, `364c415` + Notion-side cleanup),
+360 tests passing. Per tonight's lesson from the digest env-var bug, every claim
+below is a verified live outcome — a real Notion row/page inspected after the fact.
+
+### FIX 1 — no-video path now produces real extractions ✅ VERIFIED LIVE, big improvement
+
+The main complaint. `run_extraction`'s no-video branch went straight to the bare
+placeholder even though `run_caption_only_extraction` already worked; it now routes
+through it whenever a caption exists (placeholder only when there's genuinely no/thin
+caption). **Live before/after on `DZSFkNppVW_` (retried after deploy):**
+
+| | BEFORE | AFTER |
+|---|---|---|
+| Title | raw caption dump: `comment "ads" for the full install guide 📈 skill 1. /spy 🔍…` | synthesized: *"You can run your entire Meta ads workflow inside Claude using five custom skills to automate spy res…"* |
+| Topics | *(none)* | claude-ai, meta-ads, ai-marketing, digital-advertising |
+| Value score | 3 (flat default) | 5 |
+| Priority | Medium | High |
+| Status | 📥 Inbox | ⏳ Awaiting DM (gate keyword "ads" correctly re-detected) |
+
+Yes — this genuinely improved, exactly the way the complaint asked. Caveat for the
+remaining stuck rows: a `/retry` re-runs the whole fetch, so rows whose OG caption
+scrape gets login-walled from Render's IP (most `📷 Photo — manual` ones with
+"(no caption)") still can't produce a summary — no caption ever reaches the
+extractor. Rows that DO have caption text (the 14 raw-caption-title rows found in
+the audit) are the ones worth re-running.
+
+### FIX 2 — digests read from Notion, not ephemeral SQLite ✅ VERIFIED LIVE with real data
+
+`collect_day`/`collect_week` are now Notion-primary (`find_saves_pages_since`,
+created_time window, paginated) with local SQLite as the fallback on Notion errors.
+**Live proof, run immediately after a redeploy wiped SQLite** (the exact condition
+that previously produced false "nothing saved" digests): daily digest returned
+**18 saves / 6 High priority** with real synthesized entries; weekly returned
+**53 saves** including a live Gemini "week in three sentences". Both wrote real
+Notion pages (inspected). Known limitation: weekly per-creator names show
+"(unknown)" after a wipe (Creator is a Notion relation, not cheaply resolvable).
+
+### FIX 3 — Awaiting-DM nudge in the nightly job ✅ (mocked tests; fires on next nightly)
+
+Rows in Awaiting DM >24h (read from Notion, durable) trigger ONE ntfy push listing
+title + gate keyword each — no repeats (app_state dedup; a failed push retries next
+night rather than burning the row's one notification). Deliberately NOT DM
+automation — bot-DMing risks the burner account; the human does the actual step.
+Requires `NTFY_TOPIC` set on Render (currently NOT set there — the nudge silently
+skips until you add it; same for the daily digest's phone push).
+Note: with ~20 rows currently Awaiting DM >24h, the FIRST nudge after deploy will
+be one long list — that's the backlog clearing, not a bug.
+
+### FIX 4 — the two verification-artifact pages archived ✅ DONE (Notion-side, no code)
+
+`🌙 Daily reflection (nothing saved) — 2026-07-19` and `📬 Weekly digest —
+2026-07-19` (both created during last session's testing, both misleadingly saying
+"nothing saved") were verified by title and archived via the Notion API — they're
+in Trash, restorable. Nothing else was touched.
+
+---
+
 ## ffmpeg exit-1 root cause: yt-dlp was downloading video-only files (no audio)
 
 **ROOT CAUSE (of the three candidates investigated, this was the real one — #2):**
