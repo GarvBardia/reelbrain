@@ -1,5 +1,25 @@
 # PROGRESS.md — hardening/deployment session log
 
+## AUTONOMOUS SESSION (Stages 3–7) — running log for your review
+
+Running unattended while you're away (~1h). Conservative rules applied: archive not
+delete, flag not guess, log everything. Per-stage results below; a FINAL SUMMARY is
+appended at the very end once all stages finish.
+
+### Stage 3 — Notion cleanup ✅ DONE
+- Full re-scan for duplicate shortcodes across all 70 rows: **only ONE duplicate
+  found** — the known `DabVtQoCI2p` pair. No others.
+- Both `DabVtQoCI2p` rows were identical placeholders ("No caption or transcript
+  available.", Photo — manual, value 3). Neither was genuinely "richer" — the only
+  difference was a meaningless `near-duplicate` tag on the later copy. **Judgment
+  call:** kept the ORIGINAL (created 2026-07-19 04:17Z), **archived** the later
+  redundant copy (08:09Z, page ...ccff353) — standard keep-oldest dedup convention.
+  Archived, NOT hard-deleted (restorable from Notion Trash).
+- Result: Notion now **69 rows / 69 distinct shortcodes — zero duplicates.**
+- Did NOT touch any Awaiting DM statuses, per your instruction.
+
+---
+
 ## Bulk local ingest — home IP fetched 32/32; Gemini 503 is the only bottleneck
 
 Stage 2 of the reellist ingest ran live via `scripts/bulk_ingest_local.py` (home IP +
