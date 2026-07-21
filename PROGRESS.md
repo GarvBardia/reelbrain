@@ -18,6 +18,22 @@ appended at the very end once all stages finish.
 - Result: Notion now **69 rows / 69 distinct shortcodes — zero duplicates.**
 - Did NOT touch any Awaiting DM statuses, per your instruction.
 
+### Stage 3.5 — retry the 19 Gemini-503 rows ⚠️ STILL PENDING (Gemini still overloaded)
+- Re-ran `bulk_ingest_local.py`; progress file correctly processed ONLY the 19
+  pending (22 skipped as already-done). **Gemini's free tier is STILL 503-overloaded**
+  — all 19 fetched fine again (captions/video came down) but every extraction
+  degraded. **0 written — correctly left pending, no junk forced into Notion** per
+  your rule.
+- **These 19 still need a later re-run when Gemini recovers** (just run
+  `python scripts/bulk_ingest_local.py --from-file urls.txt` again — only these 19
+  will process):
+  `Da0i1JcjXRr, Da0jSm-tDsI, DaxsXR-APbZ, DayP5WwtYM5, Dax8uqyzVWv, DaxrltihiEM,
+  DawD8vcNJC7, DZuHZfSDj2-, DaacoWejUai, DatHa0gOR4l, DXupkURBCz5, DXyXoVyMto8,
+  DWY37MrhXJX, DanRTnJukuM, DagVhmZSgjt, DaiWZTfs3x9, DZu3ju6BBLt, Daf8iQknLD-,
+  DadF0iqib3q`
+- This is a transient external-service outage, not a code or data problem. Their
+  captions ARE recoverable (seen in the run log) — just gated on Gemini capacity.
+
 ---
 
 ## Bulk local ingest — home IP fetched 32/32; Gemini 503 is the only bottleneck
