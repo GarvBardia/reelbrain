@@ -132,19 +132,34 @@ def send_gate_nudge(entries: list[dict]) -> bool:
     message = (
         f"{len(entries)} reel(s) awaiting your DM for over 24h:\n" + "\n".join(lines)
     )
+    url = f"{NTFY_BASE_URL}/{NTFY_TOPIC}"
     try:
         import httpx
 
         response = httpx.post(
-            f"{NTFY_BASE_URL}/{NTFY_TOPIC}",
+            url,
             content=message.encode("utf-8"),
             headers={"Title": "ReelBrain: comment gates awaiting DM", "Tags": "hourglass_flowing_sand"},
             timeout=NTFY_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
+        logger.info("gate-nudge: ntfy push succeeded (status %s, %d row(s))", response.status_code, len(entries))
         return True
-    except Exception:  # noqa: BLE001 - best-effort notification, never the critical path
-        logger.warning("gate-nudge ntfy push failed", exc_info=True)
+    except Exception as exc:  # noqa: BLE001 - best-effort notification, never the critical path
+        # A bare "push failed" with a buried traceback was hard to tell apart from
+        # a silent False — surface the actual HTTP status/body (e.g. ntfy.sh's own
+        # rate limiting) or exception detail as a single grep-able line.
+        response = getattr(exc, "response", None)
+        if response is not None:
+            logger.error(
+                "gate-nudge: ntfy push to %s failed — status=%s body=%s",
+                url, response.status_code, response.text[:500],
+            )
+        else:
+            logger.error(
+                "gate-nudge: ntfy push to %s failed — %s: %s",
+                url, type(exc).__name__, exc, exc_info=True,
+            )
         return False
 
 

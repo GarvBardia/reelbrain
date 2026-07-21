@@ -1,5 +1,46 @@
 # PROGRESS.md — hardening/deployment session log
 
+## ⭐ Gate-nudge ntfy bugs (BUG A / BUG B) — investigated, one real fix, one already-fixed
+
+**BUG A — silent ntfy send failure, now logged with real detail.** `/nightly`'s
+response showed `gate_nudge: {nudged: [...rows...], ntfy_sent: false}` with no
+visible cause. `alerts.send_gate_nudge` only logged a bare `"gate-nudge ntfy
+push failed"` + traceback — technically present but not "visible" without
+digging through a stack trace. Fixed: on `httpx.HTTPStatusError` it now logs
+the actual `status=... body=...` on one line; on any other exception (connect
+error, timeout) it logs `type(exc).__name__: exc`. Tests added:
+`test_send_gate_nudge_logs_status_and_body_on_http_error`,
+`test_send_gate_nudge_logs_exception_detail_on_network_error`.
+
+**Root cause, confirmed via Render's live log API (not a guess):** the SAME
+ntfy.sh topic (`reelbrain482`) got **429 Too Many Requests** from ntfy.sh
+itself on 2026-07-20 and 2026-07-21, from the daily-digest's ntfy push (same
+code pattern, same topic). This is ntfy.sh's own public-server rate limit on
+that topic/IP — **not a malformed request**. The manual `Invoke-WebRequest`
+test succeeded because it ran from a home IP, not Render's; Render's IP/topic
+combination was already rate-limited when the app tried. No code change can
+fix ntfy.sh's server-side rate limit — the logging fix makes this cause
+visible next time instead of a silent `false`. If this becomes chronic,
+options are: a paid/self-hosted ntfy instance, or an ntfy.sh account+token
+(higher, non-anonymous limits) instead of the current anonymous public topic.
+
+**BUG B — reported as "failed sends get marked nudged anyway," did not
+reproduce.** `nightly.nudge_stale_gates()` already only calls
+`already.update(...)` / persists `_GATE_NUDGED_KEY` inside `if sent:` — a
+failed push leaves the row out of the persisted set, so it's re-attempted
+next run. This exact behavior already has a passing regression test
+(`test_nudge_failed_push_retries_next_night`, asserts the mocked send is
+called twice across two runs when it keeps failing). The observed symptom
+(`nudged: []` on both back-to-back runs) is consistent with **both** runs
+hitting the same ntfy.sh 429 above, not with rows being wrongly marked done —
+"nudged: []" means "not confirmed-delivered," not "skipped." No code change
+made for BUG B; flagging this here in case the live retry still shows both
+runs failing (also expected, if ntfy.sh's rate-limit window hasn't reset).
+
+Pytest: 401 passed (399 + 2 new logging tests).
+
+---
+
 ## ⭐ FINAL SUMMARY — Gemini retry + consistency check (read this first, supersedes the summary below)
 
 Ran the 4-step follow-up while you were away ~45 min. Here's the true final state:

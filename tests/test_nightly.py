@@ -273,6 +273,8 @@ def test_send_gate_nudge_posts_one_message_with_titles_and_keywords(monkeypatch)
     calls = []
 
     class _Resp:
+        status_code = 200
+
         def raise_for_status(self):
             return None
 
@@ -302,3 +304,50 @@ def test_send_gate_nudge_skips_without_topic_or_entries(monkeypatch):
     assert alerts.send_gate_nudge([{"shortcode": "X", "title": "t", "gate_keyword": "K"}]) is False
     monkeypatch.setattr(alerts, "NTFY_TOPIC", "test-topic")
     assert alerts.send_gate_nudge([]) is False
+
+
+# --- BUG A: real failures must be logged with status/body/exception detail ----
+
+def test_send_gate_nudge_logs_status_and_body_on_http_error(monkeypatch, caplog):
+    import logging
+
+    import httpx
+
+    from app import alerts
+
+    monkeypatch.setattr(alerts, "NTFY_TOPIC", "test-topic")
+
+    def _fake_post(url, content=None, headers=None, timeout=None):
+        request = httpx.Request("POST", url)
+        return httpx.Response(429, text="rate limited by ntfy.sh", request=request)
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+
+    with caplog.at_level(logging.ERROR):
+        ok = alerts.send_gate_nudge([{"shortcode": "A1", "title": "t", "gate_keyword": "K"}])
+
+    assert ok is False
+    assert "429" in caplog.text
+    assert "rate limited by ntfy.sh" in caplog.text
+
+
+def test_send_gate_nudge_logs_exception_detail_on_network_error(monkeypatch, caplog):
+    import logging
+
+    import httpx
+
+    from app import alerts
+
+    monkeypatch.setattr(alerts, "NTFY_TOPIC", "test-topic")
+
+    def _fake_post(url, content=None, headers=None, timeout=None):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+
+    with caplog.at_level(logging.ERROR):
+        ok = alerts.send_gate_nudge([{"shortcode": "A1", "title": "t", "gate_keyword": "K"}])
+
+    assert ok is False
+    assert "ConnectError" in caplog.text
+    assert "connection refused" in caplog.text
