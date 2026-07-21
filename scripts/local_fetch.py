@@ -53,17 +53,43 @@ from scripts.recover_photo_captions import clean_og_caption, fetch_og_tags_with_
 def _try_media_fetch(shortcode: str, permalink: str) -> tuple[Optional[dict], str]:
     """Attempt a real yt-dlp media download from THIS machine (home IP + local
     cookies). Returns (info_dict, note). info_dict is None if no video came
-    down (photo/carousel, or a genuine block). Never raises."""
-    from app import fetcher
+    down (photo/carousel, or a genuine block). Never raises.
 
+    Burner-account safety (requirement from the bulk-ingest stage): this is a
+    SECOND source hitting the same burner session as the Render fetcher, so it
+    honors the SAME >=MIN_FETCH_SPACING_SECONDS spacing here too. Spacing is
+    enforced at the fetch point and measured from the last recorded fetch (via
+    the local store's fetch log — mirroring app.fetcher._enforce_rate_discipline,
+    minus the daily cap so a one-off recovery batch isn't hard-blocked at 25),
+    so it holds across separate script invocations, not just within one loop."""
+    from app import fetcher, store
+
+    enforce_local_fetch_spacing()
     cookies = fetcher.resolve_cookies_file()
     try:
+        store.record_fetch()  # a cookie-backed yt-dlp attempt IS a burner-session hit
         info = fetcher._run_ytdlp(permalink, cookiefile=cookies)
     except Exception as exc:  # noqa: BLE001 - expected for photo/carousel + blocks
         return None, f"no media: {type(exc).__name__}: {str(exc)[:160]}"
     if not info.get("_video_path") or not os.path.exists(info.get("_video_path", "")):
         return None, "yt-dlp returned info but no video file on disk"
     return info, f"media downloaded: {info['_video_path']}"
+
+
+def enforce_local_fetch_spacing() -> None:
+    """Sleep until at least MIN_FETCH_SPACING_SECONDS have passed since the last
+    recorded local fetch — the same anti-hammering discipline the server applies,
+    applied here because this script shares the burner account's session."""
+    import time as _time
+
+    from app import store
+
+    min_spacing = int(os.environ.get("MIN_FETCH_SPACING_SECONDS", "20"))
+    last = store.get_last_fetch_at()
+    if last is not None:
+        elapsed = _time.time() - last
+        if elapsed < min_spacing:
+            _time.sleep(min_spacing - elapsed)
 
 
 def probe_one(url: str, write: bool = False) -> dict:
@@ -180,12 +206,12 @@ def main() -> None:
     if not urls:
         sys.exit("no URLs given (pass URLs or --from-file)")
 
-    spacing = float(os.environ.get("MIN_FETCH_SPACING_SECONDS", "20"))
+    # No explicit inter-URL sleep here: probe_one -> _try_media_fetch enforces
+    # >=MIN_FETCH_SPACING_SECONDS at the fetch point (measured from the last
+    # recorded fetch), so spacing holds without double-counting.
     results = []
-    for i, url in enumerate(urls):
+    for url in urls:
         results.append(probe_one(url, write=args.write))
-        if i != len(urls) - 1:
-            time.sleep(spacing)
 
     print(f"\n{'='*70}\nSUMMARY ({len(results)} URLs):")
     for r in results:
