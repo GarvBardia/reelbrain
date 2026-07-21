@@ -1,6 +1,35 @@
 # PROGRESS.md — hardening/deployment session log
 
-## ⭐ FINAL SUMMARY — autonomous Stages 3–7 (read this first)
+## ⭐ FINAL SUMMARY — Gemini retry + consistency check (read this first, supersedes the summary below)
+
+Ran the 4-step follow-up while you were away ~45 min. Here's the true final state:
+
+**True final numbers (fresh live Notion query, cross-checked 3 ways):**
+- **93 rows** in Notion (was 81) — 93 distinct shortcodes, 0 duplicates.
+- **REPORT.md**: 93 rows. **Obsidian vault**: 93 reel notes, 96 topics. **Processed flag**: 64 rows flagged true.
+- All four numbers (Notion live / REPORT.md / Obsidian note count / Processed count) **agree with each other** — no discrepancy found (unlike the 69-vs-81 stale-cache incident last time).
+
+**Step 1 — retry the 19 Gemini-degraded rows: partial success.**
+- **12 of 19 succeeded** this pass (Gemini quota freed up) and were written to Notion normally.
+- **7 still degraded**: `DXyXoVyMto8, DWY37MrhXJX, DanRTnJukuM, DagVhmZSgjt, DZu3ju6BBLt, Daf8iQknLD-, DadF0iqib3q`.
+  Left unwritten, per instruction — no placeholder junk forced in. **This time the cause wasn't transient 503 overload — one error showed a 429 `RESOURCE_EXHAUSTED` with `quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier, quotaValue: 20`**, i.e. the Gemini free tier's **daily** request cap, not a momentary capacity blip. Re-running again today may keep failing until the daily quota resets — worth knowing before re-running in a tight loop.
+
+**Step 2 — since new rows landed, all three follow-ups ran:**
+- `flag_processed.py`: flagged the 12 newly-written rows Processed (64 total now flagged, 29 left unflagged — placeholders/degraded).
+- `generate_report.py`: regenerated against a fresh live query — 93 rows (not cached).
+- `sync_to_obsidian.py`: failed once with a transient `httpx.RemoteProtocolError` (Notion server disconnected mid-request) — retried once, succeeded cleanly (93 notes, 96 topics).
+
+**Step 3 — consistency check: clean, no discrepancy.** All four counts (Notion/REPORT.md/Obsidian/Processed-eligible) matched on this pass.
+
+**Step 4 — test suite: 399 passed, 0 failed, 1 pre-existing unrelated deprecation warning (starlette/httpx).**
+
+**Flagged for your review:**
+- The 7 still-degraded rows above — likely blocked on Gemini's free-tier **daily** quota rather than a transient overload, so an immediate re-run may not help; consider waiting for the daily reset before retrying.
+- Nothing was deleted, no Awaiting-DM statuses touched, no live-app code changed.
+
+---
+
+## ⭐ FINAL SUMMARY — autonomous Stages 3–7 (superseded by the summary above — kept for history)
 
 All stages ran to completion while you were away. 399 tests green. Per-stage detail
 is in the running log below; here's the headline for your review:
