@@ -34,6 +34,29 @@ appended at the very end once all stages finish.
 - This is a transient external-service outage, not a code or data problem. Their
   captions ARE recoverable (seen in the run log) — just gated on Gemini capacity.
 
+### Stage 4 — master report ✅ DONE (`REPORT.md`)
+- Built `scripts/generate_report.py` (reproducible) and wrote **REPORT.md**: overview
+  stats, every row grouped by topic (92 topic sections) with one-line summary + value
+  score + `[R]`/`[P]` resource state, plus an actionable "resources still pending" list.
+- **⚠️ IMPORTANT ROW-COUNT RECONCILIATION (a judgment call worth your eyes):** my
+  earlier Stage 2/3 log said "69 rows". That was a **stale cached read** from the
+  Notion connector — the LIVE database is actually **81 rows**. I verified both the
+  app's direct Notion API and a fresh connector query now agree: **81 rows, 81
+  distinct shortcodes, ZERO duplicates.** So Stage 3's conclusion still holds at full
+  scale (the DabVtQoCI2p archive was the only dup; nothing else is duplicated across
+  all 81). The extra 12 rows were always there — not new captures — just hidden by the
+  connector's cache when I first counted. No data was lost or mis-handled; the earlier
+  "69" figures in this log are simply superseded by the verified 81.
+- REPORT.md snapshot: 81 rows = 69 real AI extractions + 12 placeholders; 14 resources
+  attached, 39 pending (Awaiting DM / gated); Priority High 47 / Medium 30 / Low 4.
+
+### Stage 6 — cheap-model guide ✅ DONE (`CHEAP_MODEL_GUIDE.md`)
+- Self-contained extraction spec: JSON schema + constraints, the extraction prompt,
+  value_score rubric, the exact priority formula (CLAUDE_KEYWORDS + value thresholds),
+  comment-gate rules incl. the keyword↔detected invariant, the full Notion field
+  mapping, status routing, and a worked example. (Written out of order — it's
+  Notion-independent — while the Stage 3.5 retry ran; committed with Stage 6.)
+
 ---
 
 ## Bulk local ingest — home IP fetched 32/32; Gemini 503 is the only bottleneck
