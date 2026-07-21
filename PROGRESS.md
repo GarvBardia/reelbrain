@@ -1,5 +1,46 @@
 # PROGRESS.md — hardening/deployment session log
 
+## ⭐ FINAL SUMMARY — autonomous Stages 3–7 (read this first)
+
+All stages ran to completion while you were away. 399 tests green. Per-stage detail
+is in the running log below; here's the headline for your review:
+
+| Stage | Result |
+|---|---|
+| **3 — dedupe** | ✅ Archived the 1 duplicate (`DabVtQoCI2p`, kept original). Full re-scan: **no other duplicates.** |
+| **3.5 — retry 19 degraded** | ⚠️ **PENDING — Gemini still 503-overloaded.** All 19 fetched fine but couldn't be extracted; **left unwritten (no junk)**. Re-run `python scripts/bulk_ingest_local.py --from-file urls.txt` later — only these 19 will process. |
+| **4 — master report** | ✅ `REPORT.md` written (81 rows by topic + pending resources). |
+| **5 — Obsidian** | ✅ Re-synced (81 notes, 92 topics, priority-grouped index, no stale artifacts). |
+| **6 — cheap-model guide** | ✅ `CHEAP_MODEL_GUIDE.md` written. |
+| **7 — Processed marker** | ✅ Added `Processed` checkbox; flagged **52 real extractions**, left **29 unflagged** (placeholders + degraded caption-title rows). |
+
+**Judgment calls you should sanity-check:**
+1. **Row count: it's 81, not the "69" I reported mid-run.** My earlier counts came from a
+   **stale Notion-connector cache**; the live DB is 81 rows, verified by two independent
+   queries, **81 distinct / zero duplicates**. No data lost — the "missing" 12 were always
+   there, just not in the cached view. Stage 3's dedup conclusion still holds at full scale.
+2. **"Processed" criterion:** I flagged a row Processed only if it has a synthesized title
+   AND ≥1 real topic. This deliberately EXCLUDES the raw-caption-title rows (e.g. "comment
+   AGENTS for the guide") that have a caption-ish title but no real extraction — they read
+   as done but aren't, so they stay unflagged. If you'd rather those count as processed,
+   say so and I'll adjust.
+3. **DabVtQoCI2p dedup:** both copies were identical placeholders, so "keep the richer one"
+   was a wash — I kept the older by creation time. Archived (recoverable), not deleted.
+
+**Still needs you / still pending (nothing silently assumed done):**
+- The **19 Gemini-503 rows** (Stage 3.5) — one later re-run when Gemini recovers.
+- The **12 placeholder photo rows** with no caption at all — not recoverable via caption
+  (some are true no-caption carousels); `scripts/recover_photo_captions.py` can retry OG
+  captions but those specific ones returned nothing.
+- 39 rows are **Awaiting-DM / gated with no resource attached yet** — that's your manual
+  DM step (listed in REPORT.md's "Resources still pending").
+
+Nothing in this session deleted data, changed Awaiting-DM statuses, or touched the live
+app code path. All changes were: Notion content (adds/archive/flag) + new local-only
+scripts + docs.
+
+---
+
 ## AUTONOMOUS SESSION (Stages 3–7) — running log for your review
 
 Running unattended while you're away (~1h). Conservative rules applied: archive not
@@ -56,6 +97,23 @@ appended at the very end once all stages finish.
   comment-gate rules incl. the keyword↔detected invariant, the full Notion field
   mapping, status routing, and a worked example. (Written out of order — it's
   Notion-independent — while the Stage 3.5 retry ran; committed with Stage 6.)
+
+### Stage 5 — Obsidian re-sync ✅ DONE
+- `sync_to_obsidian.py`: **81 notes written, 92 topics.** `_index.md` came out clean —
+  just `# Topics Index` + the AUTO-GENERATED priority-grouped block, NO stale
+  above-marker artifacts (last session's cleanup held). Spot-checked a newly-ingested
+  row (Da0vM9ZPVmz): full frontmatter, priority High, value 5, real topics. Vault is a
+  separate folder (not git-tracked), so only this log entry is committed.
+
+### Stage 7 — Processed marker ✅ DONE
+- Added a `Processed` **checkbox** property to the Saves data source (idempotent).
+- Flagged **52 rows** Processed = real extraction (synthesized title AND ≥1 real topic).
+  **29 left unflagged**: the 12 placeholder photo rows + the raw-caption-title degraded
+  rows (title but no topics) + a couple gated-caption rows with no real extraction.
+  Only ever SET True on real rows — never unchecked anything (placeholders stay
+  unflagged by default). Verified live: 52 Processed / 29 unflagged / 81 total.
+- `scripts/flag_processed.py` is re-runnable + has a `--dry-run`; new captures can be
+  swept later the same way.
 
 ---
 
