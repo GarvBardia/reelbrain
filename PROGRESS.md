@@ -1,5 +1,36 @@
 # PROGRESS.md — hardening/deployment session log
 
+## Bulk local ingest — home IP fetched 32/32; Gemini 503 is the only bottleneck
+
+Stage 2 of the reellist ingest ran live via `scripts/bulk_ingest_local.py` (home IP +
+burner cookies). **The fetch worked for ALL 32 new URLs — 32/32, zero blocked.** The
+home-IP approach is now proven at scale, not just on a single probe. Every URL got
+either a video download (full transcript extraction) or, for the true carousels, an
+OG-caption recovery via the bot UA.
+
+Result: **13 written to Notion, 9 skipped as already-present, 19 still degraded.** The
+19 degraded are PURELY Gemini free-tier 503s — its capacity was sustained-overloaded
+tonight, so even the built-in 60s retry pass couldn't clear them (503 was longer than
+one retry window, not a brief spike). Crucially: **the 19 are NOT written** —
+`probe_one` never persists a degraded extraction, so no caption-as-title junk polluted
+Notion. They're all tracked in `bulk_ingest_progress.json`; the 13 written + 9 dupes
+are terminal, so **re-running `python scripts/bulk_ingest_local.py --from-file urls.txt`
+when Gemini recovers will process ONLY the 19** (no re-fetching, no duplicates). The
+still-degraded shortcodes: Da0i1JcjXRr, Da0jSm-tDsI, DaxsXR-APbZ, DayP5WwtYM5,
+Dax8uqyzVWv, DaxrltihiEM, DawD8vcNJC7, DZuHZfSDj2-, DaacoWejUai, DatHa0gOR4l,
+DXupkURBCz5, DXyXoVyMto8, DWY37MrhXJX, DanRTnJukuM, DagVhmZSgjt, DaiWZTfs3x9,
+DZu3ju6BBLt, Daf8iQknLD-, DadF0iqib3q.
+
+The 13 written are all high quality (real synthesized titles, value 1-5, correct gate
+keywords, statuses routed properly: Awaiting DM / Inbox / Photo — manual). Note
+`Da0vM9ZPVmz` — which was named as "already there" — was genuinely NOT in Notion and
+got ingested (value 5, "Build a 4-agent Claude AI council…", gate "ROAST").
+
+Notion now: 70 rows / 69 distinct shortcodes — the 1 remaining duplicate is the
+pre-existing DabVtQoCI2p pair, which Stage 3 will clean.
+
+---
+
 ## Photo/carousel recovery: VIABLE from home IP — the audit's biggest gap is solvable
 
 **The live test result, definitively:** Instagram DOES serve OG caption tags to a
