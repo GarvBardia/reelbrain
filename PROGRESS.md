@@ -1,5 +1,115 @@
 # PROGRESS.md — hardening/deployment session log
 
+## ⭐ Two live bugs from real testing: BUG 1 fixed, BUG 2 diagnosed (fix pending)
+
+### BUG 1 — /attach/confirm 422, fixed
+
+**Exact required shape** (from `app.models.AttachConfirmRequest` — this is
+now the authoritative answer, not a guess):
+
+```json
+{"shortcode": "DbFDY3yTwlI", "resource_url": "https://...", "secret": "..."}
+```
+- `shortcode`: **required**, string, 1-64 characters. Empty string `""` is
+  just as invalid as omitting it (`min_length=1`).
+- `resource_url`: **required**, string, 1-2048 characters, must start with
+  `http://` or `https://`.
+- `secret`: **required**, string, 1-256 characters.
+- **`extra="forbid"` — no other fields are accepted, at all.** This is very
+  likely the actual cause: a `409` candidate from `/attach` carries `created`,
+  `topics`, `main_point`, `gate_keyword`, `match_score` alongside `shortcode`
+  (see README's candidate-response example) — if the Shortcut forwards that
+  whole chosen dictionary as the `/attach/confirm` body instead of building a
+  fresh `{shortcode, resource_url, secret}` object, every one of those 5
+  extra keys gets rejected with `"type": "extra_forbidden"`. Confirmed this
+  reproduces a 422 in a test (`test_attach_confirm_rejects_unknown_fields`).
+
+**Root cause of the diagnosis gap itself:** a `422` happens BEFORE the
+endpoint body runs, so it never reached `attach_audit.record()` — the audit
+log built for exactly this kind of forensic lookup had a blind spot for its
+own most likely failure mode. Render's access log only shows the status
+code, never the request body or the validation detail. This is why the live
+`422` left nothing to diagnose from, forcing this exact "state the shape"
+request.
+
+**Fix:** added a `RequestValidationError` exception handler
+(`app/main.py::_log_validation_errors`) that logs the raw request body +
+Pydantic's exact validation errors before returning the identical response
+FastAPI's default handler would have given — same status code, same
+`{"detail": [...]}` shape, zero change to client-visible behavior. The next
+422 (on any endpoint, not just `/attach/confirm`) is now directly visible in
+Render's logs instead of invisible. Tests:
+`test_attach_confirm_requires_all_three_fields`,
+`test_attach_confirm_rejects_empty_shortcode`,
+`test_attach_confirm_rejects_non_http_resource_url`,
+`test_attach_confirm_rejects_unknown_fields`,
+`test_validation_failure_logs_the_raw_body_and_errors` in
+`tests/test_input_hardening.py`.
+
+### BUG 2 — candidate scoring missed the real match: DIAGNOSED, no fix applied yet
+
+Fetched the real Google Doc
+(`docs.google.com/document/d/1vBLzDs7b9oXu4KgCA_mE1EbI5dbWmLQ7yv5POYJ4dFA`)
+through `resource_lookup.fetch_resource_title_and_description` exactly as
+`/attach` would, and pulled the real Notion data for `DbAKlYYNEGY` (the
+intended target) and the 3 rows that WERE offered. Then computed the actual
+`score_candidate` scores by hand against that real data:
+
+| Shortcode | Score | Shared words |
+|---|---|---|
+| `DbAKlYYNEGY` (intended, NOT offered) | **2** | `face`, `with` |
+| `DaiWZTfs3x9` (offered) | 3 | `using`, `create`, `with` |
+| `DawD8vcNJC7` (offered) | 4 | `using`, `luxury`, `google`, `design` |
+| `DayP5WwtYM5` (offered) | 3 | `based`, `using`, `high` |
+
+**This rules out both of the two hypotheses in the question as the primary
+cause:**
+- **Not a content-fetch problem.** The fetch worked correctly — the Google
+  Doc's title (`"Looksmaxxingprompt - Google Docs"`) and description
+  (`"Create a clean, minimal, high-end facial aesthetics report based on the
+  uploaded photo... front-facing image of the face..."`) were both retrieved,
+  and `DbAKlYYNEGY`'s `gate_keyword` — literally `"face"` — is genuinely
+  present in the fetched text and WAS correctly counted.
+- **Not purely a threshold problem either.** `DbAKlYYNEGY` cleared
+  `MIN_SCORE_THRESHOLD` (1) fine, scoring 2. It didn't fail to match — it got
+  **outranked** and squeezed out of `TOP_N_CANDIDATES` (3) by three other
+  rows that scored higher on pure word-count.
+
+**The actual gap: `score_candidate` weights every shared word equally,
+regardless of how generic or meaningful it is.** `DbAKlYYNEGY`'s one real
+signal word (`face`, its deliberately-chosen `gate_keyword`) is worth
+exactly the same 1 point as each of the words that inflated the other
+three's scores:
+- `"using"` — a generic connector that appears in nearly every how-to reel's
+  main_point; matched all three offered candidates AND would match almost
+  anything.
+- `"google"` — an artifact of the fetched title itself: **every Google Doc's
+  browser title ends in `" - Google Docs"`**, so this word is Google Docs
+  platform branding, not content, and will spuriously match ANY candidate
+  whose title/note happens to also contain "google" (as `DawD8vcNJC7`'s did,
+  coincidentally, via "using Google F[low]").
+- `"design"`, `"create"`, `"with"`, `"based"`, `"high"` — all generic enough
+  to carry little real topical signal.
+- `DawD8vcNJC7`'s `"luxury"` match is a genuine coincidence — the resource
+  describes a "luxury feel" for a facial aesthetics report; the candidate
+  describes "luxury Apple-style" web design. Same word, unrelated topics.
+
+So `DbAKlYYNEGY`'s high-value, deliberately-chosen `gate_keyword` match got
+diluted and outranked by generic-word noise, some of it coming from
+platform branding baked into the fetched title. **Not applying a fix yet —
+options to weigh:** down-weight or stopword-filter generic words; weight
+`gate_keyword`/`topics` matches higher than incidental title/note word
+overlap (a keyword the creator deliberately chose is a much stronger signal
+than an accidental shared word in free text); strip platform-branding
+suffixes like `" - Google Docs"` before scoring; raise `TOP_N_CANDIDATES` so
+a real match has more room to survive being outranked; or some combination.
+Awaiting direction before touching `app/attach_matching.py`'s scoring logic.
+
+Pytest: 498 passed (5 new in `tests/test_input_hardening.py` for BUG 1; no
+code change yet for BUG 2).
+
+---
+
 ## ⭐ /attach REDESIGNED: no more auto-commit fallback, verified writes, candidate-scoring resolution
 
 Full redesign per the agreed plan. Summary of what changed, starting with

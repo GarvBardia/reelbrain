@@ -14,6 +14,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app import (
@@ -59,6 +61,27 @@ async def _lifespan(app: FastAPI):
 
 
 app = FastAPI(title="ReelBrain", lifespan=_lifespan)
+
+
+@app.exception_handler(RequestValidationError)
+async def _log_validation_errors(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """A 422 happens BEFORE the endpoint body runs, so it never reaches
+    attach_audit.record() or any other in-handler logging — it was a real
+    blind spot (see PROGRESS.md: a live /attach/confirm 422 left zero trace
+    of what was actually sent, forcing a guess at the request shape instead
+    of a diagnosis). This logs the raw body + the exact validation errors
+    server-side before returning the SAME response FastAPI's default handler
+    would have given — client-visible behavior is unchanged, only visibility
+    is added."""
+    try:
+        raw_body = await request.body()
+    except Exception:  # noqa: BLE001 - logging aid only, must never mask the real 422
+        raw_body = b"<unreadable>"
+    logger.warning(
+        "422 validation failed for %s %s — body=%r errors=%s",
+        request.method, request.url.path, raw_body[:2000], exc.errors(),
+    )
+    return JSONResponse(status_code=422, content={"detail": jsonable_encoder(exc.errors())})
 
 
 @app.get("/")
