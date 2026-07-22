@@ -1,5 +1,36 @@
 # PROGRESS.md — hardening/deployment session log
 
+## ⭐ PART 2 — gate-nudge live verification: root cause now CONFIRMED, still not reaching the phone
+
+Triggered `/nightly` for real against the deployed app (not a diagnostic script)
+after Part 1's deploy went live, then read Render's live logs for the actual
+result — this is what the BUG A logging fix from earlier tonight was for, and
+it worked exactly as intended:
+
+```
+ERROR:reelbrain.alerts:gate-nudge: ntfy push to https://ntfy.sh/reelbrain482 failed — status=429 body={"code":42908,"http":429,"error":"limit reached: daily message quota reached; increase your limits with a paid plan, see https://ntfy.sh","link":"https://ntfy.sh/docs/publish/#limitations"}
+```
+
+This is a precise, confirmed cause — not the generic "some 429" seen earlier —
+ntfy.sh's **free/anonymous public server has hit its daily message quota** for
+this topic. Same result on 3 consecutive `/nightly` triggers tonight (06:05,
+06:06, 07:20 UTC), so this isn't transient — the daily quota is exhausted and
+won't clear until ntfy.sh's own reset window passes (their docs don't publish
+an exact time; historically UTC midnight for the public server).
+
+**No code change can fix this** — it's an ntfy.sh account-tier limit, not a
+malformed request or a bug in this repo. The logging fix (BUG A, earlier
+tonight) did its job: the real cause is now visible instead of a silent
+`ntfy_sent: false`. **The notification has not reached the phone tonight** —
+this stays genuinely open, not silently assumed done. Options, none applied
+without asking first:
+1. Wait for ntfy.sh's daily quota to reset and re-trigger `/nightly` then.
+2. Move to a paid ntfy.sh plan (higher/no anonymous daily cap).
+3. Self-host ntfy, or switch to a different push channel (e.g. Pushover, a
+   different ntfy topic/server) for just the gate-nudge + daily-digest pushes.
+
+---
+
 ## ⭐ PART 1 — digests: single persistent page + real narrative content
 
 **Problem:** both `/nightly`-adjacent digests (`/daily-digest`, `/weekly-digest`)
