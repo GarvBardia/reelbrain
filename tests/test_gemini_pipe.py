@@ -409,6 +409,233 @@ def test_video_extraction_path_completely_unaffected_by_caption_only_addition(mo
     assert result.main_point == "video-derived summary"
 
 
+# --- research_context: Gemini call 2, per-named-entity, search-grounded ---------
+
+class _FakeChunk:
+    pass
+
+
+class _FakeGroundingMetadata:
+    def __init__(self, chunks):
+        self.grounding_chunks = chunks
+
+
+class _FakeCandidate:
+    def __init__(self, chunks):
+        self.grounding_metadata = _FakeGroundingMetadata(chunks)
+
+
+class _FakeGeminiResponse:
+    def __init__(self, text, chunks):
+        self.text = text
+        self.candidates = [_FakeCandidate(chunks)]
+
+
+def test_grounding_found_results_true_when_chunks_present():
+    response = _FakeGeminiResponse("some text", chunks=[_FakeChunk()])
+    assert gemini_pipe._grounding_found_results(response) is True
+
+
+def test_grounding_found_results_false_when_chunks_empty():
+    response = _FakeGeminiResponse("some text", chunks=[])
+    assert gemini_pipe._grounding_found_results(response) is False
+
+
+def test_grounding_found_results_false_when_chunks_none():
+    response = _FakeGeminiResponse("some text", chunks=None)
+    assert gemini_pipe._grounding_found_results(response) is False
+
+
+def test_grounding_found_results_false_on_malformed_response():
+    class _Weird:
+        pass
+
+    assert gemini_pipe._grounding_found_results(_Weird()) is False
+    assert gemini_pipe._grounding_found_results(None) is False
+
+
+def test_run_research_context_uses_real_text_when_grounded(monkeypatch):
+    def _fake_call(entity):
+        assert entity == "Cleanlist.ai"
+        return _FakeGeminiResponse(
+            "Cleanlist.ai is a Chrome extension for scraping LinkedIn contact data.",
+            chunks=[_FakeChunk()],
+        )
+
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_research", _fake_call)
+
+    result = gemini_pipe.run_research_context(["Cleanlist.ai"])
+    assert len(result) == 1
+    assert result[0].topic == "Cleanlist.ai"
+    assert "Chrome extension for scraping LinkedIn" in result[0].context
+
+
+def test_run_research_context_writes_honest_marker_when_grounding_empty(monkeypatch):
+    """CRITICAL (point 2): even though Gemini's own response.text here contains
+    a plausible-sounding answer, grounding_chunks is empty -- meaning Google
+    Search found nothing. The unlabeled training-data guess must NEVER be used;
+    the literal not-found marker must be written instead."""
+    def _fake_call(entity):
+        return _FakeGeminiResponse(
+            "This is a plausible-sounding answer from Gemini's own training data.",
+            chunks=[],  # search grounding found NOTHING
+        )
+
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_research", _fake_call)
+
+    result = gemini_pipe.run_research_context(["SomeObscureTool"])
+    assert len(result) == 1
+    assert result[0].topic == "SomeObscureTool"
+    assert result[0].context == "not found via search"
+    assert "plausible-sounding answer" not in result[0].context
+
+
+def test_run_research_context_empty_entities_returns_empty_without_calling_gemini(monkeypatch):
+    def _must_not_be_called(entity):
+        raise AssertionError("must not call Gemini with no named entities")
+
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_research", _must_not_be_called)
+
+    assert gemini_pipe.run_research_context([]) == []
+    assert gemini_pipe.run_research_context(None) == []
+
+
+def test_run_research_context_one_entity_failure_does_not_block_others(monkeypatch):
+    calls = []
+
+    def _fake_call(entity):
+        calls.append(entity)
+        if entity == "BrokenTool":
+            raise RuntimeError("gemini 500")
+        return _FakeGeminiResponse(f"real info about {entity}", chunks=[_FakeChunk()])
+
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_research", _fake_call)
+
+    result = gemini_pipe.run_research_context(["GoodTool", "BrokenTool", "AnotherGoodTool"])
+    assert calls == ["GoodTool", "BrokenTool", "AnotherGoodTool"]  # all three attempted
+    topics = {item.topic for item in result}
+    assert topics == {"GoodTool", "AnotherGoodTool"}  # broken one just skipped, not a placeholder
+
+
+def test_run_research_context_caps_at_max_research_entities(monkeypatch):
+    calls = []
+
+    def _fake_call(entity):
+        calls.append(entity)
+        return _FakeGeminiResponse("x", chunks=[_FakeChunk()])
+
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_research", _fake_call)
+
+    entities = [f"Tool{i}" for i in range(10)]
+    gemini_pipe.run_research_context(entities)
+    assert len(calls) == gemini_pipe.MAX_RESEARCH_ENTITIES
+
+
+def test_extraction_success_path_populates_research_context(monkeypatch):
+    """Wiring: run_caption_only_extraction's success path calls
+    run_research_context with the extraction's named_entities and stores the
+    result back onto extraction.research_context."""
+    extraction_out = Extraction(
+        main_point="x", value_score=3, named_entities=["Exply"],
+    )
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_text_only", lambda prompt: extraction_out.model_dump_json())
+
+    from app.models import ResearchContextItem
+    fake_context = [ResearchContextItem(topic="Exply", context="Exply is an AI outreach tool.")]
+    monkeypatch.setattr(gemini_pipe, "run_research_context", lambda entities: fake_context)
+
+    result = gemini_pipe.run_caption_only_extraction(SUBSTANTIAL_CAPTION, None, None, [])
+    assert result.research_context == fake_context
+
+
+def test_degraded_extraction_never_calls_research_context(monkeypatch):
+    """A too-thin caption degrades WITHOUT ever reaching Gemini call 1, so
+    call 2 (research) must never fire either -- there's no real
+    named_entities to research, and no reason to spend the extra Gemini calls."""
+    def _must_not_be_called(entities):
+        raise AssertionError("must not run research on a degraded extraction")
+
+    monkeypatch.setattr(gemini_pipe, "run_research_context", _must_not_be_called)
+
+    result = gemini_pipe.run_caption_only_extraction("just a few words here", None, None, [])
+    assert result.content_type == "unknown"  # confirms the degraded path
+    assert result.research_context == []
+
+
+# --- Gemini-specific call spacing -- distinct from fetcher.MIN_FETCH_SPACING ---
+
+def test_gemini_call_spacing_is_separate_state_from_fetch_spacing(monkeypatch):
+    """Point 3: MIN_FETCH_SPACING_SECONDS/store.get_last_fetch_at() governs only
+    yt-dlp fetch pacing -- this must use its own independent app_state key, not
+    piggyback on the fetch-log table at all."""
+    from app import store
+
+    monkeypatch.setattr(gemini_pipe, "MIN_GEMINI_CALL_SPACING_SECONDS", 5.0)
+    fetch_calls = []
+    monkeypatch.setattr(store, "get_last_fetch_at", lambda: fetch_calls.append("called") or None)
+    monkeypatch.setattr(store, "record_fetch", lambda: fetch_calls.append("called"))
+
+    gemini_pipe._enforce_gemini_call_spacing()
+
+    assert fetch_calls == []  # never touched the fetch-spacing machinery
+    assert store.get_state(gemini_pipe._LAST_GEMINI_CALL_STATE_KEY) is not None
+
+
+def test_gemini_call_spacing_sleeps_when_called_again_too_soon(monkeypatch):
+    from app import store
+
+    monkeypatch.setattr(gemini_pipe, "MIN_GEMINI_CALL_SPACING_SECONDS", 5.0)
+    sleeps = []
+    monkeypatch.setattr(gemini_pipe.time, "sleep", lambda s: sleeps.append(s))
+
+    fake_now = [1000.0]
+    monkeypatch.setattr(gemini_pipe.time, "time", lambda: fake_now[0])
+
+    gemini_pipe._enforce_gemini_call_spacing()  # first call: nothing recorded yet, no sleep
+    assert sleeps == []
+
+    fake_now[0] += 1.0  # only 1s elapsed, well under the 5s spacing
+    gemini_pipe._enforce_gemini_call_spacing()
+    assert sleeps == [4.0]
+
+
+def test_gemini_call_spacing_no_sleep_once_enough_time_has_passed(monkeypatch):
+    from app import store
+
+    monkeypatch.setattr(gemini_pipe, "MIN_GEMINI_CALL_SPACING_SECONDS", 5.0)
+    sleeps = []
+    monkeypatch.setattr(gemini_pipe.time, "sleep", lambda s: sleeps.append(s))
+
+    fake_now = [1000.0]
+    monkeypatch.setattr(gemini_pipe.time, "time", lambda: fake_now[0])
+
+    gemini_pipe._enforce_gemini_call_spacing()
+    fake_now[0] += 10.0  # well past the 5s spacing
+    gemini_pipe._enforce_gemini_call_spacing()
+    assert sleeps == []
+
+
+def test_call_gemini_text_only_enforces_gemini_spacing(monkeypatch):
+    """The spacing guard actually fires around the real Gemini call sites, not
+    just as a standalone function nobody calls."""
+    calls = []
+    monkeypatch.setattr(gemini_pipe, "_enforce_gemini_call_spacing", lambda: calls.append("spaced"))
+
+    class _FakeModels:
+        def generate_content(self, **kwargs):
+            return _FakeGeminiResponse(Extraction(main_point="x", value_score=2).model_dump_json(), chunks=[])
+
+    class _FakeClient:
+        def __init__(self, api_key):
+            self.models = _FakeModels()
+
+    import google.genai as genai_module
+    monkeypatch.setattr(genai_module, "Client", _FakeClient)
+
+    gemini_pipe._call_gemini_text_only("some prompt")
+    assert calls == ["spaced"]
+
+
 # --- silent-degradation incident: every degrade point must log the real error -
 #
 # Real incident: reel captures with a successfully-downloaded video were landing

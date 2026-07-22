@@ -567,6 +567,57 @@ def test_existing_resource_notes_empty_when_no_resources_dir(tmp_path):
     assert obsidian_sync.existing_resource_notes(tmp_path) == {}
 
 
+# --- research_context rendering (the generic any-titled-toggle mechanism) ------
+
+def test_blocks_to_markdown_renders_research_context_toggle_as_its_own_section():
+    """research_context lands on Notion as a "Research Context" toggle (see
+    notion_writer._build_children) -- confirms obsidian_sync's existing
+    generic toggle handling renders it as its own "## Research Context"
+    section with each topic:context line visible, no code change needed
+    beyond this test locking the behavior in."""
+    blocks = [
+        {"type": "callout", "callout": {"rich_text": _rt("Main insight here")}},
+        {"type": "toggle", "id": "tg-research", "has_children": True,
+         "toggle": {"rich_text": _rt("Research Context")}},
+    ]
+    toggle_children = {
+        "tg-research": [
+            {"type": "paragraph", "paragraph": {"rich_text": _rt("Cleanlist.ai: A LinkedIn scraping tool.")}},
+            {"type": "paragraph", "paragraph": {"rich_text": _rt("Exply: not found via search")}},
+        ],
+    }
+    client = SyncFakeClient([], toggle_children)
+
+    md = obsidian_sync.blocks_to_markdown(client, blocks)
+
+    assert "## Research Context" in md
+    assert "Cleanlist.ai: A LinkedIn scraping tool." in md
+    assert "Exply: not found via search" in md
+    assert md.index("## Research Context") > md.index("Main insight here")
+
+
+def test_sync_includes_research_context_section_in_reel_note(monkeypatch, tmp_path):
+    body = _body("RCX1") + [
+        {"type": "toggle", "id": "tg-RCX1-research", "has_children": True,
+         "toggle": {"rich_text": _rt("Research Context")}},
+    ]
+    blocks_by_id = {
+        "pg-RCX1": body,
+        "tg-RCX1": _toggle_children("full transcript text"),
+        "tg-RCX1-research": [
+            {"type": "paragraph", "paragraph": {"rich_text": _rt("Cleanlist.ai: A LinkedIn scraping tool.")}},
+        ],
+    }
+    _install(monkeypatch, [_page("RCX1", "A reel", topics=("productivity-hacks",))], blocks_by_id)
+    _seed_row("RCX1")
+
+    sync(str(tmp_path))
+
+    note = (tmp_path / "reels" / "2026-07-01-RCX1.md").read_text(encoding="utf-8")
+    assert "## Research Context" in note
+    assert "Cleanlist.ai: A LinkedIn scraping tool." in note
+
+
 def test_build_note_renders_attached_resource_section_when_resource_stem_given():
     fields = {
         "shortcode": "AAA111", "title": "Some reel", "status": "📥 Inbox",

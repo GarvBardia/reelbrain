@@ -142,6 +142,49 @@ def test_pipeline_writes_priority_property_to_notion(monkeypatch, tutorial_reel)
     assert props["Priority"]["select"]["name"] == "High"
 
 
+def test_pipeline_writes_research_context_as_body_toggle_not_a_property(monkeypatch, tutorial_reel):
+    """research_context lands as a "Research Context" toggle in the page body
+    (see PROGRESS.md: Notion's 2000-char rich_text cap means several topics
+    concatenated into one property value could overflow it), one paragraph
+    block per entry -- never a Notion property."""
+    from app.models import ResearchContextItem
+
+    fake = _install_fake_notion(monkeypatch)
+    extraction = Extraction(
+        main_point="x", topic_tags=["sleep"], value_score=3,
+        comment_gate=CommentGate(detected=False),
+        named_entities=["Cleanlist.ai"],
+        research_context=[ResearchContextItem(topic="Cleanlist.ai", context="A LinkedIn scraping tool.")],
+    )
+    monkeypatch.setattr("app.main.fetcher.fetch_reel", lambda shortcode, permalink: tutorial_reel)
+    monkeypatch.setattr("app.main.gemini_pipe.run_extraction", lambda reel, note, taxonomy: extraction)
+
+    store.insert_processing(tutorial_reel.shortcode, tutorial_reel.permalink)
+    run_pipeline(tutorial_reel.shortcode, tutorial_reel.permalink, note=None)
+
+    call = save_page_calls(fake)[0]
+    assert "Research Context" not in call["properties"]  # never a property
+    toggles = [b for b in call["children"] if b["type"] == "toggle"]
+    research_toggle = next(t for t in toggles if t["toggle"]["rich_text"][0]["text"]["content"] == "Research Context")
+    child_texts = [c["paragraph"]["rich_text"][0]["text"]["content"] for c in research_toggle["toggle"]["children"]]
+    assert child_texts == ["Cleanlist.ai: A LinkedIn scraping tool."]
+
+
+def test_pipeline_no_research_context_toggle_when_empty(monkeypatch, tutorial_reel, tutorial_extraction):
+    """tutorial_extraction has no research_context set (defaults to []) --
+    confirms the toggle is only emitted when there's actually something to show."""
+    fake = _install_fake_notion(monkeypatch)
+    monkeypatch.setattr("app.main.fetcher.fetch_reel", lambda shortcode, permalink: tutorial_reel)
+    monkeypatch.setattr("app.main.gemini_pipe.run_extraction", lambda reel, note, taxonomy: tutorial_extraction)
+
+    store.insert_processing(tutorial_reel.shortcode, tutorial_reel.permalink)
+    run_pipeline(tutorial_reel.shortcode, tutorial_reel.permalink, note=None)
+
+    call = save_page_calls(fake)[0]
+    toggle_titles = [b["toggle"]["rich_text"][0]["text"]["content"] for b in call["children"] if b["type"] == "toggle"]
+    assert "Research Context" not in toggle_titles
+
+
 def test_pipeline_music_only_reel_is_honest_about_no_speech(monkeypatch, music_only_reel, music_only_extraction):
     fake = _install_fake_notion(monkeypatch)
     monkeypatch.setattr("app.main.fetcher.fetch_reel", lambda shortcode, permalink: music_only_reel)

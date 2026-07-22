@@ -6,13 +6,14 @@ import logging
 import os
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
 from pydantic import ValidationError
 
 from app.fetcher import detect_comment_gate
-from app.models import Extraction, ReelData, degraded_extraction
+from app.models import Extraction, ReelData, ResearchContextItem, degraded_extraction
 
 logger = logging.getLogger("reelbrain.gemini")
 
@@ -42,6 +43,37 @@ MIN_CAPTION_WORDS_FOR_EXTRACTION = 10
 # Free tier is ~10-15 RPM at <20 fetches/day total — this just prevents bursts
 # if /retry and /capture happen to overlap.
 _GEMINI_SEMAPHORE = threading.Semaphore(2)
+
+# Distinct from fetcher.MIN_FETCH_SPACING_SECONDS, which paces yt-dlp/video
+# fetches only and does nothing for Gemini's own RPM/RPD. The research pass
+# (run_research_context) issues one grounded call PER topic in
+# extraction.named_entities, so a single reel can now cost 1 (extraction) + up
+# to MAX_RESEARCH_TOPICS Gemini calls, not a flat "2x" — see PROGRESS.md.
+# Google's own free-tier numbers are inconsistent across sources and change
+# without notice (confirmed: ai.google.dev points to the per-account AI Studio
+# dashboard rather than publishing fixed numbers) — 4s is a conservative
+# starting point (~15 RPM), override via env if your own dashboard allows more.
+MIN_GEMINI_CALL_SPACING_SECONDS = float(os.environ.get("MIN_GEMINI_CALL_SPACING_SECONDS", "4"))
+_LAST_GEMINI_CALL_STATE_KEY = "last_gemini_call_at"
+
+
+def _enforce_gemini_call_spacing() -> None:
+    """Sleeps until at least MIN_GEMINI_CALL_SPACING_SECONDS have passed since
+    the last Gemini call THIS PROCESS made (extraction or research) — mirrors
+    fetcher._enforce_rate_discipline's shape but tracks its own timestamp
+    (app_state key, not fetch_log), since fetch spacing and Gemini spacing are
+    governed by two completely different services' rate limits."""
+    from app import store
+
+    last_raw = store.get_state(_LAST_GEMINI_CALL_STATE_KEY)
+    if last_raw:
+        try:
+            elapsed = time.time() - float(last_raw)
+        except (TypeError, ValueError):
+            elapsed = MIN_GEMINI_CALL_SPACING_SECONDS
+        if elapsed < MIN_GEMINI_CALL_SPACING_SECONDS:
+            time.sleep(MIN_GEMINI_CALL_SPACING_SECONDS - elapsed)
+    store.set_state(_LAST_GEMINI_CALL_STATE_KEY, str(time.time()))
 
 
 def _has_audio_stream(video_path: str) -> Optional[bool]:
@@ -149,6 +181,7 @@ def _call_gemini(audio_path: str, prompt: str) -> str:
     from google.genai import types
 
     client = genai.Client(api_key=GEMINI_API_KEY)
+    _enforce_gemini_call_spacing()
     with _GEMINI_SEMAPHORE:
         uploaded = client.files.upload(file=audio_path)
         response = client.models.generate_content(
@@ -169,6 +202,7 @@ def _call_gemini_text_only(prompt: str) -> str:
     from google.genai import types
 
     client = genai.Client(api_key=GEMINI_API_KEY)
+    _enforce_gemini_call_spacing()
     with _GEMINI_SEMAPHORE:
         response = client.models.generate_content(
             model=GEMINI_MODEL,
@@ -343,6 +377,7 @@ def run_extraction(
 
     _merge_comment_gate(extraction, reel.caption)
     extraction.priority = compute_priority(extraction.topic_tags, extraction.value_score)
+    extraction.research_context = run_research_context(extraction.named_entities)
     return extraction
 
 
@@ -407,6 +442,7 @@ def run_caption_only_extraction(
 
     _merge_comment_gate(extraction, caption)
     extraction.priority = compute_priority(extraction.topic_tags, extraction.value_score)
+    extraction.research_context = run_research_context(extraction.named_entities)
     return extraction
 
 
@@ -453,6 +489,7 @@ def _call_gemini_resource(prompt: str):
     from app.models import ResourceExtraction
 
     client = genai.Client(api_key=GEMINI_API_KEY)
+    _enforce_gemini_call_spacing()
     with _GEMINI_SEMAPHORE:
         response = client.models.generate_content(
             model=GEMINI_MODEL,
@@ -508,6 +545,94 @@ def run_resource_extraction(
         "(see the error logged above for why) — caller must not write this", reel_title,
     )
     return None
+
+
+# --- research pass: Gemini call 2, one grounded call PER named entity ---------
+#
+# Deliberately NOT one batched call for every entity: Gemini's response_schema/
+# controlled-generation is documented as incompatible with the google_search
+# tool ("Search Grounding can't be used with JSON/YAML/XML mode" — confirmed
+# against the Gemini API forum/GitHub issues, see PROGRESS.md), and even
+# without that constraint, a single multi-entity call only exposes
+# grounding_metadata at the WHOLE-response level — there'd be no way to tell
+# WHICH entity search actually found something for for. One call per entity
+# gives an unambiguous per-entity signal instead, at the cost of real Gemini
+# call volume (see MIN_GEMINI_CALL_SPACING_SECONDS above and PROGRESS.md).
+
+NOT_FOUND_VIA_SEARCH = "not found via search"
+# Matches the extraction schema's own upper bound on named_entities/topic_tags
+# (3-6) — a safety cap, not expected to actually trim anything in practice.
+MAX_RESEARCH_ENTITIES = 6
+
+_RESEARCH_PROMPT_TEMPLATE = (
+    'In 2-3 sentences, explain what "{entity}" is and why it matters, based on '
+    "real, current search results — not your own general knowledge. If you "
+    'genuinely can\'t find anything specific about "{entity}" via search, say '
+    "so plainly rather than describing it from memory."
+)
+
+
+def _call_gemini_research(entity: str):
+    """ONE grounded call for ONE named entity. No response_schema (see the
+    module-level note above) — the caller already knows the entity name, so
+    the reply is treated as the context prose directly, not parsed as JSON."""
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    _enforce_gemini_call_spacing()
+    with _GEMINI_SEMAPHORE:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[_RESEARCH_PROMPT_TEMPLATE.format(entity=entity)],
+            config=types.GenerateContentConfig(
+                tools=[types.Tool(google_search=types.GoogleSearch())],
+            ),
+        )
+    return response
+
+
+def _grounding_found_results(response) -> bool:
+    """True only if Google Search grounding actually returned at least one
+    supporting chunk for this call. This is the whole point of point 2 in the
+    spec: if this is False, the caller must NOT use response.text (Gemini can
+    and does answer from its own training data even when grounding came back
+    empty) — it must write the literal NOT_FOUND_VIA_SEARCH marker instead."""
+    try:
+        candidate = response.candidates[0]
+        chunks = candidate.grounding_metadata.grounding_chunks
+    except (AttributeError, IndexError, TypeError):
+        return False
+    return bool(chunks)
+
+
+def run_research_context(named_entities: list[str]) -> list[ResearchContextItem]:
+    """Gemini call 2: for each named entity from call 1's extraction, a
+    search-grounded lookup producing a short "what it is / why it matters"
+    writeup — filling in what the reel itself didn't explain. NEVER lets a
+    zero-result search silently fall back to Gemini's own training data
+    dressed up as verified (see _grounding_found_results). Best-effort per
+    entity: one entity's failure never blocks the others or raises, and an
+    empty/None input just returns an empty list without calling Gemini at all."""
+    results: list[ResearchContextItem] = []
+    for entity in (named_entities or [])[:MAX_RESEARCH_ENTITIES]:
+        try:
+            response = _call_gemini_research(entity)
+        except Exception:  # noqa: BLE001 - one entity's failure must not sink the others
+            logger.warning(
+                "run_research_context: Gemini call failed for entity %r", entity, exc_info=True,
+            )
+            continue
+        if not _grounding_found_results(response):
+            logger.info(
+                "run_research_context: no search results grounded for %r — "
+                "writing the honest not-found marker, not a training-data guess", entity,
+            )
+            results.append(ResearchContextItem(topic=entity, context=NOT_FOUND_VIA_SEARCH))
+            continue
+        text = (response.text or "").strip()
+        results.append(ResearchContextItem(topic=entity, context=text or NOT_FOUND_VIA_SEARCH))
+    return results
 
 
 def _merge_comment_gate(extraction: Extraction, caption: Optional[str]) -> None:

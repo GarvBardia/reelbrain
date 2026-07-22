@@ -264,6 +264,29 @@ def _build_children(extraction: Optional[Extraction], caption: Optional[str]) ->
                 "object": "block", "type": "quote",
                 "quote": {"rich_text": _rich_text(quote)},
             })
+        if extraction.research_context:
+            # Second-pass, search-grounded writeups (gemini_pipe.run_research_context)
+            # -- rendered as body blocks, never a single property: each entry is
+            # short (2-3 sentences), but several entries concatenated into one
+            # rich_text value could exceed Notion's 2000-char-per-rich_text-object
+            # cap (confirmed against developers.notion.com/reference/request-limits).
+            # A toggle (same mechanism as Transcript/Raw caption below) gives each
+            # item its own paragraph block, and app/obsidian_sync.py's generic
+            # any-titled-toggle handling already renders this as its own
+            # "## Research Context" section with no further code needed there.
+            blocks.append({
+                "object": "block", "type": "toggle",
+                "toggle": {
+                    "rich_text": _rich_text("Research Context"),
+                    "children": [
+                        {
+                            "object": "block", "type": "paragraph",
+                            "paragraph": {"rich_text": _rich_text(f"{item.topic}: {item.context}")},
+                        }
+                        for item in extraction.research_context
+                    ],
+                },
+            })
         transcript_text = extraction.transcript or (
             "(no speech detected)" if extraction.has_speech is False else "(unavailable)"
         )

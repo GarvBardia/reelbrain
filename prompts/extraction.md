@@ -10,6 +10,8 @@ You are transcribing and extracting takeaways from a single Instagram Reel's aud
 - `value_score` of 1 is correct and expected for pure music/aesthetic/vibe reels with no informational content — do not inflate it.
 - `topic_tags`: prefer the provided taxonomy candidates below when they genuinely fit; only introduce a new tag if none of the candidates fit. Lowercase, kebab-case, 3-6 tags.
 - `comment_gate`: set `detected: true` only if the creator is explicitly asking viewers to comment a word/phrase to receive something in DM. Extract the exact `keyword` if stated, and what was promised in `promised_resource`.
+- `named_entities`: specific, look-up-able things actually named in the reel — exact tool/product/service names, named techniques or frameworks, specific factual claims (a stated number, a named method). These are NOT generic categories — those belong in `topic_tags` instead. Empty list is correct and expected when nothing specific is named.
+- `research_context`: always return an empty array `[]` here. This field is filled in by a separate research pass with real search grounding, not by you — do not attempt to fill it from your own training data.
 
 ## Context for this reel
 

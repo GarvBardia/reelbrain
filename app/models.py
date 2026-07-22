@@ -82,6 +82,17 @@ class CommentGate(BaseModel):
     promised_resource: Optional[str] = None
 
 
+class ResearchContextItem(BaseModel):
+    """One entry of the second-pass, search-grounded research writeup (see
+    gemini_pipe.run_research_context). `context` is EITHER a real 2-3 sentence
+    grounded writeup, OR the literal string "not found via search" -- never a
+    silent, unlabeled fallback to Gemini's own training data. That distinction
+    is the entire point of this pass; see PROGRESS.md."""
+
+    topic: str
+    context: str
+
+
 class Extraction(BaseModel):
     """DATA_SCHEMA.md §3, extended with transcript/has_speech per BUILD_SPEC 1.3+1.4."""
 
@@ -93,6 +104,14 @@ class Extraction(BaseModel):
     steps_or_framework: list[str] = Field(default_factory=list)
     quotable_lines: list[str] = Field(default_factory=list, max_length=3)
     topic_tags: list[str] = Field(default_factory=list)
+    # Distinct from topic_tags (which stays categorical -- taxonomy
+    # convergence, the Notion Topics multi-select, Obsidian topic index pages,
+    # compute_priority's Claude-keyword match all depend on topic_tags staying
+    # a small, reusable, category-level set). named_entities is per-reel and
+    # specific on purpose: exact tool/product names, named techniques, stated
+    # claims -- the look-up-able things gemini_pipe.run_research_context
+    # actually researches. Never fed into the taxonomy.
+    named_entities: list[str] = Field(default_factory=list)
     content_type: Literal[
         "tutorial",
         "insight",
@@ -109,6 +128,11 @@ class Extraction(BaseModel):
     # Gemini itself — drives the Notion "Priority" Select property and the
     # Obsidian "Action Needed"-style grouping. Plain text, no emoji.
     priority: Literal["High", "Medium", "Low"] = "Low"
+    # Populated by gemini_pipe.run_research_context AFTER the main extraction
+    # call, never by call 1 itself (the prompt explicitly tells call 1 to
+    # leave this as [] -- see prompts/extraction.md). Empty on the degraded
+    # path and whenever research_context wasn't attempted at all.
+    research_context: list[ResearchContextItem] = Field(default_factory=list)
 
     @field_validator("main_point")
     @classmethod

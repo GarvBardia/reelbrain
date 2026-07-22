@@ -24,6 +24,7 @@ Your job: read a reel's **transcript** (spoken audio, may be empty) and **captio
   "steps_or_framework": ["string — empty unless the reel teaches a concrete procedure"],
   "quotable_lines": ["string — verbatim from transcript only, 0 to 3 items"],
   "topic_tags": ["string — 3 to 6, lowercase-kebab-case"],
+  "named_entities": ["string — specific, look-up-able things actually named: exact tool/product/service names, named techniques, stated numbers/claims. NOT categories — those go in topic_tags."],
   "content_type": "tutorial|insight|resource_drop|motivation|news|entertainment|unknown",
   "comment_gate": {
     "detected": false,
@@ -31,7 +32,8 @@ Your job: read a reel's **transcript** (spoken audio, may be empty) and **captio
     "promised_resource": "string or null"
   },
   "value_score": 3,
-  "language": "en"
+  "language": "en",
+  "research_context": []
 }
 ```
 
@@ -42,6 +44,23 @@ Field constraints (these are enforced — violating them fails validation):
 - `content_type`: must be one of the 7 listed values.
 - `value_score`: integer 1–5.
 - Do **NOT** output a `priority` field — it is computed afterward (see §4), not by you.
+- `named_entities`: distinct from `topic_tags` — categories stay in `topic_tags` (drives the reusable Notion/Obsidian taxonomy); `named_entities` is per-reel and specific on purpose (tool names, named techniques, stated claims). Empty list is correct when nothing specific is named — never invent an entity to fill this out.
+- `research_context`: **always return an empty array `[]`.** This is filled in by a separate, second Gemini call with real Google Search grounding (`gemini_pipe.run_research_context`) — never by the extraction model itself, since it has no way to verify anything against live search results. See §9 below.
+
+---
+
+## 9. research_context — the second pass (context only, not this model's job)
+
+After extraction, `gemini_pipe.run_research_context(named_entities)` makes ONE
+grounded Gemini call *per named entity* (not batched — Search Grounding is
+documented as incompatible with structured/JSON output in the Gemini API), asking
+"what is `{entity}` and why does it matter" with the `google_search` tool enabled.
+The critical rule: if grounding returns zero results for an entity (checked via
+`response.candidates[0].grounding_metadata.grounding_chunks` being empty/absent),
+the context is written as the literal string `"not found via search"` — never
+Gemini's own training-data guess presented as verified. This is why extraction
+itself must always emit `research_context: []` — a smaller/cheaper model has no
+search tool and no way to honestly satisfy this requirement, so it must not try.
 
 ---
 
@@ -149,7 +168,8 @@ The two can never disagree. If you set a keyword, set detected true.
 
 Page body blocks: a callout with `main_point`; bulleted `supporting_points`; numbered
 `steps_or_framework`; bookmark/paragraph per `resources_mentioned`; quote blocks for
-`quotable_lines`; a "Transcript" toggle; a "Raw caption" toggle.
+`quotable_lines`; a "Research Context" toggle (one paragraph per `research_context`
+entry, only emitted when non-empty — see §9); a "Transcript" toggle; a "Raw caption" toggle.
 
 Note on "Comment gate": it is a genuine **Checkbox** property. Some Notion tools RENDER
 checkbox values as the literal strings `__YES__`/`__NO__` — that is a display convention

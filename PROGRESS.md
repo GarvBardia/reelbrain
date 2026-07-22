@@ -1,5 +1,142 @@
 # PROGRESS.md — hardening/deployment session log
 
+## ⭐ Second-pass research/context step — BUILT + TESTED; live grounding blocked account-side (dry run incomplete, reported honestly)
+
+Added a second Gemini pass over the extraction pipeline: call 1 (existing)
+now also surfaces `named_entities` (specific, look-up-able things — tool
+names, techniques, stated claims); call 2 (new, `gemini_pipe.run_research_context`)
+takes those entities and does a search-grounded Gemini lookup per entity,
+producing `research_context: [{topic, context}]`.
+
+**Design decision, confirmed with the user first:** `named_entities` is a
+NEW, separate field — `topic_tags` was NOT redefined. `topic_tags` stays
+categorical (taxonomy convergence, Notion Topics multi-select, Obsidian topic
+index pages, `compute_priority`'s Claude-keyword match all depend on it
+staying a small reusable set); `named_entities` is per-reel and specific on
+purpose, and is what the research pass actually operates on.
+
+**Point 2 (CRITICAL — honest empty-grounding handling):** `_grounding_found_results()`
+checks `response.candidates[0].grounding_metadata.grounding_chunks` — if
+empty/absent, the context is written as the literal string `"not found via
+search"`, and `response.text` (which Gemini WILL still populate from its own
+training data even when grounding found nothing — confirmed via the Gemini
+API GitHub/forum threads on this exact behavior) is discarded, never used.
+
+**Point 3 (CRITICAL — Gemini-specific spacing):** confirmed no
+Gemini-specific spacing constant existed before this — only
+`fetcher.MIN_FETCH_SPACING_SECONDS` (yt-dlp/video fetch pacing) and a bare
+concurrency semaphore. Added `gemini_pipe.MIN_GEMINI_CALL_SPACING_SECONDS`
+(default 4s) + `_enforce_gemini_call_spacing()`, tracked via its own
+`app_state` key (`last_gemini_call_at`), completely independent of the
+fetch-log table. Wired into every actual Gemini call site: `_call_gemini`,
+`_call_gemini_text_only`, `_call_gemini_resource` (resource ingestion), and
+the new `_call_gemini_research`.
+
+**Point 4 (rate-limit research):** ai.google.dev's own rate-limits page
+explicitly does NOT publish fixed free-tier numbers — it points to the
+per-account AI Studio dashboard instead, confirming the user's suspicion that
+public numbers are unverified/inconsistent. Separately confirmed via
+ai.google.dev/gemini-api/docs/pricing: **Grounding with Google Search is
+listed as up to 500 RPD free on gemini-2.5-flash (shared with Flash-Lite),
+then billed** — a distinct quota line from the base model's own RPD.
+
+**Point 3 architecture note — call 2 is per-ENTITY, not one batched call:**
+Gemini's `response_schema`/controlled generation is documented as
+incompatible with the `google_search` tool ("Search Grounding can't be used
+with JSON/YAML/XML mode" — confirmed via multiple Gemini API GitHub issues
+and forum threads). Even setting that aside, a single multi-entity call only
+exposes `grounding_metadata` at the whole-response level, making it
+impossible to tell WHICH entity search actually found something for. One
+call per entity (capped at `MAX_RESEARCH_ENTITIES = 6`) gives an unambiguous
+per-entity signal, at real call-volume cost — **correcting point 5's "doubles"
+framing: a reel with N named entities now costs 1 + up to N Gemini calls, not
+a flat 2x** (a reel with 4-5 entities could be closer to 5-6x). A 32-reel
+batch that hit the daily cap once at 32 reels could now hit it at a small
+single-digit number of reels in the worst case — **large bulk-imports should
+be spread over multiple days**, more conservatively than the original "~16
+reels" estimate in the request.
+
+**Point 6 (Notion limits, verified against developers.notion.com/reference/request-limits,
+not guessed):** rich_text property/object values cap at **2000 characters**;
+block arrays cap at **100 elements per request**. `research_context` is
+written as a **"Research Context" toggle in the page body** (one paragraph
+block per entry), not a property — several 2-3-sentence entries concatenated
+into one property value risked the 2000-char cap. Reuses the exact same
+generic "any-titled-toggle becomes its own heading" mechanism
+`app/obsidian_sync.py`'s `blocks_to_markdown` already had for
+Transcript/Raw caption — **zero new code needed there** to get a
+"## Research Context" section in the Obsidian note; only a test was added to
+lock that behavior in.
+
+**Point 8 — dry run: PARTIALLY complete, reported honestly, not glossed over.**
+
+✅ **Call 1 (sharpened extraction) — proven live, 3 real captions:**
+
+| Shortcode | `named_entities` (new) | `topic_tags` (unchanged, still categorical) |
+|---|---|---|
+| `DaxsXR-APbZ` | `["LinkedIn", "ChatGPT", "cleanlistai"]` | `["lead-generation", "linkedin", "freelancing", "sales-outreach", "ai-prompts"]` |
+| `Da211Z2jc2P` | `["Exply"]` | `["lead-generation", "ai-automation", "freelancing", "productivity-hacks"]` |
+| `Da8A4axznbT` | `["Higgsfield AI Apps"]` | `["developer-tools", "ai-tools", "image-processing"]` |
+
+`research_context` correctly came back `[]` from call 1 on all three (as the
+prompt instructs) — the separation between categorical tags and specific
+named things is working exactly as designed.
+
+✅ **Point 3 (Gemini-specific spacing) — proven live with real timestamps,**
+isolated from fetch spacing entirely (no video/yt-dlp involved): two
+consecutive plain Gemini calls, `MIN_GEMINI_CALL_SPACING_SECONDS=4.0`,
+observed gap between call 1 finishing and call 2 finishing: **4.31s** — the
+spacing mechanism is genuinely inserting a wait, not a no-op.
+
+❌ **Call 2 (grounded research) could NOT be completed live** — every
+grounded call (5 real named entities, plus isolated single-entity retests on
+`gemini-flash-latest`, `gemini-2.5-flash`, and `gemini-2.0-flash`) returned
+`429 RESOURCE_EXHAUSTED` immediately. Isolated and confirmed this is
+grounding-specific, not a general quota exhaustion: a **plain, non-grounded
+call on the same key succeeded instantly** right after the grounded ones
+failed. `gemini-2.5-flash` additionally returned `404 NOT_FOUND` ("no longer
+available to new users"), ruling out a model-alias issue as the cause on
+that model. This strongly points to the free Google Search grounding
+quota/entitlement not being available on this specific API key/project right
+now — possibly requiring a linked billing account even to access the free
+500 RPD allotment (Google's docs don't fully clarify this) — rather than
+anything wrong in this session's code. `run_research_context`'s per-entity
+try/except handled this exactly as designed: every failure was logged and
+skipped, no entity was left half-written, `research_context` correctly came
+back `[]` rather than a guess.
+
+**Net result: could NOT prove point 2 (the "not found via search" honest
+label) with a real live example** — only the mocked test
+(`test_run_research_context_writes_honest_marker_when_grounding_empty`)
+currently demonstrates that path. Recommend checking
+https://aistudio.google.com/rate-limit (or whether this Google Cloud project
+has billing linked) before re-attempting the live grounding dry run — this is
+a account-configuration item, not something more code can fix.
+
+**CHEAP_MODEL_GUIDE.md updated** (§1 schema, §6 body blocks, new §9) so a
+smaller model following that guide stays consistent with this change —
+critically, it's told to always emit `research_context: []` itself, since it
+has no search tool and no way to honestly satisfy point 2's requirement.
+
+Tests: 19 new in `tests/test_gemini_pipe.py` (grounding-detection, honest
+zero-results marker, per-entity failure isolation, `MAX_RESEARCH_ENTITIES`
+cap, spacing — both "sleeps when called too soon" and "no sleep once enough
+time passed" — and wiring: success path populates `research_context`,
+degraded path never calls research at all), 2 new in `tests/test_pipeline.py`
+(Notion body-toggle vs property, no-toggle-when-empty), 2 new in
+`tests/test_obsidian_sync.py` (generic toggle → "## Research Context"
+section, full end-to-end sync). Pytest: 472 passed.
+
+**Not yet done, waiting on the live-grounding blocker above and your
+go-ahead:** a genuine end-to-end dry run proving call 2 actually adds
+explanatory value on a real obscure tool, and the zero-results honest-label
+path with a real example. Code and tests are complete and safe to leave
+wired into the pipeline in the meantime — every failure mode (grounding
+account-blocked, per-entity exception, thin/empty entities) degrades to an
+empty `research_context` list, never a guess.
+
+---
+
 ## ⭐ PART 3 — deep resource ingestion into Obsidian: BUILT + DRY-RUN VERIFIED, awaiting go-ahead for full batch
 
 New LOCAL-ONLY script `scripts/ingest_resources.py` (never deployed to Render,
