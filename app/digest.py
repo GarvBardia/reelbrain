@@ -25,7 +25,15 @@ DIGEST_DAYS = 7
 DAILY_DIGEST_HOURS = 24
 DAILY_DIGEST_TOP_TOPICS = 3
 DAILY_TITLE_MAX_LEN = 80
-DAILY_PRIORITY_ORDER = ["High", "Medium", "Low"]
+PRIORITY_ORDER = ["High", "Medium", "Low"]
+DAILY_PRIORITY_ORDER = PRIORITY_ORDER  # kept as an alias -- same list, both digests share it
+
+# Single persistent page per digest (see PROGRESS.md) -- these titles are the
+# lookup key for notion_writer.upsert_named_page, so they must stay constant
+# across runs; changing one effectively "forgets" the old page and starts a
+# fresh one under the same parent.
+WEEKLY_DIGEST_TITLE = "📬 Weekly Digest"
+DAILY_DIGEST_TITLE = "🌙 Daily Reflection"
 
 
 def _notion_pages_since(hours: Optional[int] = None, days: Optional[int] = None) -> Optional[list[dict]]:
@@ -55,35 +63,36 @@ def _collect_week_local() -> dict:
 
     saves = []
     for row in rows:
-        main_point = None
+        extraction = {}
         if row["extraction_json"]:
             try:
-                main_point = json.loads(row["extraction_json"]).get("main_point")
+                extraction = json.loads(row["extraction_json"])
             except (json.JSONDecodeError, AttributeError):
-                pass
+                extraction = {}
+        main_point = extraction.get("main_point") or row["caption"] or row["permalink"]
         saves.append({
             "shortcode": row["shortcode"],
-            "main_point": main_point or row["caption"] or row["permalink"],
+            "title": _clean_title(main_point),
+            "main_point": main_point,
             "creator": row["creator"] or "(unknown)",
             "status": row["status"],
-            "notion_page_url": row["notion_page_url"],
-            "tags": tags_by_shortcode.get(row["shortcode"], []),
+            "topics": tags_by_shortcode.get(row["shortcode"], []),
+            "priority": extraction.get("priority") or "Low",
+            "url": row["notion_page_url"] or row["permalink"],
         })
     return _group_week(saves)
 
 
 def _group_week(saves: list[dict]) -> dict:
     by_topic: dict[str, list[dict]] = {}
-    by_creator: dict[str, list[dict]] = {}
     for save in saves:
-        for tag in save["tags"]:
+        for tag in save["topics"]:
             by_topic.setdefault(tag, []).append(save)
-        by_creator.setdefault(save["creator"], []).append(save)
-    return {"saves": saves, "by_topic": by_topic, "by_creator": by_creator}
+    return {"saves": saves, "by_topic": by_topic}
 
 
 def collect_week() -> dict:
-    """Past-7-days saves grouped by topic and creator. Notion-primary (durable);
+    """Past-7-days saves grouped by topic and priority. Notion-primary (durable);
     falls back to local SQLite when Notion errors or comes back empty while
     local rows exist (a Notion misconfiguration must not blank the digest)."""
     pages = _notion_pages_since(days=DIGEST_DAYS)
@@ -97,13 +106,16 @@ def collect_week() -> dict:
             # from the local row when one survives; "(unknown)" after a wipe.
             row = store.get_by_shortcode(fields["shortcode"])
             creator = row["creator"] if row and row["creator"] else "(unknown)"
+            main_point = fields["title"] or fields["permalink"]
             saves.append({
                 "shortcode": fields["shortcode"],
-                "main_point": fields["title"] or fields["permalink"],
+                "title": _clean_title(main_point),
+                "main_point": main_point,
                 "creator": creator,
                 "status": fields["status_label"],
-                "notion_page_url": fields["page_url"],
-                "tags": fields["topics"],
+                "topics": fields["topics"],
+                "priority": fields["priority"] or "Low",
+                "url": fields["page_url"] or fields["permalink"],
             })
         return _group_week(saves)
     local = _collect_week_local()
@@ -112,56 +124,133 @@ def collect_week() -> dict:
     return local
 
 
-def try_ai_summary(data: dict) -> Optional[str]:
-    """3-sentence week summary via Gemini. OPTIONAL — returns None on ANY failure."""
-    if not data["saves"]:
+def _try_ai_prose_summary(saves: list[dict], period_label: str) -> Optional[str]:
+    """A short reflective prose summary via Gemini, shared by both digests.
+    OPTIONAL — returns None on ANY failure (quota, network, no key); the
+    deterministic stat line in render_*_markdown is always there as the
+    fallback, so a Gemini outage never blocks or blanks a digest."""
+    if not saves:
         return None
     try:
         from google import genai
 
         from app.gemini_pipe import GEMINI_API_KEY, GEMINI_MODEL
 
-        points = "\n".join(f"- {s['main_point']}" for s in data["saves"][:50])
+        points = "\n".join(f"- {s['main_point']}" for s in saves[:50])
         client = genai.Client(api_key=GEMINI_API_KEY)
         response = client.models.generate_content(
             model=GEMINI_MODEL,
             contents=(
-                "Summarize this week's saved Instagram reel takeaways in exactly 3 "
-                "sentences. Plain prose, no bullets, no preamble:\n" + points
+                f"Summarize {period_label}'s saved Instagram reel takeaways in 2-3 "
+                "sentences of plain prose, written as a reflective note to yourself "
+                "(not a report). No bullets, no preamble:\n" + points
             ),
         )
         text = (response.text or "").strip()
         return text or None
     except Exception:  # noqa: BLE001 - enhancement only, never block the digest
-        logger.warning("AI week-summary skipped", exc_info=True)
+        logger.warning("AI %s summary skipped", period_label, exc_info=True)
         return None
 
 
+def try_ai_summary(data: dict) -> Optional[str]:
+    return _try_ai_prose_summary(data["saves"], "this week")
+
+
+def try_ai_daily_summary(data: dict) -> Optional[str]:
+    return _try_ai_prose_summary(data["saves"], "today")
+
+
+def _synthesis_stat_line(saves: list[dict], period: str, top_n: int = DAILY_DIGEST_TOP_TOPICS) -> str:
+    """Deterministic one-line synthesis (always present, even when the AI
+    prose summary above it fails) — the same stat-line shape for both
+    digests, just parameterized on the time period."""
+    total = len(saves)
+    high_count = sum(1 for s in saves if s["priority"] == "High")
+
+    topic_counts: dict[str, int] = {}
+    for save in saves:
+        for topic in save["topics"]:
+            topic_counts[topic] = topic_counts.get(topic, 0) + 1
+    top_topics = [
+        topic for topic, _count in
+        sorted(topic_counts.items(), key=lambda kv: -kv[1])[:top_n]
+    ]
+
+    line = f"{total} {'reel' if total == 1 else 'reels'} saved {period}"
+    if high_count:
+        line += f", {high_count} flagged High priority"
+    if top_topics:
+        line += f" — common themes: {', '.join(top_topics)}"
+    return line + "."
+
+
+def _join_topics(topics: list[str], max_shown: int = 2) -> str:
+    if not topics:
+        return ""
+    shown = topics[:max_shown]
+    text = " and ".join(shown)
+    extra = len(topics) - len(shown)
+    if extra > 0:
+        text += f" (+{extra} more)"
+    return text
+
+
+def _format_entry(save: dict) -> str:
+    """One natural-reading sentence per reel — the synthesized title already
+    reads as a full sentence (it's the extraction's main_point), so this just
+    adds a light topic clause and the link, instead of a raw field-by-field
+    printout (no "_topics_ — [link]" label dump)."""
+    sentence = (save["title"] or save["shortcode"]).rstrip(".!?")
+    topics_clause = _join_topics(save["topics"])
+    if topics_clause:
+        sentence += f" (filed under {topics_clause})"
+    return f"- {sentence}. [Open the reel]({save['url']})"
+
+
+def _group_by_priority(saves: list[dict]) -> dict[str, list[dict]]:
+    by_priority: dict[str, list[dict]] = {p: [] for p in PRIORITY_ORDER}
+    for save in saves:
+        by_priority.setdefault(save["priority"], []).append(save)
+    return by_priority
+
+
 def render_markdown(data: dict, ai_summary: Optional[str] = None) -> str:
+    """Reads like an actual reflective summary: a synthesis paragraph up top
+    (AI prose when available, always backed by a deterministic stat line),
+    entries grouped by priority tier as natural sentences, and a compact
+    topic index at the end for browsing — not a raw field dump."""
     week_of = _utc_naive_now().date().isoformat()
     lines = [f"# Weekly digest — week ending {week_of}", ""]
-    if not data["saves"]:
+    saves = data["saves"]
+    if not saves:
         lines.append("No reels saved this week.")
-        return "\n".join(lines)
+        return "\n".join(lines) + "\n"
 
-    lines.append(f"{len(data['saves'])} reels saved this week.")
-    lines.append("")
+    lines.append(_synthesis_stat_line(saves, "this week"))
     if ai_summary:
-        lines += ["## Week in three sentences", "", ai_summary, ""]
-
-    lines.append("## By topic")
+        lines.append("")
+        lines.append(ai_summary)
     lines.append("")
-    for topic, saves in sorted(data["by_topic"].items(), key=lambda kv: -len(kv[1])):
-        lines.append(f"### {topic} ({len(saves)})")
-        for save in saves:
-            lines.append(f"- {save['main_point']}")
+
+    by_priority = _group_by_priority(saves)
+    for priority in PRIORITY_ORDER:
+        entries = by_priority.get(priority) or []
+        if not entries:
+            continue
+        lines.append(f"## {priority} priority")
+        lines.append("")
+        for save in entries:
+            lines.append(_format_entry(save))
         lines.append("")
 
-    lines.append("## By creator")
+    lines.append("## Topics this week")
     lines.append("")
-    for creator, saves in sorted(data["by_creator"].items(), key=lambda kv: -len(kv[1])):
-        lines.append(f"- **{creator}** — {len(saves)} save(s)")
-    return "\n".join(lines)
+    for topic, entries in sorted(data["by_topic"].items(), key=lambda kv: -len(kv[1])):
+        lines.append(f"- {topic} ({len(entries)})")
+    lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _markdown_to_blocks(markdown: str) -> list[dict]:
@@ -189,21 +278,17 @@ def _markdown_to_blocks(markdown: str) -> list[dict]:
 
 
 def create_notion_page(markdown: str) -> Optional[dict]:
-    """Creates the digest page directly under the parent page (not in a database).
-    Returns None (logged) if the parent page ID isn't configured or the write fails —
-    the markdown digest is still the caller's to keep."""
+    """Updates the ONE persistent "📬 Weekly Digest" page under the parent page
+    (see PROGRESS.md — a new dated page every run would accumulate endlessly).
+    Returns None (logged) if the parent page ID isn't configured or the write
+    fails — the markdown digest is still the caller's to keep."""
     if not NOTION_PARENT_PAGE_ID:
         logger.warning("NOTION_PARENT_PAGE_ID not set — digest not written to Notion")
         return None
-    week_of = _utc_naive_now().date().isoformat()
     try:
-        client = notion_writer._client()
-        page = client.pages.create(
-            parent={"type": "page_id", "page_id": NOTION_PARENT_PAGE_ID},
-            properties={"title": {"title": notion_writer._rich_text(f"📬 Weekly digest — {week_of}")}},
-            children=_markdown_to_blocks(markdown),
+        return notion_writer.upsert_named_page(
+            NOTION_PARENT_PAGE_ID, WEEKLY_DIGEST_TITLE, _markdown_to_blocks(markdown)
         )
-        return {"page_id": page["id"], "url": page["url"]}
     except Exception:  # noqa: BLE001 - fail soft; digest markdown still exists
         logger.exception("digest Notion write failed")
         return None
@@ -294,39 +379,14 @@ def collect_day() -> dict:
 
 
 def _daily_synthesis_line(saves: list[dict]) -> str:
-    total = len(saves)
-    high_count = sum(1 for s in saves if s["priority"] == "High")
-
-    topic_counts: dict[str, int] = {}
-    for save in saves:
-        for topic in save["topics"]:
-            topic_counts[topic] = topic_counts.get(topic, 0) + 1
-    top_topics = [
-        topic for topic, _count in
-        sorted(topic_counts.items(), key=lambda kv: -kv[1])[:DAILY_DIGEST_TOP_TOPICS]
-    ]
-
-    line = f"{total} {'reel' if total == 1 else 'reels'} saved today"
-    if high_count:
-        line += f", {high_count} flagged High priority"
-    if top_topics:
-        line += f" — common themes: {', '.join(top_topics)}"
-    return line + "."
+    return _synthesis_stat_line(saves, "today")
 
 
-def _format_daily_entry(save: dict) -> str:
-    topics_part = ", ".join(save["topics"]) if save["topics"] else "no topics"
-    line = f"- **{save['title']}**"
-    if save["main_point"] and save["main_point"] != save["title"]:
-        line += f" — {save['main_point']}"
-    line += f" — _{topics_part}_ — [Open reel]({save['url']})"
-    return line
-
-
-def render_daily_markdown(data: dict) -> str:
-    """Reads like something worth reading, not a raw dump: a one-line
-    synthesis up top, then entries grouped by Priority (High first). Zero
-    saves today -> a short honest note, not an empty or broken digest (see
+def render_daily_markdown(data: dict, ai_summary: Optional[str] = None) -> str:
+    """Reads like an actual reflective summary, not a raw dump: an AI prose
+    synthesis (when available) backed by a deterministic stat line, then
+    entries grouped by Priority (High first) as natural sentences. Zero saves
+    today -> a short honest note, not an empty or broken digest (see
     PROGRESS.md for why: a "nothing happened" day is itself informative,
     and skipping delivery silently would look identical to the job failing)."""
     day_of = _utc_naive_now().date().isoformat()
@@ -337,42 +397,38 @@ def render_daily_markdown(data: dict) -> str:
         lines.append("Nothing saved today.")
         return "\n".join(lines) + "\n"
 
-    lines.append(_daily_synthesis_line(saves))
+    lines.append(_synthesis_stat_line(saves, "today"))
+    if ai_summary:
+        lines.append("")
+        lines.append(ai_summary)
     lines.append("")
 
-    by_priority: dict[str, list[dict]] = {p: [] for p in DAILY_PRIORITY_ORDER}
-    for save in saves:
-        by_priority.setdefault(save["priority"], []).append(save)
-
-    for priority in DAILY_PRIORITY_ORDER:
+    by_priority = _group_by_priority(saves)
+    for priority in PRIORITY_ORDER:
         entries = by_priority.get(priority) or []
         if not entries:
             continue
         lines.append(f"## {priority} priority")
         lines.append("")
         for save in entries:
-            lines.append(_format_daily_entry(save))
+            lines.append(_format_entry(save))
         lines.append("")
 
     return "\n".join(lines).rstrip() + "\n"
 
 
-def create_daily_notion_page(markdown: str, has_saves: bool) -> Optional[dict]:
-    """Same mechanism as the weekly digest's create_notion_page: a page
-    directly under NOTION_PARENT_PAGE_ID, not in a database."""
+def create_daily_notion_page(markdown: str) -> Optional[dict]:
+    """Updates the ONE persistent "🌙 Daily Reflection" page (same
+    single-persistent-page pattern as the weekly digest's create_notion_page
+    — see PROGRESS.md). Whether anything was saved today lives in the body
+    text now, not the title, since the title is the fixed lookup key."""
     if not NOTION_PARENT_PAGE_ID:
         logger.warning("NOTION_PARENT_PAGE_ID not set — daily digest not written to Notion")
         return None
-    day_of = _utc_naive_now().date().isoformat()
-    title_prefix = "🌙 Daily reflection" if has_saves else "🌙 Daily reflection (nothing saved)"
     try:
-        client = notion_writer._client()
-        page = client.pages.create(
-            parent={"type": "page_id", "page_id": NOTION_PARENT_PAGE_ID},
-            properties={"title": {"title": notion_writer._rich_text(f"{title_prefix} — {day_of}")}},
-            children=_markdown_to_blocks(markdown),
+        return notion_writer.upsert_named_page(
+            NOTION_PARENT_PAGE_ID, DAILY_DIGEST_TITLE, _markdown_to_blocks(markdown)
         )
-        return {"page_id": page["id"], "url": page["url"]}
     except Exception:  # noqa: BLE001 - fail soft; digest markdown still exists
         logger.exception("daily digest Notion write failed")
         return None
@@ -410,8 +466,9 @@ def send_daily_ntfy(save_count: int, synthesis_line: Optional[str]) -> bool:
 def run_daily() -> dict:
     data = collect_day()
     saves = data["saves"]
-    markdown = render_daily_markdown(data)
-    page = create_daily_notion_page(markdown, has_saves=bool(saves))
+    ai_summary = try_ai_daily_summary(data)
+    markdown = render_daily_markdown(data, ai_summary)
+    page = create_daily_notion_page(markdown)
     high_count = sum(1 for s in saves if s["priority"] == "High")
     synthesis_line = _daily_synthesis_line(saves) if saves else None
     ntfy_sent = send_daily_ntfy(save_count=len(saves), synthesis_line=synthesis_line)

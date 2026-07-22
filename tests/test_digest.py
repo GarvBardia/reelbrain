@@ -38,12 +38,10 @@ def test_collect_week_groups_and_excludes_old_rows():
 
     assert {s["shortcode"] for s in data["saves"]} == {"WK1", "WK2", "WK3"}
     assert len(data["by_topic"]["sleep"]) == 2
-    assert len(data["by_creator"]["jane"]) == 2
-    assert len(data["by_creator"]["bob"]) == 1
 
 
 def test_render_markdown_empty_week():
-    md = digest.render_markdown({"saves": [], "by_topic": {}, "by_creator": {}})
+    md = digest.render_markdown({"saves": [], "by_topic": {}})
     assert "No reels saved this week." in md
 
 
@@ -52,13 +50,12 @@ def test_render_markdown_with_and_without_ai_summary():
     data = digest.collect_week()
 
     without = digest.render_markdown(data, ai_summary=None)
-    assert "Week in three sentences" not in without
     assert "Sleep tip" in without
-    assert "### sleep (1)" in without
-    assert "**jane** — 1 save(s)" in without
+    assert "## Low priority" in without  # no priority in extraction_json -> defaults Low
+    assert "## Topics this week" in without
+    assert "sleep (1)" in without
 
     with_summary = digest.render_markdown(data, ai_summary="Big week. Much sleep. Wow.")
-    assert "Week in three sentences" in with_summary
     assert "Big week. Much sleep. Wow." in with_summary
 
 
@@ -67,6 +64,20 @@ def test_try_ai_summary_fails_soft_when_gemini_unavailable():
     _seed_save("WK1", "jane", ["sleep"], "Sleep tip")
     data = digest.collect_week()
     assert digest.try_ai_summary(data) is None
+
+
+def test_try_ai_daily_summary_fails_soft_when_gemini_unavailable():
+    _seed_daily_save("D1", ["sleep"], "Sleep tip")
+    data = digest.collect_day()
+    assert digest.try_ai_daily_summary(data) is None
+
+
+def test_render_daily_markdown_includes_ai_summary_when_present():
+    saves = [
+        {"shortcode": "H1", "title": "x", "main_point": "x", "topics": ["mcp"], "priority": "High", "url": "https://x/1"},
+    ]
+    md = digest.render_daily_markdown({"saves": saves}, ai_summary="A short reflective note.")
+    assert "A short reflective note." in md
 
 
 def test_run_produces_digest_and_notion_page_despite_gemini_failure(monkeypatch):
@@ -85,7 +96,7 @@ def test_run_produces_digest_and_notion_page_despite_gemini_failure(monkeypatch)
     assert len(fake.pages.created) == 1
     call = fake.pages.created[0]
     assert call["parent"] == {"type": "page_id", "page_id": "parent-page-id"}
-    assert "Weekly digest" in call["properties"]["title"]["title"][0]["text"]["content"]
+    assert call["properties"]["title"]["title"][0]["text"]["content"] == digest.WEEKLY_DIGEST_TITLE
     block_types = {b["type"] for b in call["children"]}
     assert "heading_2" in block_types and "bulleted_list_item" in block_types
 
@@ -93,6 +104,65 @@ def test_run_produces_digest_and_notion_page_despite_gemini_failure(monkeypatch)
 def test_create_notion_page_skips_without_parent_id(monkeypatch):
     monkeypatch.setattr(digest, "NOTION_PARENT_PAGE_ID", "")
     assert digest.create_notion_page("# whatever") is None
+
+
+# --- single persistent page: create_notion_page/create_daily_notion_page ------
+# always call notion_writer.upsert_named_page with a FIXED title (never a
+# per-run dated title) -- the find-or-create/replace mechanism itself is
+# tested at the notion_writer layer (tests/test_notion_writer.py).
+
+def test_create_notion_page_uses_persistent_title(monkeypatch):
+    calls = []
+
+    def _fake_upsert(parent_id, title, children):
+        calls.append((parent_id, title, children))
+        return {"page_id": "pg-1", "url": "https://notion.so/pg-1"}
+
+    monkeypatch.setattr(notion_writer, "upsert_named_page", _fake_upsert)
+    monkeypatch.setattr(digest, "NOTION_PARENT_PAGE_ID", "parent-page-id")
+
+    result = digest.create_notion_page("# whatever\n\n- a bullet")
+
+    assert result == {"page_id": "pg-1", "url": "https://notion.so/pg-1"}
+    assert len(calls) == 1
+    parent_id, title, children = calls[0]
+    assert parent_id == "parent-page-id"
+    assert title == digest.WEEKLY_DIGEST_TITLE
+    assert any(b["type"] == "bulleted_list_item" for b in children)
+
+
+def test_create_daily_notion_page_uses_persistent_title(monkeypatch):
+    calls = []
+
+    def _fake_upsert(parent_id, title, children):
+        calls.append((parent_id, title, children))
+        return {"page_id": "pg-2", "url": "https://notion.so/pg-2"}
+
+    monkeypatch.setattr(notion_writer, "upsert_named_page", _fake_upsert)
+    monkeypatch.setattr(digest, "NOTION_PARENT_PAGE_ID", "parent-page-id")
+
+    result = digest.create_daily_notion_page("# whatever")
+
+    assert result == {"page_id": "pg-2", "url": "https://notion.so/pg-2"}
+    assert calls[0][1] == digest.DAILY_DIGEST_TITLE
+
+
+def test_digest_titles_stay_constant_across_repeated_runs(monkeypatch):
+    """The whole point of the fix: the title never changes run to run (it's
+    the lookup key), regardless of whether anything was saved."""
+    titles_seen = []
+
+    def _fake_upsert(parent_id, title, children):
+        titles_seen.append(title)
+        return {"page_id": "pg-1", "url": "https://notion.so/pg-1"}
+
+    monkeypatch.setattr(notion_writer, "upsert_named_page", _fake_upsert)
+    monkeypatch.setattr(digest, "NOTION_PARENT_PAGE_ID", "parent-page-id")
+
+    digest.create_daily_notion_page("# day one, lots saved")
+    digest.create_daily_notion_page("# day two, nothing saved")
+
+    assert titles_seen == [digest.DAILY_DIGEST_TITLE, digest.DAILY_DIGEST_TITLE]
 
 
 def test_run_survives_notion_failure(monkeypatch):
@@ -212,28 +282,22 @@ def test_render_daily_markdown_synthesis_line_content():
     assert "mcp" in md  # most-common topic surfaces in the synthesis line
 
 
-def test_format_daily_entry_omits_redundant_main_point_when_same_as_title():
-    save = {"title": "Short point", "main_point": "Short point", "topics": ["x"], "url": "https://x/1"}
-    entry = digest._format_daily_entry(save)
-    assert entry.count("Short point") == 1  # not duplicated
+def test_format_entry_includes_topic_clause_and_link():
+    save = {"title": "Great point", "topics": ["ai", "tools"], "url": "https://x/1", "shortcode": "S1"}
+    entry = digest._format_entry(save)
+    assert entry == "- Great point (filed under ai and tools). [Open the reel](https://x/1)"
 
 
-def test_create_daily_notion_page_title_reflects_saves_vs_empty(monkeypatch):
-    fake = FakeClient()
-    monkeypatch.setattr(notion_writer, "_client", lambda: fake)
-    monkeypatch.setattr(digest, "NOTION_PARENT_PAGE_ID", "parent-page-id")
-
-    digest.create_daily_notion_page("# whatever", has_saves=True)
-    digest.create_daily_notion_page("# whatever", has_saves=False)
-
-    titles = [c["properties"]["title"]["title"][0]["text"]["content"] for c in fake.pages.created]
-    assert "Daily reflection —" in titles[0] and "nothing saved" not in titles[0]
-    assert "nothing saved" in titles[1]
+def test_format_entry_omits_topic_clause_when_no_topics():
+    save = {"title": "Great point", "topics": [], "url": "https://x/1", "shortcode": "S1"}
+    entry = digest._format_entry(save)
+    assert entry == "- Great point. [Open the reel](https://x/1)"
+    assert "no topics" not in entry  # no raw field-dump filler phrase
 
 
 def test_create_daily_notion_page_skips_without_parent_id(monkeypatch):
     monkeypatch.setattr(digest, "NOTION_PARENT_PAGE_ID", "")
-    assert digest.create_daily_notion_page("# whatever", has_saves=True) is None
+    assert digest.create_daily_notion_page("# whatever") is None
 
 
 def test_send_daily_ntfy_skipped_without_topic(monkeypatch):
@@ -311,7 +375,9 @@ def test_run_daily_zero_saves_still_writes_a_notion_note(monkeypatch):
     assert result["notion_page"] is not None
     assert "Nothing saved today." in result["markdown"]
     call = fake.pages.created[0]
-    assert "nothing saved" in call["properties"]["title"]["title"][0]["text"]["content"]
+    # title is fixed regardless of whether anything was saved -- the "nothing
+    # saved" fact lives in the body text, not the (persistent, lookup-key) title
+    assert call["properties"]["title"]["title"][0]["text"]["content"] == digest.DAILY_DIGEST_TITLE
 
 
 # --- FIX 2: digests are Notion-primary (ephemeral SQLite wipes made them lie) ---

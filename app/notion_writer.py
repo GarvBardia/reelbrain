@@ -338,6 +338,49 @@ def update_page(
     return {"page_id": page["id"], "url": page["url"], "creator_page_id": creator_page_id}
 
 
+def find_child_page_by_title(client, parent_page_id: str, title: str) -> Optional[str]:
+    """Look for a direct child page of parent_page_id with this exact title
+    (paginated). Returns its page_id, or None if it doesn't exist yet.
+    Backs the single-persistent-page pattern (digests) below."""
+    cursor = None
+    while True:
+        kwargs = {"block_id": parent_page_id}
+        if cursor:
+            kwargs["start_cursor"] = cursor
+        resp = client.blocks.children.list(**kwargs)
+        for block in resp.get("results", []):
+            if block.get("type") == "child_page" and block.get("child_page", {}).get("title") == title:
+                return block["id"]
+        if not resp.get("has_more"):
+            return None
+        cursor = resp.get("next_cursor")
+
+
+def upsert_named_page(parent_page_id: str, title: str, children: list[dict]) -> dict:
+    """Single-persistent-page pattern: finds a direct child of parent_page_id
+    with this exact title and REPLACES its body blocks (same delete-then-append
+    pattern as update_page above), instead of creating a new dated page every
+    run — which would accumulate endlessly (see PROGRESS.md, digest fix).
+    Creates the page once, on the first call, if it doesn't exist yet."""
+    client = _client()
+    children = children[:100]
+    page_id = find_child_page_by_title(client, parent_page_id, title)
+    if page_id is None:
+        page = client.pages.create(
+            parent={"type": "page_id", "page_id": parent_page_id},
+            properties={"title": {"title": _rich_text(title)}},
+            children=children,
+        )
+        return {"page_id": page["id"], "url": page["url"]}
+
+    existing = client.blocks.children.list(block_id=page_id)["results"]
+    for block in existing:
+        client.blocks.delete(block_id=block["id"])
+    client.blocks.children.append(block_id=page_id, children=children)
+    page = client.pages.update(page_id=page_id, properties={"title": {"title": _rich_text(title)}})
+    return {"page_id": page["id"], "url": page["url"]}
+
+
 def set_status(page_id: str, status: str) -> None:
     """BUILD_SPEC 2.3 (nightly job): flip Status only, no body-block rebuild."""
     client = _client()

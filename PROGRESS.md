@@ -1,5 +1,58 @@
 # PROGRESS.md — hardening/deployment session log
 
+## ⭐ PART 1 — digests: single persistent page + real narrative content
+
+**Problem:** both `/nightly`-adjacent digests (`/daily-digest`, `/weekly-digest`)
+created a brand-new dated Notion page every run (`📬 Weekly digest — 2026-07-15`,
+`🌙 Daily reflection — 2026-07-20`, ...) — accumulating endlessly. Content was
+also a raw field dump: `- **title** — main_point — _topics_ — [Open reel](url)`.
+
+**Fix 1 — single persistent page.** Added `notion_writer.find_child_page_by_title`
++ `notion_writer.upsert_named_page(parent_page_id, title, children)`: looks up a
+direct child of the parent page by exact title; if found, replaces its body
+blocks (the same delete-then-append pattern `update_page` already used for reel
+notes); if not found, creates it once. `digest.create_notion_page` /
+`create_daily_notion_page` now call this with FIXED titles —
+`digest.WEEKLY_DIGEST_TITLE` ("📬 Weekly Digest") and `digest.DAILY_DIGEST_TITLE`
+("🌙 Daily Reflection") — instead of a per-run dated title. The daily page's
+title used to flip to "... (nothing saved)" on empty days; that's no longer
+possible since the title is now the fixed lookup key, so "nothing saved" now
+lives in the body text instead (it already did, as a fallback line).
+
+**Known side effect, not touched:** old dated digest pages already sitting in
+Notion from before this fix are NOT retroactively merged or deleted — only new
+runs use the persistent-page pattern going forward. Didn't want to delete
+historical pages without asking; flagging here rather than silently doing it.
+
+**Fix 2 — content quality.** Both digests now open with a synthesis: a
+deterministic stat line (`_synthesis_stat_line`, e.g. "12 reels saved today, 3
+flagged High priority — common themes: claude-ai, mcp"), plus an OPTIONAL 2-3
+sentence Gemini-written reflective paragraph in front of it (`try_ai_summary`
+for weekly, new `try_ai_daily_summary` for daily — same fail-soft pattern:
+returns None on any Gemini failure, deterministic line is always there).
+Entries are grouped by priority tier (`## High/Medium/Low priority`, shared
+`_group_by_priority`) and rendered as one natural sentence each
+(`_format_entry`): the reel's already-well-written title + a light "filed
+under {topics}" clause + the link — not a raw `**title** — main_point — _topics_`
+field dump. Weekly also gets a compact "## Topics this week" index at the end
+for browsing; the old "## By creator" section was dropped (mostly "(unknown)"
+post-Notion-wipe anyway, and not part of the reflective-summary ask).
+
+Tests: `tests/test_notion_writer.py` (new file) covers
+`find_child_page_by_title`/`upsert_named_page` directly (create-once,
+replace-on-second-call, pagination, 100-block cap) with a purpose-built fake
+that actually models the parent/child-page relationship — the shared
+`FakeClient` in `tests/test_pipeline.py` always returns empty block listings,
+so it can't represent "the page already exists" and was left alone.
+`tests/test_digest.py` updated: dropped by-creator assertions, rewrote content
+assertions for the new priority-tier/natural-sentence format, added wiring
+tests confirming `create_notion_page`/`create_daily_notion_page` call
+`upsert_named_page` with a title that never changes across runs.
+
+Pytest: 412 passed (401 + 6 new notion_writer tests + ~5 net new/changed digest tests).
+
+---
+
 ## ⭐ Gate-nudge ntfy bugs (BUG A / BUG B) — investigated, one real fix, one already-fixed
 
 **BUG A — silent ntfy send failure, now logged with real detail.** `/nightly`'s
