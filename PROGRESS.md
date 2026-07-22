@@ -1,5 +1,59 @@
 # PROGRESS.md — hardening/deployment session log
 
+## ⭐ BUG 2 fixed: scoring quality (platform-suffix stripping + gate_keyword weight + stopwords)
+
+Implemented per the confirmed diagnosis (see the entry below this one) — no
+new guessing, just the three changes agreed on.
+
+**`app/attach_matching.py` changes:**
+1. `_strip_platform_noise()` — strips known platform-branding title suffixes
+   (` - Google Docs`, ` - Google Drive`, ` - Google Sheets`, ` - Google
+   Slides`, ` · GitHub`, `GitHub - `) before any tokenizing. Narrow and
+   host-specific by design, not a general "strip everything after a dash"
+   heuristic (that would eat real content too eagerly).
+2. `GATE_KEYWORD_MATCH_WEIGHT = 5` — a named, tunable constant. A verbatim,
+   whole-word (case-insensitive) match of the candidate's own `gate_keyword`
+   in the resource's fetched text now scores 5 points on its own — not run
+   through `MIN_WORD_LEN` (a short keyword like "AI" must still count fully;
+   it's deliberately chosen regardless of length).
+3. `GENERIC_STOPWORDS` — a small, hand-picked set of generic connector words
+   (`using`, `with`, `based`, `create`, `design`, `high`, `guide`, `tips`,
+   etc.) excluded from the generic word-overlap count on both sides. Not a
+   full stopword corpus or NLP pipeline — just the words that inflated the
+   live incident's false candidates.
+
+`TOP_N_CANDIDATES` was NOT raised, per instruction — the fix is correct
+ranking, not more visible options.
+
+**Corrected scores — same real Google Doc, same 4 real candidates, verified
+live (not just via the mocked test suite) by re-fetching the actual resource
+and recomputing:**
+
+| Shortcode | OLD score | NEW score | Why |
+|---|---|---|---|
+| `DbAKlYYNEGY` (correct target) | 2 | **5** | `gate_keyword="face"` now scores the full `GATE_KEYWORD_MATCH_WEIGHT` on its own; the old generic-word overlap (`with`) is gone since `with` is now a stopword |
+| `DawD8vcNJC7` | 4 | 1 | Only `luxury` survives (a genuine, if coincidental, non-generic overlap); `using`/`design` are now stopwords, and `google` no longer overlaps at all since the resource title's `" - Google Docs"` suffix is stripped before scoring |
+| `DaiWZTfs3x9` | 3 | 0 | Its only shared words (`using`, `create`, `with`) are all now stopwords — no longer even clears `MIN_SCORE_THRESHOLD`, correctly dropped from consideration entirely |
+| `DayP5WwtYM5` | 3 | 0 | Same — its only shared words (`based`, `using`, `high`) are all stopwords |
+
+`rank_candidates()` on this exact scenario now returns `DbAKlYYNEGY` (score
+5) then `DawD8vcNJC7` (score 1) — **`DbAKlYYNEGY` wins outright, ranked
+first, not just squeezed into the top 3.** The other two false candidates
+no longer appear as candidates at all.
+
+Tests: `tests/test_attach_matching.py` — new coverage for platform-suffix
+stripping (Google Docs/Drive/Sheets/Slides, GitHub, and a dedicated test
+proving the exact "google" false-overlap mechanism is closed), gate_keyword
+weighting (full weight on match, case-insensitive, whole-word not substring,
+works for short keywords, outranks several generic-word coincidences),
+stopword filtering, and `test_real_incident_regression_dbaklyynegy_now_wins`
+— the exact real scenario (real fetched title/description hardcoded from a
+live capture, the real 4 candidates' real data) asserting the exact
+corrected scores above and that `DbAKlYYNEGY` ranks first. All mocked, no
+live network calls in the suite itself. Pytest: 512 passed.
+
+---
+
 ## ⭐ Two live bugs from real testing: BUG 1 fixed, BUG 2 diagnosed (fix pending)
 
 ### BUG 1 — /attach/confirm 422, fixed
