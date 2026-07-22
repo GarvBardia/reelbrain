@@ -537,3 +537,81 @@ def test_index_manual_preamble_survives_resync(monkeypatch, tmp_path):
     sync(str(tmp_path))
     final = index_path.read_text(encoding="utf-8")
     assert "My personal preamble note." in final
+
+
+# --- resource linking (scripts/ingest_resources.py bidirectional links) ---------
+
+def _write_resource_note(vault, shortcode, stem, topics=("ai-tools",)):
+    path = vault / "resources" / f"{stem}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["---", f"source_shortcode: {shortcode}", "resource_kind: github_repo"]
+    if topics:
+        lines.append("topics:")
+        lines += [f'  - "[[topics/{t}]]"' for t in topics]
+        lines.append(f"topics_plain: {', '.join(topics)}")
+    lines += ["---", "", "# Attached resource", "", "## Summary", "", "A summary."]
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
+
+
+def test_existing_resource_notes_parses_shortcode_and_topics(tmp_path):
+    _write_resource_note(tmp_path, "RES1", "RES1-some-guide", topics=("ai-tools", "web-design"))
+
+    found = obsidian_sync.existing_resource_notes(tmp_path)
+
+    assert found["RES1"]["stem"] == "RES1-some-guide"
+    assert found["RES1"]["topics"] == ["ai-tools", "web-design"]
+
+
+def test_existing_resource_notes_empty_when_no_resources_dir(tmp_path):
+    assert obsidian_sync.existing_resource_notes(tmp_path) == {}
+
+
+def test_build_note_renders_attached_resource_section_when_resource_stem_given():
+    fields = {
+        "shortcode": "AAA111", "title": "Some reel", "status": "📥 Inbox",
+        "priority": "", "value_score": "", "topics": [], "url": "https://x",
+        "posted": "2026-07-01", "gate_resource": "https://github.com/x/y",
+    }
+    note = obsidian_sync.build_note(fields, None, "body text", [], resource_stem="AAA111-some-guide")
+    assert "## Attached Resource" in note
+    assert "- [[resources/AAA111-some-guide]]" in note
+
+
+def test_build_note_omits_attached_resource_section_without_resource_stem():
+    fields = {
+        "shortcode": "AAA111", "title": "Some reel", "status": "📥 Inbox",
+        "priority": "", "value_score": "", "topics": [], "url": "https://x",
+        "posted": "2026-07-01", "gate_resource": "",
+    }
+    note = obsidian_sync.build_note(fields, None, "body text", [])
+    assert "## Attached Resource" not in note
+
+
+def test_format_entry_line_marks_resource_entries_distinctly():
+    entry = {"stem": "RES1-guide", "title": "RES1-guide", "folder": "resources",
+              "value_score": None, "posted": "", "main_point": "attached resource", "priority": None}
+    line = obsidian_sync._format_entry_line(entry)
+    assert "[[resources/RES1-guide|RES1-guide]]" in line
+    assert "📄" in line
+    assert "Priority: —" not in line  # no placeholder dashes for a field that doesn't apply
+
+
+def test_sync_links_reel_note_to_pre_existing_resource_and_folds_into_topic_index(monkeypatch, tmp_path):
+    """End-to-end: a resources/*.md note already sitting in the vault (as
+    scripts/ingest_resources.py would have written it) gets linked from the
+    reel note on the next sync, and shows up in the topic index too."""
+    _install(monkeypatch, [_page("RLK1", "Great reel", topics=("ai-tools",))],
+             {"pg-RLK1": _body("RLK1"), "tg-RLK1": _toggle_children("t")})
+    _seed_row("RLK1")
+    _write_resource_note(tmp_path, "RLK1", "RLK1-a-great-guide", topics=("ai-tools",))
+
+    sync(str(tmp_path))
+
+    reel_note = (tmp_path / "reels" / "2026-07-01-RLK1.md").read_text(encoding="utf-8")
+    assert "## Attached Resource" in reel_note
+    assert "[[resources/RLK1-a-great-guide]]" in reel_note
+
+    topic_stub = (tmp_path / "topics" / "ai-tools.md").read_text(encoding="utf-8")
+    assert "RLK1-a-great-guide" in topic_stub
+    assert "📄" in topic_stub

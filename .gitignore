@@ -4,6 +4,9 @@ cookies*.txt
 data/*.db
 data/videos/
 bulk_import_progress*.json
+*_progress.json
+urls.txt
+reellist.txt
 __pycache__/
 *.pyc
 .pytest_cache/

@@ -1,0 +1,6 @@
+# LOCAL-ONLY dependencies -- never installed on Render, only needed for
+# scripts under scripts/ that are explicitly local-only (see PROGRESS.md:
+# local_fetch.py needs yt-dlp+ffmpeg locally the same way). Install with:
+#   pip install -r requirements-local.txt
+beautifulsoup4==4.15.0
+pypdf==6.14.2

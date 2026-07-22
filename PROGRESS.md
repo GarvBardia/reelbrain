@@ -1,5 +1,94 @@
 # PROGRESS.md — hardening/deployment session log
 
+## ⭐ PART 3 — deep resource ingestion into Obsidian: BUILT + DRY-RUN VERIFIED, awaiting go-ahead for full batch
+
+New LOCAL-ONLY script `scripts/ingest_resources.py` (never deployed to Render,
+same reasoning as `local_fetch.py`): for every Notion Saves row with a "Gate
+resource" URL attached, fetches the resource's real content, summarizes it via
+Gemini, and writes a linked `resources/{shortcode}-{slug}.md` note in the
+Obsidian vault.
+
+**Fetching by type** (`classify_resource_url` + one fetcher per kind, all in
+`scripts/ingest_resources.py`):
+- `github_repo` — GitHub API `/repos/{owner}/{repo}/readme` with
+  `Accept: application/vnd.github.raw` (no auth needed, but 403 = hit the
+  60/hr unauthenticated rate limit — reported honestly, not retried in a loop).
+- `google_doc` — the `.../mobilebasic` export view (plain HTML, no login for
+  publicly-shared docs); detects a Google sign-in wall and reports it as
+  unreadable rather than treating the sign-in page's own text as content.
+- `google_drive_file` — best-effort `uc?export=download` fetch; only trusts
+  it if the response `content-type` is actually `application/pdf`. Anything
+  else (HTML sign-in wall, `application/octet-stream`, a virus-scan
+  interstitial for large files) is reported unreadable — Drive's private/​
+  unrecognized-file behavior turned out to be `application/octet-stream` in
+  the real dry run below, not HTML as originally assumed; the honest fallback
+  caught it correctly anyway.
+- `pdf` — direct download + `pypdf` text extraction (first 30 pages, handles
+  a blank password on encrypted PDFs, reports "scanned/image-only" honestly
+  when extraction yields near-nothing).
+- `web_article` (fallback) — plain HTML fetch + BeautifulSoup text extraction.
+
+**Gemini summarization**: new `ResourceExtraction` model (`app/models.py`) and
+`gemini_pipe.run_resource_extraction()` — same anti-slop/degrade-honestly
+discipline as reel extraction (`app/models.py` `Extraction`/​
+`run_caption_only_extraction`), adapted for longer-form text: `summary`,
+`key_takeaways`, `topic_tags` (reuses the existing tag taxonomy the same way
+reel extraction does), `resource_kind`. Returns `None` (never a placeholder)
+on too-thin content or any Gemini failure — caller must skip writing, exactly
+like the reel pipeline's degraded-extraction guard.
+
+**Obsidian linking** (`app/obsidian_sync.py` extended, not a separate
+mechanism): `extract_note_fields` now reads "Gate resource"; new
+`existing_resource_notes()` scans `resources/*.md` frontmatter
+(`source_shortcode`/`topics_plain` — a plain-text duplicate of the wikilink
+topics list so this doesn't need a full YAML parser); `build_note()` renders
+a "## Attached Resource" wikilink section when a matching resource note
+exists; `sync()` folds resource entries into the same per-topic indexes as
+reels (marked with 📄, no placeholder Priority/Score dashes for a field that
+doesn't apply to resources). This means `ingest_resources.py` never has to
+touch reel/topic notes directly — `sync_to_obsidian.py` fully regenerates
+them anyway, so the linking is naturally idempotent and self-healing on every
+resync, the same way Related-saves links already work.
+
+**Local-only dependency**: `requirements-local.txt` (new) pins
+`beautifulsoup4`/`pypdf` — installed locally, deliberately never added to
+the main `requirements.txt` Render builds from.
+
+**Honesty guarantee**: unreadable resources are never invented or silently
+dropped — logged as `UNREADABLE — manual review needed: {url} ({shortcode}) —
+{reason}` and tracked in the progress file with status `"unreadable"` (or
+`"degraded"` for a Gemini failure post-fetch); both statuses are retried on
+the next run (unlike `"written"`, which is terminal and skipped) — same
+retry-vs-terminal-status discipline as `bulk_ingest_local.py`'s Gemini-503
+handling.
+
+**Dry run — real, live, 4 resources (not mocked):**
+
+| Shortcode | Resource | Kind | Result |
+|---|---|---|---|
+| `Da8ey0fscUF` | github.com/oso95/scroll-world | github_repo | ✅ real summary + 5 topic tags |
+| `DavJiHqPz95` | docs.google.com/.../mobilebasic | google_doc | ✅ real summary + 4 topic tags |
+| `DZKfop6R30d` | getdesign.md | web_article | ✅ real summary + 4 topic tags |
+| `DZrQ7dMRx0m` | drive.google.com/file/d/.../view | google_drive_file | ⚠️ correctly flagged UNREADABLE (`application/octet-stream`, not a fetchable PDF/HTML) |
+
+3 of 3 fetchable types produced genuinely specific, non-generic summaries
+(named tools, concrete techniques) — not filler. The one Drive-file case was
+handled exactly as the honesty requirement demands: no guessing, no invented
+content, clearly flagged for manual review.
+
+**STOPPING HERE per instruction — full batch (19 total gate-resources, 15
+remaining beyond the 4 dry-run ones) NOT yet run.** Awaiting go-ahead.
+
+Tests: `tests/test_ingest_resources.py` (30, all mocked — classify/fetch/
+build_resource_note/run_ingest orchestration incl. unreadable/degraded/dry-run/
+resume-skip/retry-non-terminal-statuses), `tests/test_gemini_pipe.py` +5
+(`run_resource_extraction`: success, too-thin, empty, Gemini failure, retry-
+then-succeed), `tests/test_obsidian_sync.py` +6 (resource-note parsing,
+Attached-Resource rendering with/without a resource, distinct topic-index
+formatting, full end-to-end sync linking). Pytest: 453 passed.
+
+---
+
 ## ⭐ PART 2 — gate-nudge live verification: root cause now CONFIRMED, still not reaching the phone
 
 Triggered `/nightly` for real against the deployed app (not a diagnostic script)

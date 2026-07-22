@@ -410,6 +410,106 @@ def run_caption_only_extraction(
     return extraction
 
 
+# Below this many words, fetched resource text is too thin to summarize
+# meaningfully (e.g. a near-empty page, a repo with a one-line README) --
+# same anti-hallucination reasoning as MIN_CAPTION_WORDS_FOR_EXTRACTION.
+MIN_RESOURCE_WORDS_FOR_EXTRACTION = 30
+# Gemini's context is plenty for this, but there's no reason to upload an
+# entire multi-hundred-page PDF for a summary -- cap what actually gets sent.
+MAX_RESOURCE_CHARS = 40_000
+
+_RESOURCE_PROMPT_TEMPLATE = """You are summarizing a long-form resource that was DM'd to someone in \
+response to a "comment X for the link" offer on an Instagram reel, for a personal knowledge base. \
+The resource is a {resource_kind} attached to a reel titled: "{reel_title}"
+
+Anti-slop rules (follow strictly):
+- `summary` is 2-4 sentences of plain prose covering what this resource actually contains and why it's worth revisiting -- not a restatement of the reel's title.
+- `key_takeaways` are 0-8 concrete, specific points (a real technique, a named tool, a number) -- never generic filler like "this is useful information". Zero is correct if there is genuinely nothing concrete to extract.
+- `topic_tags`: 3-6 lowercase-kebab-case tags. Prefer these existing tags when they genuinely fit: {taxonomy}. Only introduce a new tag if none fit.
+- `resource_kind` must be exactly one of: github_repo, google_doc, web_article, pdf, other -- classify based on the content itself, not just the URL shape.
+- Never invent content that isn't in the text below. If the resource is thin or mostly boilerplate, say so honestly in `summary` rather than padding.
+
+Return only the structured JSON, no markdown, no commentary.
+
+--- RESOURCE CONTENT ---
+{content}
+--- END RESOURCE CONTENT ---
+"""
+
+
+def _build_resource_prompt(content: str, resource_kind: str, reel_title: str, taxonomy: list[str]) -> str:
+    return _RESOURCE_PROMPT_TEMPLATE.format(
+        resource_kind=resource_kind,
+        reel_title=reel_title or "(untitled)",
+        taxonomy=", ".join(taxonomy) or "(none yet)",
+        content=content[:MAX_RESOURCE_CHARS],
+    )
+
+
+def _call_gemini_resource(prompt: str):
+    from google import genai
+    from google.genai import types
+
+    from app.models import ResourceExtraction
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    with _GEMINI_SEMAPHORE:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[prompt],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=ResourceExtraction,
+            ),
+        )
+    return response.text
+
+
+def run_resource_extraction(
+    content: str, resource_kind: str, reel_title: str, taxonomy: list[str]
+):
+    """Summarizes a long-form DM'd resource (Drive doc, GitHub README, web
+    guide, PDF text) -- adapted from run_caption_only_extraction for
+    longer-form content. Returns None (never raises, never a placeholder) on
+    ANY failure: too-thin content, schema validation failure after retry, or
+    a Gemini API error. Callers must treat None as "don't write this, retry
+    later" -- same degraded-extraction discipline as the reel pipeline, since
+    writing a hallucinated or empty summary would be worse than not writing
+    at all."""
+    from app.models import ResourceExtraction
+
+    if not content or len(content.split()) < MIN_RESOURCE_WORDS_FOR_EXTRACTION:
+        logger.info(
+            "run_resource_extraction: content too thin (%d words) for %r — skipping Gemini call",
+            len((content or "").split()), reel_title,
+        )
+        return None
+
+    prompt = _build_resource_prompt(content, resource_kind, reel_title, taxonomy)
+
+    for attempt in range(2):  # one retry, same convention as the reel extraction paths
+        try:
+            raw = _call_gemini_resource(prompt)
+            return ResourceExtraction.model_validate(json.loads(raw))
+        except (json.JSONDecodeError, ValidationError) as exc:
+            logger.warning(
+                "run_resource_extraction: schema validation failed for %r (attempt %d/2): %s",
+                reel_title, attempt + 1, exc,
+            )
+        except Exception as exc:  # noqa: BLE001 - network/API errors: no retry budget for these
+            logger.exception(
+                "run_resource_extraction: Gemini call failed for %r (attempt %d/2): %s",
+                reel_title, attempt + 1, exc,
+            )
+            break
+
+    logger.warning(
+        "run_resource_extraction: giving up for %r after exhausting attempts "
+        "(see the error logged above for why) — caller must not write this", reel_title,
+    )
+    return None
+
+
 def _merge_comment_gate(extraction: Extraction, caption: Optional[str]) -> None:
     """BUILD_SPEC 1.4: regex pre-check merged with the model's own field — either positive -> gated."""
     regex_keyword = detect_comment_gate(caption)

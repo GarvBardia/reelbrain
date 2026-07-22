@@ -306,6 +306,87 @@ def test_caption_only_extraction_falls_back_when_gemini_call_fails(monkeypatch):
     assert result.comment_gate.keyword == "SEND"
 
 
+# --- run_resource_extraction (scripts/ingest_resources.py's Gemini call) -------
+
+SUBSTANTIAL_RESOURCE_TEXT = (
+    "This guide walks through a five-step workflow for building a scroll-based "
+    "animation site. Step one: install the library. Step two: configure the "
+    "scroll trigger. Step three: wire up the timeline. Step four: add easing. "
+    "Step five: ship it. Plenty of real content here for a proper summary."
+)
+
+
+def test_resource_extraction_produces_structured_output(monkeypatch):
+    from app.models import ResourceExtraction
+
+    extraction_out = ResourceExtraction(
+        summary="A five-step workflow for building scroll-based animation sites.",
+        key_takeaways=["Install the library first", "Configure the scroll trigger"],
+        topic_tags=["web-design", "developer-tools"],
+        resource_kind="github_repo",
+    )
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_resource", lambda prompt: extraction_out.model_dump_json())
+
+    result = gemini_pipe.run_resource_extraction(
+        SUBSTANTIAL_RESOURCE_TEXT, "github_repo", "Build scroll animations", taxonomy=["web-design"],
+    )
+
+    assert result is not None
+    assert result.summary == "A five-step workflow for building scroll-based animation sites."
+    assert result.topic_tags == ["web-design", "developer-tools"]
+    assert result.resource_kind == "github_repo"
+
+
+def test_resource_extraction_returns_none_when_content_too_thin(monkeypatch):
+    def _must_not_be_called(prompt):
+        raise AssertionError("must not call Gemini for too-thin content")
+
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_resource", _must_not_be_called)
+
+    result = gemini_pipe.run_resource_extraction("just a few words", "web_article", "Title", [])
+    assert result is None
+
+
+def test_resource_extraction_returns_none_when_content_is_empty(monkeypatch):
+    def _must_not_be_called(prompt):
+        raise AssertionError("must not call Gemini with no content at all")
+
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_resource", _must_not_be_called)
+
+    result = gemini_pipe.run_resource_extraction("", "web_article", "Title", [])
+    assert result is None
+
+
+def test_resource_extraction_returns_none_when_gemini_call_fails(monkeypatch):
+    def _boom(prompt):
+        raise RuntimeError("gemini 500")
+
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_resource", _boom)
+
+    result = gemini_pipe.run_resource_extraction(SUBSTANTIAL_RESOURCE_TEXT, "web_article", "Title", [])
+    assert result is None  # never a placeholder -- caller must skip writing entirely
+
+
+def test_resource_extraction_retries_once_on_validation_failure_then_succeeds(monkeypatch):
+    from app.models import ResourceExtraction
+
+    good = ResourceExtraction(summary="Real summary.", resource_kind="pdf")
+    calls = []
+
+    def _flaky(prompt):
+        calls.append(prompt)
+        if len(calls) == 1:
+            return "{not valid json"
+        return good.model_dump_json()
+
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_resource", _flaky)
+
+    result = gemini_pipe.run_resource_extraction(SUBSTANTIAL_RESOURCE_TEXT, "pdf", "Title", [])
+    assert len(calls) == 2
+    assert result is not None
+    assert result.summary == "Real summary."
+
+
 def test_video_extraction_path_completely_unaffected_by_caption_only_addition(monkeypatch):
     """Regression guard: a normal video reel must still go through _call_gemini
     (audio path), never _call_gemini_text_only — this is purely an addition

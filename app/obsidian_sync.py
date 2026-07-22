@@ -27,6 +27,12 @@ VAULT_PATH = os.environ.get("VAULT_PATH", r"C:\Users\garvb\ReelBrainVault").stri
 
 RELATED_TOP_K = 3
 FRONTMATTER_SHORTCODE_RE = re.compile(r"^shortcode:\s*(\S+)\s*$", re.MULTILINE)
+# scripts/ingest_resources.py writes these two frontmatter lines on every
+# resources/*.md note -- topics_plain is a comma-separated convenience
+# duplicate of the wikilink topics list, so linking resources into topic
+# indexes here doesn't need a full YAML parser for one extra field.
+FRONTMATTER_RESOURCE_SHORTCODE_RE = re.compile(r"^source_shortcode:\s*(\S+)\s*$", re.MULTILINE)
+FRONTMATTER_RESOURCE_TOPICS_RE = re.compile(r"^topics_plain:\s*(.*)$", re.MULTILINE)
 
 AUTO_START = "<!-- AUTO-GENERATED, DO NOT EDIT BELOW -->"
 AUTO_END = "<!-- END AUTO-GENERATED -->"
@@ -179,6 +185,7 @@ def extract_note_fields(page: dict) -> dict:
         "topics": [t["name"] for t in _prop(props, "Topics").get("multi_select", [])],
         "url": _prop(props, "Reel URL").get("url") or "",
         "posted": posted or (page.get("created_time", "") or "")[:10],
+        "gate_resource": _prop(props, "Gate resource").get("url") or "",
     }
 
 
@@ -188,7 +195,7 @@ def note_filename(fields: dict) -> str:
 
 
 def build_note(fields: dict, creator: Optional[str], body_markdown: str,
-               related_stems: list[str]) -> str:
+               related_stems: list[str], resource_stem: Optional[str] = None) -> str:
     lines = ["---"]
     lines.append(f"shortcode: {fields['shortcode']}")
     if creator:
@@ -219,6 +226,15 @@ def build_note(fields: dict, creator: Optional[str], body_markdown: str,
     if fields["priority"] or fields["value_score"]:
         lines.append("")
     lines.append(body_markdown.rstrip())
+    if resource_stem:
+        # scripts/ingest_resources.py writes the actual resources/*.md note;
+        # this just links to it, so a re-sync always reflects the current
+        # linkage without ingest_resources.py needing to touch reel notes
+        # directly (which sync() fully overwrites every run anyway).
+        lines.append("")
+        lines.append("## Attached Resource")
+        lines.append("")
+        lines.append(f"- [[resources/{resource_stem}]]")
     if related_stems:
         lines.append("")
         lines.append("## Related")
@@ -270,10 +286,16 @@ def _sort_entries(entries: list[dict]) -> list[dict]:
 
 
 def _format_entry_line(entry: dict) -> str:
+    folder = entry.get("folder", "reels")
+    if folder == "resources":
+        # Resources don't carry priority/value_score (that's a reel-extraction
+        # concept) -- a lighter line marks them distinctly instead of printing
+        # placeholder dashes for fields that don't apply.
+        return f"- 📄 [[resources/{entry['stem']}|{entry['title']}]] — {entry.get('main_point') or 'attached resource'}"
     priority_part = f"Priority: {entry['priority']}" if entry.get("priority") else "Priority: —"
     score_part = f"Score: {entry['value_score']}" if entry["value_score"] is not None else "Score: —"
     main_point = entry["main_point"] or "(no main point)"
-    return f"- [[reels/{entry['stem']}|{entry['title']}]] — {priority_part} — {score_part} — {main_point}"
+    return f"- [[{folder}/{entry['stem']}|{entry['title']}]] — {priority_part} — {score_part} — {main_point}"
 
 
 def write_stub_index(vault: Path, folder: str, name: str, entries: list[dict]) -> Path:
@@ -343,6 +365,30 @@ def existing_notes_by_shortcode(vault: Path) -> dict[str, Path]:
     return mapping
 
 
+def existing_resource_notes(vault: Path) -> dict[str, dict]:
+    """shortcode -> {"stem", "topics"} for every resources/*.md note written by
+    scripts/ingest_resources.py, read from its source_shortcode/topics_plain
+    frontmatter -- lets sync() link reel notes to their attached resource and
+    fold resources into topic indexes without ingest_resources.py needing to
+    touch reel/topic notes directly (sync() fully regenerates those anyway)."""
+    mapping: dict[str, dict] = {}
+    resources_dir = vault / "resources"
+    if not resources_dir.is_dir():
+        return mapping
+    for path in resources_dir.glob("*.md"):
+        try:
+            head = path.read_text(encoding="utf-8")[:1000]
+        except OSError:
+            continue
+        match = FRONTMATTER_RESOURCE_SHORTCODE_RE.search(head)
+        if not match:
+            continue
+        topics_match = FRONTMATTER_RESOURCE_TOPICS_RE.search(head)
+        topics = [t.strip() for t in (topics_match.group(1).split(",") if topics_match else []) if t.strip()]
+        mapping[match.group(1)] = {"stem": path.stem, "topics": topics}
+    return mapping
+
+
 # --- related saves via capture-time embeddings ---------------------------------
 
 
@@ -376,6 +422,8 @@ def sync(vault_path: Optional[str] = None) -> dict:
             fields["shortcode"], vault / "reels" / note_filename(fields)
         )
 
+    resource_notes = existing_resource_notes(vault)
+
     # pass 2: bodies, related links, writes — and collect per-topic/creator entries
     topic_entries: dict[str, list[dict]] = {}
     creator_entries: dict[str, list[dict]] = {}
@@ -393,8 +441,9 @@ def sync(vault_path: Optional[str] = None) -> dict:
             for sc in related_shortcodes(shortcode)
             if sc in path_by_shortcode
         ]
+        resource_stem = resource_notes.get(shortcode, {}).get("stem")
 
-        note = build_note(fields, creator, body, related_stems)
+        note = build_note(fields, creator, body, related_stems, resource_stem)
         path_by_shortcode[shortcode].write_text(note, encoding="utf-8")
         written += 1
 
@@ -412,6 +461,22 @@ def sync(vault_path: Optional[str] = None) -> dict:
             creator_entries.setdefault(creator, []).append(entry)
         for topic in fields["topics"]:
             topic_entries.setdefault(topic, []).append(entry)
+
+    # Resources fold into the SAME per-topic indexes as reels (marked 📄), so
+    # browsing a topic surfaces the attached resource right alongside the
+    # reels that reference it -- not a separate, easy-to-miss index.
+    for shortcode, info in resource_notes.items():
+        resource_entry = {
+            "stem": info["stem"],
+            "title": info["stem"],
+            "folder": "resources",
+            "value_score": None,
+            "posted": "",
+            "main_point": "attached resource",
+            "priority": None,
+        }
+        for topic in info["topics"]:
+            topic_entries.setdefault(topic, []).append(resource_entry)
 
     for topic, entries in topic_entries.items():
         write_stub_index(vault, "topics", topic, entries)

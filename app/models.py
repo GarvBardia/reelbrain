@@ -116,6 +116,18 @@ class Extraction(BaseModel):
         return v[:200]
 
 
+class ResourceExtraction(BaseModel):
+    """Structured summary of a long-form DM'd resource (Drive doc, GitHub repo,
+    web guide, PDF) attached via a comment-gate -- adapted from Extraction for
+    longer-form content: no transcript/speech/comment-gate fields, since those
+    are reel-specific."""
+
+    summary: str = Field(..., max_length=800)
+    key_takeaways: list[str] = Field(default_factory=list, max_length=8)
+    topic_tags: list[str] = Field(default_factory=list)
+    resource_kind: Literal["github_repo", "google_doc", "web_article", "pdf", "other"] = "other"
+
+
 def degraded_extraction(caption: Optional[str]) -> Extraction:
     """BUILD_SPEC 1.4: fallback when Gemini extraction fails twice."""
     main_point = (caption or "")[:200] or "No caption or transcript available."
