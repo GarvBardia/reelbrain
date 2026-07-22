@@ -1,5 +1,96 @@
 # PROGRESS.md — hardening/deployment session log
 
+## ⭐ /attach investigation — root cause found for both real incidents (Da8IIonEhGR, DbFDY3yTwlI); NO fix applied yet, awaiting decision
+
+Investigated two real, concrete `/attach` incidents. **Root cause for both:
+the documented Shortcut recipe (README.md, "Shortcut 2: Attach to
+ReelBrain") hardcodes `shortcode_or_note: null` in its request body.** The
+Shortcut, as designed, never sends an identifying value at all — every
+`/attach` call relies entirely on the "attach to the sole Awaiting DM row"
+fallback in `store.find_pending_gate`. That fallback correctly refuses when
+2+ rows are Awaiting DM (`AmbiguousGateMatch` → 409), but has no way to know
+whether the ONE row it picks is the row the user actually meant — it's blind
+to intent, not just blind to ties.
+
+**Case 1 — Da8IIonEhGR ("the write never landed"): NOT a write failure.**
+Live-reproduced by calling `/attach` against the deployed app with
+`shortcode_or_note: "Da8IIonEhGR"` right now: a clean **404 "no matching
+awaiting-DM entry"**. Checked the row directly in Notion: `Status = 📷 Photo —
+manual`, title = the placeholder `"No caption or transcript available."` —
+this row never had a caption/transcript recovered, so its comment-gate (the
+Substack "50 MCP servers" offer the user saw when watching the actual
+Instagram post) was never programmatically detected. **It was never
+`awaiting_dm`, at any point** — there is no legitimate way for it to have
+ever accepted an attach. Searched all of Notion for the Substack URL: it
+exists on no row at all. So "the Shortcut reported success" cannot mean a
+successful write to this row — either the Shortcut doesn't check the actual
+HTTP status (treats any completed request as success even on a 404/409), or
+the real call fell through to the null-shortcode fallback and landed
+(with a genuinely truthful 200) on some other, unrelated row that happened
+to be the sole `Awaiting DM` entry at that moment.
+
+**Case 2 — DbFDY3yTwlI (Higgsfield link misattributed): confirms the SAME
+mechanism, but the reported cause needs a correction.** `DbFDY3yTwlI` is
+still `⏳ Awaiting DM` right now with an empty Gate resource — so whatever
+`/attach` call happened, it did not land here either. **Important
+correction to the original hypothesis:** if `shortcode_or_note` is truly
+always `null` (per the documented recipe), **substring/fuzzy matching never
+ran at all** — that code path is gated behind `if shortcode_or_note:`, which
+is `False` for `None`. The actual mechanism is the "sole Awaiting DM row"
+auto-pick, not a loose text match. Reproduced this exact shape in a test:
+seed one row that genuinely mentions "Higgsfield" but isn't currently
+`awaiting_dm` (the real target), and a second, unrelated row that also
+happens to mention "Higgsfield" in its title AND is the sole `awaiting_dm`
+row — the omitted-shortcode call picks the second row with full "success,"
+no tie, no 409, no error anywhere. **This is exactly the gap the user
+identified: the ambiguity safety net (`AmbiguousGateMatch`) catches ties, not
+confident-wrong-guesses** — and it's structurally impossible for it to catch
+this case, since there's genuinely only one candidate at attach-time.
+
+**This is a Shortcut-side / product-flow gap, not a matching-algorithm bug —
+said plainly, not papered over with more fuzzy-matching tweaks.** No
+matching-logic change in this codebase can fix "the Shortcut never tells the
+server which reel it means." The fix has to happen at the request-shape
+level. Proposed, not yet applied (per instruction to report before changing
+matching behavior again):
+1. **Primary fix — change the Shortcut, not the backend.** Have the Shortcut
+   actually ask the user which reel this is for before calling `/attach` —
+   at minimum an "Ask for Input" text prompt for a shortcode or keyword; a
+   fancier version could fetch a list of currently-`Awaiting DM` titles (e.g.
+   via a new lightweight `GET /awaiting-dm` listing endpoint) and let the
+   user pick one, in a "Choose from Menu" step, before sending an explicit
+   `shortcode_or_note`.
+2. **Defense-in-depth, backend-side, optional:** consider whether the
+   "sole Awaiting DM row" auto-pick should be removed entirely — i.e. require
+   an explicit `shortcode_or_note` always, 400 if omitted, rather than ever
+   silently picking "the only one." This is exactly the "changes matching
+   behavior" category the instruction said not to touch without discussing
+   first — flagging it as an option, not applying it.
+3. Either way: the Shortcut should show the actual response body (or at
+   least the status code) to the user, not a blanket "success" toast,
+   so a 404/409 is visible instead of silently swallowed.
+
+**Also worth noting, unrelated to the root cause above but found along the
+way:** `test_attach_survives_notion_failure` documents a DIFFERENT, real,
+separate gap — if the Notion write inside `/attach` fails (network hiccup,
+stale `notion_page_id`), the endpoint still returns 200 because "SQLite is
+already updated." On Render, SQLite is ephemeral and wiped on redeploy, so a
+Notion-write failure here could look identical to success with zero durable
+trace. Didn't rule this out with 100% certainty for either incident (Render's
+access logs don't capture request bodies, so the exact historical call can't
+be forensically recovered), but it's less likely for Da8IIonEhGR
+specifically since a photo/carousel placeholder was very unlikely to have
+ever reached `awaiting_dm` in the first place. Flagging it as a separate,
+real risk regardless.
+
+Tests added (all pass against **current, unmodified** code — they document
+the live incident mechanics, not a fix): `test_attach_explicit_shortcode_on_never_gated_row_404s_not_a_wrong_row`,
+`test_attach_omitted_shortcode_attaches_to_wrong_row_when_intended_target_never_gated`,
+`test_attach_omitted_shortcode_picks_unrelated_row_that_coincidentally_shares_a_keyword`
+in `tests/test_attach_endpoint.py`. Pytest: 475 passed.
+
+---
+
 ## ⭐ Second-pass research/context step — BUILT + TESTED; live grounding blocked account-side (dry run incomplete, reported honestly)
 
 Added a second Gemini pass over the extraction pipeline: call 1 (existing)
