@@ -217,29 +217,31 @@ def test_get_by_shortcode_or_notion_survives_notion_error(monkeypatch):
     assert store.get_by_shortcode_or_notion("WHATEVER") is None
 
 
-def test_find_pending_gate_local_hit_never_touches_notion(monkeypatch):
+def test_resolve_exact_shortcode_local_hit_never_touches_notion(monkeypatch):
     store.insert_processing("LOCALGATE", "https://www.instagram.com/reel/LOCALGATE/")
     store.update_save("LOCALGATE", status="awaiting_dm")
     client = FakeClient()
     client.data_sources = _RaisingDataSources()
     monkeypatch.setattr(notion_writer, "_client", lambda: client)
 
-    row = store.find_pending_gate("LOCALGATE")
+    exists, row = store.resolve_exact_shortcode("LOCALGATE")
+    assert exists is True
     assert row["shortcode"] == "LOCALGATE"
 
 
-def test_find_pending_gate_falls_back_by_exact_shortcode(monkeypatch):
+def test_resolve_exact_shortcode_falls_back_by_exact_shortcode(monkeypatch):
     client = FakeClient()
     client.data_sources = _FilteringDataSources(
         [_saves_page("REMOTEGATE1"), _saves_page("REMOTEGATE2")]
     )
     monkeypatch.setattr(notion_writer, "_client", lambda: client)
 
-    row = store.find_pending_gate("REMOTEGATE2")
+    exists, row = store.resolve_exact_shortcode("REMOTEGATE2")
+    assert exists is True
     assert row["shortcode"] == "REMOTEGATE2"
 
 
-def test_find_pending_gate_exact_shortcode_recovers_via_notion_not_local_row(monkeypatch):
+def test_resolve_exact_shortcode_recovers_via_notion_not_local_row(monkeypatch):
     """CRITICAL regression (BUG 3): the target shortcode is absent from local
     SQLite entirely (e.g. ephemeral disk wiped) but IS Awaiting DM in Notion,
     while a totally different row IS locally awaiting_dm. Must resolve to the
@@ -251,15 +253,16 @@ def test_find_pending_gate_exact_shortcode_recovers_via_notion_not_local_row(mon
     client.data_sources = _FilteringDataSources([_saves_page("REALTARGET", status="⏳ Awaiting DM")])
     monkeypatch.setattr(notion_writer, "_client", lambda: client)
 
-    row = store.find_pending_gate("REALTARGET")
+    exists, row = store.resolve_exact_shortcode("REALTARGET")
+    assert exists is True
     assert row["shortcode"] == "REALTARGET"
 
 
-def test_find_pending_gate_exact_shortcode_found_but_not_awaiting_never_substitutes(monkeypatch):
+def test_resolve_exact_shortcode_found_but_not_awaiting_never_substitutes(monkeypatch):
     """CRITICAL regression (BUG 3): the target shortcode exists in Notion but
     isn't Awaiting DM (already attached, or never gated), while a different row
-    IS locally awaiting_dm. Must return None — never silently attach to the
-    unrelated local row."""
+    IS locally awaiting_dm. Must return (True, None) — never silently attach
+    to the unrelated local row."""
     store.insert_processing("LOCALDECOY2", "https://www.instagram.com/reel/LOCALDECOY2/")
     store.update_save("LOCALDECOY2", status="awaiting_dm")
 
@@ -269,67 +272,73 @@ def test_find_pending_gate_exact_shortcode_found_but_not_awaiting_never_substitu
     )
     monkeypatch.setattr(notion_writer, "_client", lambda: client)
 
-    assert store.find_pending_gate("ALREADYDONE") is None
+    exists, row = store.resolve_exact_shortcode("ALREADYDONE")
+    assert exists is True
+    assert row is None
 
 
-def test_find_pending_gate_falls_back_by_note_substring(monkeypatch):
-    client = FakeClient()
-    client.data_sources = _FilteringDataSources([
-        _saves_page("RG1", note="nothing relevant here"),
-        _saves_page("RG2", note="the ai workflow doc one"),
-    ])
-    monkeypatch.setattr(notion_writer, "_client", lambda: client)
-
-    row = store.find_pending_gate("ai workflow")
-    assert row["shortcode"] == "RG2"
-
-
-def test_find_pending_gate_falls_back_to_title_substring(monkeypatch):
-    client = FakeClient()
-    client.data_sources = _FilteringDataSources(
-        [_saves_page("RGTITLE", note=None, title="The Growth Hacking Secret")]
-    )
-    monkeypatch.setattr(notion_writer, "_client", lambda: client)
-
-    row = store.find_pending_gate("growth hacking")
-    assert row["shortcode"] == "RGTITLE"
-
-
-def test_find_pending_gate_via_notion_refuses_to_guess_among_multiple(monkeypatch):
-    """Same safety rule applies to the Notion fallback path: 2+ candidates and
-    nothing matches -> AmbiguousGateMatch, never a silent 'most recent' pick."""
-    client = FakeClient()
-    client.data_sources = _FilteringDataSources(
-        [_saves_page("MOSTRECENT"), _saves_page("OLDER")]
-    )
-    monkeypatch.setattr(notion_writer, "_client", lambda: client)
-
-    with pytest.raises(store.AmbiguousGateMatch) as exc_info:
-        store.find_pending_gate("matches nothing at all")
-    assert set(exc_info.value.candidates) == {"MOSTRECENT", "OLDER"}
-
-
-def test_find_pending_gate_via_notion_auto_picks_when_exactly_one(monkeypatch):
-    client = FakeClient()
-    client.data_sources = _FilteringDataSources([_saves_page("ONLYONE")])
-    monkeypatch.setattr(notion_writer, "_client", lambda: client)
-
-    row = store.find_pending_gate("matches nothing at all")
-    assert row["shortcode"] == "ONLYONE"
-
-
-def test_find_pending_gate_both_miss_returns_none(monkeypatch):
+def test_resolve_exact_shortcode_both_miss_returns_exists_false(monkeypatch):
     client = FakeClient()  # empty results everywhere
     monkeypatch.setattr(notion_writer, "_client", lambda: client)
-    assert store.find_pending_gate(None) is None
-    assert store.find_pending_gate("anything") is None
+    exists, row = store.resolve_exact_shortcode("anything")
+    assert exists is False
+    assert row is None
 
 
-def test_find_pending_gate_survives_notion_error(monkeypatch):
+def test_resolve_exact_shortcode_survives_notion_error(monkeypatch):
+    """Fails CLOSED: a Notion error means we can't verify one way or the
+    other, so the safe answer is "this shortcode is spoken for" (exists=True,
+    row=None) — never falling through to guess among unrelated rows."""
     def _boom():
         raise RuntimeError("notion is down")
     monkeypatch.setattr(notion_writer, "_client", _boom)
-    assert store.find_pending_gate("whatever") is None
+    exists, row = store.resolve_exact_shortcode("whatever")
+    assert exists is True
+    assert row is None
+
+
+# --- get_attach_candidates: Notion-primary, local fallback only on error ------
+
+def test_get_attach_candidates_reads_from_notion(monkeypatch):
+    client = FakeClient()
+    client.data_sources = _FilteringDataSources(
+        [_saves_page("CANDA", note="the ai workflow doc"), _saves_page("CANDB", note="something else")]
+    )
+    monkeypatch.setattr(notion_writer, "_client", lambda: client)
+
+    candidates = store.get_attach_candidates()
+    assert {c["shortcode"] for c in candidates} == {"CANDA", "CANDB"}
+
+
+def test_get_attach_candidates_falls_back_to_local_on_notion_error(monkeypatch):
+    def _boom():
+        raise RuntimeError("notion is down")
+    monkeypatch.setattr(notion_writer, "_client", _boom)
+    store.insert_processing("LOCALCAND", "https://www.instagram.com/reel/LOCALCAND/")
+    store.update_save("LOCALCAND", status="awaiting_dm")
+
+    candidates = store.get_attach_candidates()
+    assert [c["shortcode"] for c in candidates] == ["LOCALCAND"]
+
+
+def test_resolve_attachable_by_shortcode_recovers_via_notion(monkeypatch):
+    client = FakeClient()
+    client.data_sources = _FilteringDataSources([_saves_page("REMOTEATTACH", status="⏳ Awaiting DM")])
+    monkeypatch.setattr(notion_writer, "_client", lambda: client)
+
+    row = store.resolve_attachable_by_shortcode("REMOTEATTACH")
+    assert row is not None
+    assert row["shortcode"] == "REMOTEATTACH"
+
+
+def test_resolve_attachable_by_shortcode_rejects_fulfilled_notion_row(monkeypatch):
+    page = _saves_page("REMOTEFULFILLED", status="📥 Inbox", gate_keyword="SEND")
+    page["properties"]["Gate resource"] = {"url": "https://x.com/already-attached"}
+    client = FakeClient()
+    client.data_sources = _FilteringDataSources([page])
+    monkeypatch.setattr(notion_writer, "_client", lambda: client)
+
+    assert store.resolve_attachable_by_shortcode("REMOTEFULFILLED") is None
 
 
 # =================================================================================

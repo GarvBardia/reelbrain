@@ -33,6 +33,25 @@ class AttachRequest(BaseModel):
         return v
 
 
+class AttachConfirmRequest(BaseModel):
+    """POST /attach/confirm: commits a specific candidate the caller chose
+    from a prior /attach "needs_confirmation" response. shortcode is
+    REQUIRED and must be exact — this endpoint never guesses either."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    shortcode: str = Field(min_length=1, max_length=64)
+    resource_url: str = Field(min_length=1, max_length=2048)
+    secret: str = Field(min_length=1, max_length=256)
+
+    @field_validator("resource_url")
+    @classmethod
+    def _must_be_http_url(cls, v: str) -> str:
+        if not (v.startswith("https://") or v.startswith("http://")):
+            raise ValueError("resource_url must be an http(s) URL")
+        return v
+
+
 class NightlyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

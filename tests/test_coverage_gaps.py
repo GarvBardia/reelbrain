@@ -134,52 +134,36 @@ def test_attach_shortcode_match_beats_note_match(monkeypatch):
     assert resp.json()["shortcode"] == "TRICKY"  # exact shortcode wins over note substring
 
 
-def test_attach_note_match_beats_most_recent(monkeypatch):
+def test_attach_no_exact_shortcode_with_pending_rows_never_auto_commits(monkeypatch):
+    """The removed behavior (see PROGRESS.md): omitting shortcode_or_note used
+    to fall back to a note/title substring match or "the sole Awaiting DM
+    row", auto-committing with no way to verify it was the semantically
+    right one. That fallback tier is gone entirely — with no exact shortcode,
+    the resource content is fetched and scored, and the result is always
+    either a ranked-candidates response (409) or a clear "unresolved" (404),
+    never a silent 200."""
     client = _attach_client(monkeypatch)
-    _seed_awaiting("OLDNOTE", note="the ai workflow doc one")
-    _seed_awaiting("NEWEST", note="something else entirely")  # most recent
-
-    resp = client.post("/attach", json={
-        "shortcode_or_note": "ai workflow", "resource_url": "https://x.com/r", "secret": "test-secret",
-    })
-    assert resp.json()["shortcode"] == "OLDNOTE"  # note match wins over recency
-
-
-def test_attach_no_match_with_multiple_pending_refuses_to_guess(monkeypatch):
-    """A non-matching shortcode_or_note with 2+ rows Awaiting DM must 409, not
-    silently fall back to whichever is most recent (the safety fix)."""
-    client = _attach_client(monkeypatch)
+    from app import resource_lookup
+    monkeypatch.setattr(resource_lookup, "fetch_resource_title_and_description", lambda url: ("", ""))
     _seed_awaiting("FIRST", note="alpha")
     _seed_awaiting("SECOND", note="beta")
 
     resp = client.post("/attach", json={
-        "shortcode_or_note": "matches nothing at all", "resource_url": "https://x.com/r", "secret": "test-secret",
+        "shortcode_or_note": None, "resource_url": "https://x.com/r", "secret": "test-secret",
     })
-    assert resp.status_code == 409
-    assert set(resp.json()["detail"]["candidates"]) == {"FIRST", "SECOND"}
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["status"] == "unresolved"
+    assert store.get_by_shortcode("FIRST")["status"] == "awaiting_dm"
+    assert store.get_by_shortcode("SECOND")["status"] == "awaiting_dm"
 
 
-def test_attach_no_match_with_single_pending_still_auto_picks(monkeypatch):
-    """Unambiguous case: exactly one row Awaiting DM, so a non-matching search
-    term is still safe to fall through to it."""
-    client = _attach_client(monkeypatch)
-    _seed_awaiting("ONLYONE", note="alpha")
-
-    resp = client.post("/attach", json={
-        "shortcode_or_note": "matches nothing at all", "resource_url": "https://x.com/r", "secret": "test-secret",
-    })
-    assert resp.status_code == 200
-    assert resp.json()["shortcode"] == "ONLYONE"
-
-
-def test_attach_ignores_non_awaiting_rows_entirely(monkeypatch):
+def test_attach_ignores_non_awaiting_rows_without_a_keyword(monkeypatch):
+    """A plain Inbox row with no gate_keyword at all was never a candidate —
+    it has no open gate to fulfill, unlike the BUG2 Inbox-with-keyword edge
+    case get_attach_candidates() deliberately includes."""
     client = _attach_client(monkeypatch)
     store.insert_processing("DONE1", "https://www.instagram.com/reel/DONE1/", note="ai workflow")
     store.update_save("DONE1", status="done")
-    _seed_awaiting("PENDING1", note="unrelated")
 
-    resp = client.post("/attach", json={
-        "shortcode_or_note": "ai workflow", "resource_url": "https://x.com/r", "secret": "test-secret",
-    })
-    # DONE1's note matches but it's not awaiting_dm -> falls to most-recent awaiting
-    assert resp.json()["shortcode"] == "PENDING1"
+    candidates = store.get_attach_candidates()
+    assert "DONE1" not in {c["shortcode"] for c in candidates}

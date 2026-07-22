@@ -1,4 +1,4 @@
-"""FastAPI: /capture /retry /attach. BUILD_SPEC.md 1.1, 1.6, 2.2, 3.1, 3.3."""
+"""FastAPI: /capture /retry /attach /attach/confirm. BUILD_SPEC.md 1.1, 1.6, 2.2, 3.1, 3.3."""
 from __future__ import annotations
 
 import hmac
@@ -16,8 +16,25 @@ load_dotenv()
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from app import digest, fetcher, gemini_pipe, nightly, notion_writer, store
-from app.models import AttachRequest, CaptureRequest, Extraction, NightlyRequest, ReelData
+from app import (
+    attach_audit,
+    attach_matching,
+    digest,
+    fetcher,
+    gemini_pipe,
+    nightly,
+    notion_writer,
+    resource_lookup,
+    store,
+)
+from app.models import (
+    AttachConfirmRequest,
+    AttachRequest,
+    CaptureRequest,
+    Extraction,
+    NightlyRequest,
+    ReelData,
+)
 
 logger = logging.getLogger("reelbrain")
 logging.basicConfig(level=logging.INFO)
@@ -335,50 +352,167 @@ def retry(shortcode: str, request: Request, background_tasks: BackgroundTasks) -
     return JSONResponse(status_code=202, content={"status": "processing", "shortcode": shortcode})
 
 
+def _candidate_summary(candidate: dict) -> dict:
+    """The response shape for one /attach candidate — enough to actually
+    differentiate it for a human, not three identically-labeled options (see
+    PROGRESS.md's redesign notes): shortcode, created date, topic tags, and
+    the first line of the main_point/title."""
+    title = (candidate.get("title") or "").strip()
+    first_line = title.splitlines()[0] if title else "(no title)"
+    return {
+        "shortcode": candidate["shortcode"],
+        "created": (candidate.get("created_at") or "")[:10],
+        "topics": candidate.get("topics") or [],
+        "main_point": first_line[:140],
+        "gate_keyword": candidate.get("gate_keyword") or None,
+        "match_score": candidate.get("match_score"),
+    }
+
+
+def _commit_attach(row, resource_url: str) -> bool:
+    """Requirement (see PROGRESS.md): /attach must NEVER report success unless
+    a write actually landed in Notion — the durable source of truth. The
+    OLD code updated local SQLite first and swallowed a Notion failure,
+    reporting 200 regardless ("SQLite is already updated, don't lose the
+    attach over a Notion hiccup"). On Render, SQLite is ephemeral — a
+    swallowed Notion failure could look identical to success with zero
+    durable trace, which is exactly the shape of the Da8IIonEhGR incident's
+    OTHER possible cause. Notion write now happens FIRST and must succeed;
+    only then is local SQLite updated and does the caller get to report
+    success."""
+    page_id = row["notion_page_id"]
+    if not page_id:
+        fresh = store.get_by_shortcode_or_notion(row["shortcode"])
+        page_id = fresh["notion_page_id"] if fresh else None
+    if not page_id:
+        logger.error(
+            "attach: no notion_page_id resolvable for %s — refusing to report success",
+            row["shortcode"],
+        )
+        return False
+    try:
+        notion_writer.set_status_and_gate_resource(page_id, "done", resource_url)
+    except Exception:  # noqa: BLE001 - must NOT report success when the durable write failed
+        logger.exception("attach: Notion write failed for %s — NOT reporting success", row["shortcode"])
+        return False
+    store.update_save(row["shortcode"], status="done", gate_resource_url=resource_url, notion_page_id=page_id)
+    return True
+
+
 @app.post("/attach")
 def attach(req: AttachRequest, request: Request) -> JSONResponse:
-    """BUILD_SPEC 2.2: user shares the DM'd link back. Attaches it to the pending
-    entry's Resources and flips Awaiting DM -> Inbox. Matches by shortcode or note
-    substring; falls back to the sole Awaiting DM entry if omitted.
+    """BUILD_SPEC 2.2 (redesigned — see PROGRESS.md): user shares the DM'd
+    link back.
 
-    SAFETY: never guesses among multiple candidates (see
-    store.AmbiguousGateMatch) — a 409 here means retry with an explicit
-    shortcode instead of risking a resource getting attached to the wrong entry.
+    ONLY an exact shortcode auto-commits. The old "substring match" and "sole
+    Awaiting DM row" fallback tiers were removed entirely after a real
+    cross-attachment (a resource landed on a different, coincidentally-
+    similar-sounding reel with a genuine "success" — no ambiguity was ever
+    detected because there was only one candidate, so the old safety net
+    couldn't catch it).
+
+    Anything short of an exact shortcode now fetches the resource_url's own
+    title/description and scores it against currently-open gates (Awaiting
+    DM, or Inbox-with-a-keyword-but-no-resource-yet). This NEVER auto-
+    commits: it returns up to 3 ranked candidates (409) for the caller to
+    confirm via POST /attach/confirm, or a clear 404 "unresolved" if nothing
+    scores above the confidence threshold.
     """
     _check_rate_limit(request)
     _check_secret(req.secret)
 
-    try:
-        row = store.find_pending_gate(req.shortcode_or_note)
-    except store.AmbiguousGateMatch as exc:
+    if req.shortcode_or_note:
+        exists, row = store.resolve_exact_shortcode(req.shortcode_or_note)
+        if exists:
+            if not row:
+                attach_audit.record(
+                    req.shortcode_or_note, req.resource_url, "not_found_wrong_status",
+                )
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "status": "not_found",
+                        "message": "this shortcode exists but isn't awaiting a DM resource right now",
+                    },
+                )
+            if not _commit_attach(row, req.resource_url):
+                attach_audit.record(
+                    req.shortcode_or_note, req.resource_url, "write_failed", shortcode=row["shortcode"],
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "status": "failed",
+                        "message": "Notion write failed — attach was NOT recorded, retry",
+                        "shortcode": row["shortcode"],
+                    },
+                )
+            attach_audit.record(req.shortcode_or_note, req.resource_url, "attached", shortcode=row["shortcode"])
+            return JSONResponse(
+                status_code=200,
+                content={"status": "attached", "shortcode": row["shortcode"], "notion_url": row["notion_page_url"]},
+            )
+
+    # No exact shortcode match (omitted, or not a real shortcode at all):
+    # candidate-scoring resolution — never an auto-commit past this point.
+    title, description = resource_lookup.fetch_resource_title_and_description(req.resource_url)
+    candidates = store.get_attach_candidates()
+    ranked = attach_matching.rank_candidates(title, description, candidates)
+
+    if not ranked:
+        attach_audit.record(req.shortcode_or_note, req.resource_url, "unresolved")
         raise HTTPException(
-            status_code=409,
+            status_code=404,
             detail={
-                "message": (
-                    "ambiguous match — multiple pending entries matched; "
-                    "retry with an explicit shortcode"
-                ),
-                "candidates": exc.candidates,
+                "status": "unresolved",
+                "message": "no confident match found — attach manually via an exact shortcode",
             },
-        ) from exc
-    if not row:
-        raise HTTPException(status_code=404, detail="no matching awaiting-DM entry")
+        )
 
-    store.update_save(row["shortcode"], status="done", gate_resource_url=req.resource_url)
+    summaries = [_candidate_summary(c) for c in ranked]
+    attach_audit.record(
+        req.shortcode_or_note, req.resource_url, "needs_confirmation",
+        candidates=[c["shortcode"] for c in ranked],
+    )
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "status": "needs_confirmation",
+            "message": "no exact shortcode — pick one of these and retry via POST /attach/confirm",
+            "resource_url": req.resource_url,
+            "candidates": summaries,
+        },
+    )
 
-    if row["notion_page_id"]:
-        try:
-            notion_writer.set_status_and_gate_resource(row["notion_page_id"], "done", req.resource_url)
-        except Exception:  # noqa: BLE001 - SQLite is already updated; don't lose the attach over a Notion hiccup
-            logger.exception("Notion update failed for attach on %s", row["shortcode"])
 
+@app.post("/attach/confirm")
+def attach_confirm(req: AttachConfirmRequest, request: Request) -> JSONResponse:
+    """Commits a specific candidate the caller chose from a prior /attach
+    "needs_confirmation" (409) response. shortcode is REQUIRED and exact —
+    this endpoint never guesses either; it only accepts a row that's still a
+    genuine open attach target (see store.resolve_attachable_by_shortcode)."""
+    _check_rate_limit(request)
+    _check_secret(req.secret)
+
+    row = store.resolve_attachable_by_shortcode(req.shortcode)
+    if row is None:
+        attach_audit.record(req.shortcode, req.resource_url, "confirm_not_found", shortcode=req.shortcode)
+        raise HTTPException(
+            status_code=404,
+            detail={"status": "not_found", "message": f"{req.shortcode} is not a pending attach target"},
+        )
+
+    if not _commit_attach(row, req.resource_url):
+        attach_audit.record(req.shortcode, req.resource_url, "confirm_write_failed", shortcode=req.shortcode)
+        raise HTTPException(
+            status_code=502,
+            detail={"status": "failed", "message": "Notion write failed — attach was NOT recorded, retry"},
+        )
+
+    attach_audit.record(req.shortcode, req.resource_url, "confirmed", shortcode=req.shortcode)
     return JSONResponse(
         status_code=200,
-        content={
-            "status": "attached",
-            "shortcode": row["shortcode"],
-            "notion_url": row["notion_page_url"],
-        },
+        content={"status": "attached", "shortcode": row["shortcode"], "notion_url": row["notion_page_url"]},
     )
 
 

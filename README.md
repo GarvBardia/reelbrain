@@ -152,11 +152,13 @@ Retry a failed row:
 curl -X POST http://localhost:8000/retry/<shortcode>
 ```
 
-Attach a DM'd resource to a gated row (see Phase 2 below):
+Attach a DM'd resource to a gated row (see Phase 2 below — redesigned; an
+exact shortcode is the only value that commits immediately, everything else
+returns candidates to confirm via a second call):
 ```bash
 curl -X POST http://localhost:8000/attach \
   -H "Content-Type: application/json" \
-  -d '{"shortcode_or_note": null, "resource_url": "https://instagram.com/direct/t/...", "secret": "change-me"}'
+  -d '{"shortcode_or_note": "Da8IIonEhGR", "resource_url": "https://instagram.com/direct/t/...", "secret": "change-me"}'
 ```
 
 ## Phase 2 acceptance check
@@ -240,32 +242,106 @@ So there's no keyword to show on the *first* share. Instead:
   keyword (already on your clipboard) and wait for the creator's DM.
 - If `capture_status` is anything else (`done`, `failed`, etc.), just show that instead.
 
-### Shortcut 2: "Attach to ReelBrain" (BUILD_SPEC §2.2)
+### Shortcut 2: "Attach to ReelBrain" (BUILD_SPEC §2.2 — REDESIGNED)
 
 For once the creator's DM arrives with the promised link. Trigger: Share Sheet from the
 Instagram DM (or Messages/any app), accepting URLs.
 
-1. **Get URLs from Input.**
-2. **Get Contents of URL**:
-   - Method: `POST`
-   - URL: `https://<your-render-app>/attach`
-   - Headers: `Content-Type: application/json`
-   - Request body (JSON): `{"shortcode_or_note": null, "resource_url": <the URL from step 1>, "secret": "<CAPTURE_SECRET>"}`
-   - Leaving `shortcode_or_note` as `null` only works when exactly **one** reel is
-     currently `Awaiting DM` — with a word from the original caption/note, matched as a
-     substring against that entry's note or title.
-3. **Show Notification** confirming `{"status": "attached", ...}`.
-   - **404** means nothing matched at all — check the Notion "Awaiting DM" view.
-   - **409** means the match was ambiguous — 2+ pending entries matched (either because
-     you omitted `shortcode_or_note` with several reels waiting, or your word appears in
-     more than one). The response body lists every matching shortcode under
-     `detail.candidates`; retry with the exact shortcode from that list instead of one
-     of the ambiguous words. **This is deliberate** — a real mismatch happened once from
-     guessing among multiple candidates, so the endpoint now refuses to guess rather
-     than risk attaching a resource to the wrong reel.
+**Why this changed:** the old design let `shortcode_or_note: null` fall back to
+"whichever reel is the sole Awaiting DM entry", auto-committing with no way to verify
+it was the right one. That caused a real cross-attachment — a resource meant for one
+reel landed on a different, coincidentally-similar-sounding one, reported as a genuine
+"success" with no error anywhere (see PROGRESS.md for the full incident writeup). The
+fallback tier is gone. **An exact shortcode is now the only value that commits
+immediately — everything else returns candidates for you to pick from, never an
+auto-commit.**
 
-Successfully attaching flips the entry `⏳ Awaiting DM → 📥 Inbox` and records the DM'd
-link on the Notion page's **Gate resource** field.
+#### `POST /attach`
+
+Request body (JSON):
+```json
+{"shortcode_or_note": "Da8IIonEhGR", "resource_url": "https://...", "secret": "<CAPTURE_SECRET>"}
+```
+- `shortcode_or_note`: pass the **exact shortcode** if you know it (from the reel's
+  Instagram URL, e.g. `instagram.com/reel/Da8IIonEhGR/` → `Da8IIonEhGR`). `null`/omitted
+  is accepted but no longer does a "note substring" or "sole pending row" guess — it goes
+  straight to candidate scoring (see below).
+
+Three possible responses:
+
+1. **`200` — attached immediately** (only when `shortcode_or_note` was an exact,
+   real shortcode that's currently open — Awaiting DM, or Inbox with an unfulfilled
+   gate keyword):
+   ```json
+   {"status": "attached", "shortcode": "Da8IIonEhGR", "notion_url": "https://notion.so/..."}
+   ```
+2. **`404` — not found or unresolved.** Two shapes, both `detail.status`:
+   - `"not_found"`: the exact shortcode you gave exists but isn't open for a gate right
+     now (already attached, or never gated at all — check the Notion row directly).
+   - `"unresolved"`: no exact shortcode was given (or it isn't a real shortcode), and
+     nothing among the currently-open gates scored as a confident match against the
+     resource URL's own page title/description. Attach manually via the exact shortcode.
+3. **`409` — needs confirmation.** No exact shortcode, but 1-3 candidates scored above
+   the confidence threshold:
+   ```json
+   {
+     "detail": {
+       "status": "needs_confirmation",
+       "message": "no exact shortcode — pick one of these and retry via POST /attach/confirm",
+       "resource_url": "https://...",
+       "candidates": [
+         {
+           "shortcode": "DbFDY3yTwlI",
+           "created": "2026-07-22",
+           "topics": ["ai-tools", "higgsfield"],
+           "main_point": "Higgsfield is offering 24 hours of free access.",
+           "gate_keyword": "video",
+           "match_score": 3
+         },
+         {
+           "shortcode": "Da8A4axznbT",
+           "created": "2026-07-19",
+           "topics": ["ai-tools", "image-processing"],
+           "main_point": "An app built with Higgsfield AI applies filters.",
+           "gate_keyword": null,
+           "match_score": 2
+         }
+       ]
+     }
+   }
+   ```
+   Show the candidates in a **native "Choose from List"** step (built from
+   `detail.candidates`, e.g. `"{shortcode}: {main_point}"` per row) so you can actually
+   tell them apart, then call `/attach/confirm` with whichever one you pick.
+
+   **`5xx` (502) — write failed.** The row was correctly identified, but the durable
+   Notion write itself failed (network hiccup, etc.) — the attach was **NOT** recorded
+   anywhere. Retry; never treat this as success.
+
+#### `POST /attach/confirm`
+
+Commits a specific candidate you chose from a prior `409` response.
+
+Request body (JSON):
+```json
+{"shortcode": "DbFDY3yTwlI", "resource_url": "https://...", "secret": "<CAPTURE_SECRET>"}
+```
+- `shortcode`: **required**, must be exact (e.g. copied from one of the `409`
+  response's `candidates`). This endpoint never guesses either.
+
+Response: the same `200`/`404`/`5xx` shapes as `/attach`'s exact-shortcode path above.
+
+Successfully attaching (via either endpoint) flips the entry `⏳ Awaiting DM → 📥 Inbox`
+and records the DM'd link on the Notion page's **Gate resource** field. Every attempt —
+resolved instantly, resolved via a confirmed candidate, or unresolved — is logged to a
+persistent "🔍 Attach Audit Log" page under your `NOTION_PARENT_PAGE_ID`, so a future
+mismatch can be looked up directly instead of reconstructed after the fact.
+
+**Shortcut rebuild note (yours to do, not server-side):** the Shortcut needs an "Ask for
+Input" or "Choose from Menu" step so it can pass a real `shortcode_or_note` when you know
+it, and a way to show `detail.candidates` as a native picker on `409` before calling
+`/attach/confirm` with the chosen `shortcode`. Show the actual response body (not a
+blanket "success" toast) so a `404`/`409`/`5xx` is visible instead of silently swallowed.
 
 ### Nightly cleanup job (BUILD_SPEC §2.3)
 

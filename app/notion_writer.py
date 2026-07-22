@@ -147,6 +147,31 @@ def find_awaiting_dm_pages() -> list[dict]:
     )["results"]
 
 
+def find_attach_candidate_pages() -> list[dict]:
+    """Every Saves page that could still legitimately accept a DM'd resource:
+    Awaiting DM rows, OR Inbox rows that somehow have a Gate keyword but no
+    Gate resource yet (the BUG2 edge case where a keyword got set without
+    `detected` flipping true, routing the row to Inbox instead of Awaiting
+    DM). Used by /attach's candidate-scoring resolution path (no exact
+    shortcode match) — see PROGRESS.md. Newest-created first, since a
+    just-arrived DM is more often about a recent capture than an old one."""
+    client = _client()
+    saves_ds_id = _resolve_data_source_id(client, NOTION_DB_ID)
+    return client.data_sources.query(
+        data_source_id=saves_ds_id,
+        filter={
+            "or": [
+                {"property": "Status", "select": {"equals": STATUS_LABELS["awaiting_dm"]}},
+                {"and": [
+                    {"property": "Gate keyword", "rich_text": {"is_not_empty": True}},
+                    {"property": "Gate resource", "url": {"is_empty": True}},
+                ]},
+            ],
+        },
+        sorts=[{"timestamp": "created_time", "direction": "descending"}],
+    )["results"]
+
+
 def find_saves_pages_since(created_on_or_after_iso: str) -> list[dict]:
     """Every Saves page created on/after the given ISO timestamp, newest first,
     fully paginated. Used by the digests (FIX 2, see PROGRESS.md): Render's
@@ -400,6 +425,28 @@ def upsert_named_page(parent_page_id: str, title: str, children: list[dict]) -> 
     for block in existing:
         client.blocks.delete(block_id=block["id"])
     client.blocks.children.append(block_id=page_id, children=children)
+    page = client.pages.update(page_id=page_id, properties={"title": {"title": _rich_text(title)}})
+    return {"page_id": page["id"], "url": page["url"]}
+
+
+def append_to_named_page(parent_page_id: str, title: str, new_blocks: list[dict]) -> dict:
+    """Like upsert_named_page, but APPENDS new_blocks to the page's existing
+    children instead of replacing them. Used for an append-only log (the
+    /attach audit trail, see app/attach_audit.py) where history must survive
+    — unlike a digest, which is meant to reflect only the current state.
+    Creates the page (seeded with new_blocks) if it doesn't exist yet."""
+    client = _client()
+    new_blocks = new_blocks[:100]
+    page_id = find_child_page_by_title(client, parent_page_id, title)
+    if page_id is None:
+        page = client.pages.create(
+            parent={"type": "page_id", "page_id": parent_page_id},
+            properties={"title": {"title": _rich_text(title)}},
+            children=new_blocks,
+        )
+        return {"page_id": page["id"], "url": page["url"]}
+
+    client.blocks.children.append(block_id=page_id, children=new_blocks)
     page = client.pages.update(page_id=page_id, properties={"title": {"title": _rich_text(title)}})
     return {"page_id": page["id"], "url": page["url"]}
 

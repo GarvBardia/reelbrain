@@ -276,14 +276,6 @@ def get_expired_gates(older_than_days: int = 7) -> list[sqlite3.Row]:
         ).fetchall()
 
 
-def get_most_recent_awaiting_dm() -> Optional[sqlite3.Row]:
-    with get_connection() as conn:
-        return conn.execute(
-            """SELECT * FROM saves WHERE status = 'awaiting_dm'
-               ORDER BY updated_at DESC LIMIT 1"""
-        ).fetchone()
-
-
 # --- ephemeral-disk recovery: Notion is the durable source of truth --------
 #
 # Render's free tier wipes its ephemeral disk on every redeploy/restart, taking
@@ -367,34 +359,12 @@ def get_by_shortcode_or_notion(shortcode: str) -> Optional[sqlite3.Row]:
     return _persist_notion_page(page)
 
 
-class AmbiguousGateMatch(Exception):
-    """Raised by find_pending_gate when a substring/fallback match isn't unique.
-
-    Real incident: with several rows simultaneously Awaiting DM, a loose
-    note/title substring match attached a DM'd resource to the WRONG pending
-    entry. From here on, this lookup never guesses when more than one
-    candidate matches — it raises this exception (main.py translates it to
-    HTTP 409) listing every matching shortcode, so the caller retries with an
-    explicit one instead of silently getting whichever matched first.
-    """
-
-    def __init__(self, candidates: list[str]):
-        self.candidates = candidates
-        super().__init__(f"{len(candidates)} ambiguous awaiting-DM candidates: {candidates}")
-
-
-def _awaiting_dm_rows() -> list[sqlite3.Row]:
-    with get_connection() as conn:
-        return conn.execute(
-            "SELECT * FROM saves WHERE status = 'awaiting_dm' ORDER BY updated_at DESC"
-        ).fetchall()
-
-
 def _row_title(row: sqlite3.Row) -> str:
     """Locally-derived equivalent of the Notion page's Title (= the extraction's
-    main_point) — there's no separate title column in SQLite. awaiting_dm rows
-    always have extraction_json populated, since gate detection happens after
-    extraction in run_pipeline, so this is never empty in practice for them."""
+    main_point) — there's no separate title column in SQLite. Rows with a real
+    gate always have extraction_json populated, since gate detection happens
+    after extraction in run_pipeline, so this is never empty in practice for
+    them."""
     if not row["extraction_json"]:
         return ""
     try:
@@ -403,69 +373,33 @@ def _row_title(row: sqlite3.Row) -> str:
         return ""
 
 
-def _find_pending_gate_via_notion(shortcode_or_note: Optional[str]) -> Optional[sqlite3.Row]:
-    """Notion-side substring/fallback search. By the time find_pending_gate calls
-    this, it has already exhaustively checked for an exact shortcode match (both
-    locally, across ALL statuses, and directly against Notion) and found nothing
-    anywhere — so shortcode_or_note here, if not None, is only ever a note/title
-    search fragment, never a candidate exact shortcode. No exact-match branch is
-    needed (or safe to re-add): re-scoping it to this function's own
-    find_awaiting_dm_pages() listing is exactly the bug that made BUG 3 possible
-    in the sibling local path (see find_pending_gate / _resolve_exact_shortcode)."""
-    from app import notion_writer
-
-    try:
-        pages = notion_writer.find_awaiting_dm_pages()
-    except Exception:
-        logger.warning("Notion fallback lookup for awaiting-DM entries failed", exc_info=True)
-        return None
-    if not pages:
-        return None
-
-    entries = [(page, notion_writer.extract_saves_fields(page)) for page in pages]
-
-    if shortcode_or_note:
-        needle = shortcode_or_note.lower()
-        matches = [
-            (p, f) for p, f in entries
-            if needle in (f["note"] or "").lower() or needle in (f["title"] or "").lower()
-        ]
-        if len(matches) > 1:
-            raise AmbiguousGateMatch([f["shortcode"] for _p, f in matches])
-        if len(matches) == 1:
-            return _persist_notion_page(matches[0][0])
-
-    if len(pages) > 1:
-        raise AmbiguousGateMatch([f["shortcode"] for _p, f in entries])
-    return _persist_notion_page(pages[0])
-
-
-def _resolve_exact_shortcode(shortcode: str) -> tuple[bool, Optional[sqlite3.Row]]:
-    """The critical safety property (post BUG-3 incident): an explicit, exact
-    shortcode must resolve to THAT row, or to nothing at all — NEVER a
-    different row.
+def resolve_exact_shortcode(shortcode: str) -> tuple[bool, Optional[sqlite3.Row]]:
+    """/attach's ONLY auto-commit resolution path (see PROGRESS.md — the
+    substring/"sole Awaiting DM row" fallback tiers were REMOVED entirely
+    after a real cross-attachment: a resource meant for one reel landed on a
+    different, coincidentally-similar-sounding one, reported as a genuine
+    "success" with no ambiguity ever detected because there was only one
+    candidate. Anything short of an exact shortcode now goes through
+    app/attach_matching.py's candidate-scoring path instead, which returns
+    ranked candidates for a human to confirm — it never auto-commits.
 
     Returns (exists, row):
       (False, None) -> this shortcode doesn't exist anywhere (local, any
-          status, or Notion) -- the caller should fall through and treat
-          shortcode_or_note as a note/title search fragment instead.
+          status, or Notion) — the caller should treat this as "no exact
+          match" and fall through to candidate scoring.
       (True, None)  -> a row/page for this EXACT shortcode was found, but it
-          isn't awaiting_dm right now -- the caller must return this as-is
-          (None) and must NOT fall through to guessing among other rows.
+          isn't awaiting_dm right now — the caller must return this as a
+          clean "not found" and must NOT fall through to guessing among
+          other rows.
       (True, row)   -> the exact row, and it IS awaiting_dm.
 
-    THE BUG THIS FIXES: the previous version only ever looked for an exact
-    shortcode match within the caller's already-status-filtered awaiting_dm
-    list. If the requested row wasn't in that list for any reason — most
-    plausibly, Render's ephemeral disk had wiped local SQLite and this
-    specific shortcode hadn't been re-synced from Notion yet — the exact-match
-    check silently found nothing and execution fell through to the
-    single-remaining-row auto-pick meant only for an OMITTED shortcode_or_note,
-    attaching the resource to a totally unrelated pending row. Checking the
-    full local table (any status) first, then Notion directly by shortcode
-    (also status-unscoped, via the same primitive /retry already uses) closes
-    that gap: this shortcode is now searched for everywhere BEFORE any
-    other-row fallback is even considered.
+    THE ORIGINAL BUG THIS FIXES (BUG 3, kept from the prior design): checking
+    only the caller's already-status-filtered awaiting_dm list meant a
+    requested row absent from that list (e.g. after an ephemeral-disk wipe)
+    silently fell through to an unrelated row. Checking the full local table
+    (any status) first, then Notion directly by shortcode, closes that gap:
+    this shortcode is searched for everywhere before any other-row logic is
+    even considered.
     """
     local_row = get_by_shortcode(shortcode)
     if local_row is not None:
@@ -478,7 +412,7 @@ def _resolve_exact_shortcode(shortcode: str) -> tuple[bool, Optional[sqlite3.Row
     except Exception:
         # Fail CLOSED, not open: we couldn't verify one way or the other, so the
         # safe answer is "this shortcode is spoken for" (refuse), never silently
-        # falling through to guess among unrelated awaiting_dm rows.
+        # falling through to guess among unrelated rows.
         logger.warning(
             "Notion exact-shortcode lookup failed for %s — refusing to fall "
             "back to guessing a different row", shortcode, exc_info=True,
@@ -493,51 +427,103 @@ def _resolve_exact_shortcode(shortcode: str) -> tuple[bool, Optional[sqlite3.Row
     return True, _persist_notion_page(page)
 
 
-def find_pending_gate(shortcode_or_note: Optional[str]) -> Optional[sqlite3.Row]:
-    """BUILD_SPEC 2.2: match /attach's target row.
+def _is_attach_candidate(status: Optional[str], gate_keyword: Optional[str], gate_resource_url: Optional[str]) -> bool:
+    """A row can still legitimately accept a DM'd resource if it's Awaiting
+    DM, OR it has a Gate keyword but no Gate resource yet (the BUG2 edge case
+    where a keyword got set without `detected` flipping true, routing the row
+    to Inbox instead of Awaiting DM). Shared by the candidate-scoring pool and
+    /attach/confirm's own target validation, so both use the exact same
+    definition of "still open"."""
+    return status == "awaiting_dm" or bool(gate_keyword and not gate_resource_url)
 
-    SAFETY (post-incident #1, see AmbiguousGateMatch): never guesses when more
-    than one candidate matches — raises AmbiguousGateMatch instead.
 
-    SAFETY (post-incident #2, CRITICAL, see _resolve_exact_shortcode): an
-    explicit shortcode_or_note that IS a real shortcode resolves to THAT row,
-    or to nothing — NEVER a different row, regardless of what else happens to
-    be awaiting_dm at the time.
+def resolve_attachable_by_shortcode(shortcode: str) -> Optional[sqlite3.Row]:
+    """Used by /attach/confirm: accepts the row only if it's still a genuine
+    open attach target per _is_attach_candidate — broader than
+    resolve_exact_shortcode's awaiting_dm-only check (matching the same
+    broadened pool get_attach_candidates() scores against), but still an
+    EXACT shortcode lookup, never a substitution."""
+    local_row = get_by_shortcode(shortcode)
+    if local_row is not None:
+        if _is_attach_candidate(local_row["status"], local_row["gate_keyword"], local_row["gate_resource_url"]):
+            return local_row
+        return None
 
-    Priority:
-      1. Exact shortcode match — checked across the FULL local saves table
-         (any status), then directly against Notion if absent locally. Always
-         unambiguous (shortcode is a primary key) and never substituted.
-      2. Substring match against note OR title, restricted to awaiting_dm rows.
-         2+ matches -> AmbiguousGateMatch.
-      3. If shortcode_or_note was omitted, or matched nothing above: the single
-         awaiting_dm row, if there is exactly one. 2+ rows -> AmbiguousGateMatch.
-         Falls back to Notion (ephemeral-disk recovery) only when local has NONE.
-    """
-    if shortcode_or_note:
-        exists, row = _resolve_exact_shortcode(shortcode_or_note)
-        if exists:
-            return row  # the correct row, or None — never a substitute
+    from app import notion_writer
 
-    local_rows = _awaiting_dm_rows()
+    try:
+        page = notion_writer.find_page_by_shortcode(shortcode)
+    except Exception:
+        logger.warning(
+            "Notion exact-shortcode lookup failed for %s during /attach/confirm",
+            shortcode, exc_info=True,
+        )
+        return None
+    if page is None:
+        return None
 
-    if shortcode_or_note:
-        needle = shortcode_or_note.lower()
-        matches = [
-            r for r in local_rows
-            if needle in (r["note"] or "").lower() or needle in _row_title(r).lower()
-        ]
-        if len(matches) > 1:
-            raise AmbiguousGateMatch([r["shortcode"] for r in matches])
-        if len(matches) == 1:
-            return matches[0]
+    fields = notion_writer.extract_saves_fields(page)
+    status = notion_writer.status_label_from_notion(fields["status_label"])
+    gate_resource_url = (page.get("properties", {}).get("Gate resource") or {}).get("url")
+    if _is_attach_candidate(status, fields["gate_keyword"], gate_resource_url):
+        return _persist_notion_page(page)
+    return None
 
-    if local_rows:
-        if len(local_rows) > 1:
-            raise AmbiguousGateMatch([r["shortcode"] for r in local_rows])
-        return local_rows[0]
 
-    return _find_pending_gate_via_notion(shortcode_or_note)
+def _local_attach_candidates() -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            """SELECT * FROM saves WHERE status = 'awaiting_dm'
+               OR (gate_keyword IS NOT NULL AND gate_keyword != ''
+                   AND (gate_resource_url IS NULL OR gate_resource_url = ''))"""
+        ).fetchall()
+    tags_by_shortcode = get_tags_for_shortcodes([r["shortcode"] for r in rows])
+    return [
+        {
+            "shortcode": row["shortcode"],
+            "title": _row_title(row),
+            "note": row["note"] or "",
+            "gate_keyword": row["gate_keyword"] or "",
+            "topics": tags_by_shortcode.get(row["shortcode"], []),
+            "created_at": row["created_at"] or "",
+            "page_id": row["notion_page_id"],
+        }
+        for row in rows
+    ]
+
+
+def get_attach_candidates() -> list[dict]:
+    """Notion-primary (durable) candidate pool for /attach's scoring
+    resolution path: Awaiting DM rows, plus Inbox rows that have a Gate
+    keyword but no Gate resource yet. Falls back to local SQLite only when
+    the Notion query fails outright — never silently empty due to a
+    transient hiccup (same FIX 2 pattern the digests use)."""
+    from app import notion_writer
+
+    try:
+        pages = notion_writer.find_attach_candidate_pages()
+    except Exception:
+        logger.warning(
+            "Notion attach-candidate query failed — falling back to local SQLite", exc_info=True,
+        )
+        return _local_attach_candidates()
+
+    candidates = []
+    for page in pages:
+        fields = notion_writer.extract_saves_fields(page)
+        if not fields["shortcode"]:
+            continue
+        digest_fields = notion_writer.extract_digest_fields(page)
+        candidates.append({
+            "shortcode": fields["shortcode"],
+            "title": fields["title"],
+            "note": fields["note"] or "",
+            "gate_keyword": fields["gate_keyword"] or "",
+            "topics": digest_fields["topics"],
+            "created_at": page.get("created_time", ""),
+            "page_id": fields["page_id"],
+        })
+    return candidates
 
 
 def get_archivable(older_than_days: int = 30, max_value_score: int = 2) -> list[sqlite3.Row]:

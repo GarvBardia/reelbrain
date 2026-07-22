@@ -67,134 +67,77 @@ def test_daily_fetch_count_and_record_fetch():
     assert store.get_last_fetch_at() is not None
 
 
-def test_get_most_recent_awaiting_dm():
-    store.insert_processing("G1", "https://www.instagram.com/reel/G1/")
-    store.update_save("G1", status="awaiting_dm")
-    row = store.get_most_recent_awaiting_dm()
-    assert row["shortcode"] == "G1"
-
-
-# --- find_pending_gate: refuse to guess on ambiguity (safety fix) --------------
-#
-# Real incident: with several rows simultaneously Awaiting DM, the note/title
-# substring fallback was too loose and attached a resource to the wrong pending
-# entry. These are the two exact scenarios that must now 409 instead of guessing.
-
-def _seed_gate(shortcode: str, note: str | None = None, main_point: str | None = None) -> None:
+def _seed_gate(shortcode: str, note: str | None = None, main_point: str | None = None,
+               gate_keyword: str | None = None) -> None:
     store.insert_processing(shortcode, f"https://www.instagram.com/reel/{shortcode}/", note=note)
     fields = {"status": "awaiting_dm"}
     if main_point is not None:
         fields["extraction_json"] = json.dumps({"main_point": main_point})
+    if gate_keyword is not None:
+        fields["gate_keyword"] = gate_keyword
     store.update_save(shortcode, **fields)
 
 
-def test_omitted_shortcode_with_three_awaiting_dm_rows_refuses_to_guess():
-    """Requirement: 3 awaiting_dm rows, omitted shortcode_or_note -> ambiguous,
-    listing all 3 — never a silent pick of one (e.g. 'most recent')."""
-    _seed_gate("ROW1")
-    _seed_gate("ROW2")
-    _seed_gate("ROW3")
+# --- resolve_exact_shortcode: the ONLY auto-commit path (see PROGRESS.md) ------
+#
+# The substring/"sole Awaiting DM row" fallback tiers were REMOVED entirely
+# after a real cross-attachment (a resource landed on a different,
+# coincidentally-similar-sounding reel, reported as a genuine "success" — no
+# ambiguity was ever detected because there was only one candidate). Anything
+# short of an exact shortcode now goes through store.get_attach_candidates() +
+# app/attach_matching.py's scoring instead (tested separately below), which
+# never auto-commits.
 
-    with pytest.raises(store.AmbiguousGateMatch) as exc_info:
-        store.find_pending_gate(None)
-
-    assert set(exc_info.value.candidates) == {"ROW1", "ROW2", "ROW3"}
-    assert len(exc_info.value.candidates) == 3
-    # no side effects — every row must still be untouched, still awaiting_dm
-    for shortcode in ("ROW1", "ROW2", "ROW3"):
-        assert store.get_by_shortcode(shortcode)["status"] == "awaiting_dm"
-
-
-def test_two_rows_sharing_a_word_in_note_refuses_to_guess():
-    """Requirement: 2 rows both containing the same word in their note ->
-    ambiguous, not a silent first-match."""
-    _seed_gate("NOTEROW1", note="check out this ai workflow doc from Jane")
-    _seed_gate("NOTEROW2", note="another ai workflow tip from Bob")
-
-    with pytest.raises(store.AmbiguousGateMatch) as exc_info:
-        store.find_pending_gate("ai workflow")
-
-    assert set(exc_info.value.candidates) == {"NOTEROW1", "NOTEROW2"}
-
-
-def test_two_rows_sharing_a_word_in_title_refuses_to_guess():
-    """Same as above, but the shared word is in the title (extraction_json's
-    main_point) rather than the note — the local title-derived match."""
-    _seed_gate("TITLEROW1", main_point="The Growth Hacking Playbook")
-    _seed_gate("TITLEROW2", main_point="Another Growth Hacking Guide")
-
-    with pytest.raises(store.AmbiguousGateMatch) as exc_info:
-        store.find_pending_gate("growth hacking")
-
-    assert set(exc_info.value.candidates) == {"TITLEROW1", "TITLEROW2"}
-
-
-def test_exact_shortcode_match_is_never_ambiguous_even_with_many_rows():
+def test_exact_shortcode_match_resolves_regardless_of_other_rows():
     """An exact shortcode match is always unambiguous (shortcode is a primary
     key) regardless of how many other rows are simultaneously awaiting_dm."""
     _seed_gate("EXACT1")
     _seed_gate("EXACT2")
     _seed_gate("EXACT3")
 
-    row = store.find_pending_gate("EXACT2")
+    exists, row = store.resolve_exact_shortcode("EXACT2")
+    assert exists is True
     assert row["shortcode"] == "EXACT2"
 
 
-def test_substring_match_unique_among_many_still_auto_picks():
-    """A substring match that's unique — even with several OTHER unrelated rows
-    also awaiting_dm — is safe to auto-pick; ambiguity is about the MATCH count,
-    not the total row count."""
-    _seed_gate("UNIQUE1", note="the only one mentioning pineapple recipes")
-    _seed_gate("OTHER1", note="something about sleep")
-    _seed_gate("OTHER2", note="something about finance")
-
-    row = store.find_pending_gate("pineapple")
-    assert row["shortcode"] == "UNIQUE1"
+def test_exact_shortcode_not_found_anywhere_returns_exists_false():
+    _seed_gate("SOMEROW")
+    exists, row = store.resolve_exact_shortcode("does-not-exist-anywhere")
+    assert exists is False
+    assert row is None
 
 
-def test_omitted_shortcode_with_single_row_still_auto_picks():
-    """Only auto-pick when exactly one row is in awaiting_dm."""
-    _seed_gate("SOLE1")
-    row = store.find_pending_gate(None)
-    assert row["shortcode"] == "SOLE1"
-
-
-# --- find_pending_gate: exact shortcode NEVER resolves to a different row -----
+# --- resolve_exact_shortcode: NEVER resolves to a different row ---------------
 #
-# CRITICAL incident (BUG 3): /attach with an explicit shortcode_or_note=
-# "DZSFkNppVW_" landed the resource on a completely unrelated row
-# (Dap3IoNo4Kt) instead. Root cause: the exact-shortcode check was scoped to
-# only rows already in `awaiting_dm` status. If the requested row wasn't in
-# that set for any reason, the exact-match search silently found nothing and
-# execution fell through to the "single remaining awaiting_dm row" auto-pick
-# meant only for an OMITTED shortcode_or_note. These tests reproduce that
-# exact shape locally and assert the fixed, non-negotiable safety property:
-# an explicit exact shortcode resolves to THAT row, or to nothing — never a
-# substitute.
+# CRITICAL incident (BUG 3, still the same non-negotiable safety property post-
+# redesign): /attach with an explicit shortcode_or_note that IS a real
+# shortcode must resolve to THAT row, or to nothing — never a substitute.
 
 def test_exact_shortcode_not_awaiting_dm_never_substitutes_a_different_row():
     """The precise incident shape: the requested shortcode's row EXISTS locally
     but isn't awaiting_dm (e.g. already attached, or never gated), while a
     totally unrelated OTHER row is the sole awaiting_dm entry. Must return
-    None (404) — never silently attach to the unrelated row."""
+    (True, None) — never silently substitute the unrelated row."""
     store.insert_processing("TARGET1", "https://www.instagram.com/reel/TARGET1/")
     store.update_save("TARGET1", status="done")  # not awaiting_dm
     _seed_gate("UNRELATED1")  # the only awaiting_dm row
 
-    row = store.find_pending_gate("TARGET1")
+    exists, row = store.resolve_exact_shortcode("TARGET1")
+    assert exists is True
     assert row is None
 
 
 def test_exact_shortcode_not_awaiting_dm_never_substitutes_among_many_others():
-    """Same as above, but with several OTHER awaiting_dm rows (the ambiguous-
-    fallback path) to prove the explicit shortcode still refuses to guess even
-    when the fallback-if-omitted logic would otherwise raise/pick among them."""
+    """Same as above, but with several OTHER awaiting_dm rows, to prove the
+    explicit shortcode still refuses to guess even when there are many other
+    candidates it could theoretically fall back to."""
     store.insert_processing("TARGET2", "https://www.instagram.com/reel/TARGET2/")
     store.update_save("TARGET2", status="failed")
     _seed_gate("UNRELATED2")
     _seed_gate("UNRELATED3")
 
-    row = store.find_pending_gate("TARGET2")
+    exists, row = store.resolve_exact_shortcode("TARGET2")
+    assert exists is True
     assert row is None
 
 
@@ -204,14 +147,63 @@ def test_exact_shortcode_awaiting_dm_wins_even_with_other_rows_present():
     _seed_gate("REALTARGET")
     _seed_gate("OTHERROW")
 
-    row = store.find_pending_gate("REALTARGET")
+    exists, row = store.resolve_exact_shortcode("REALTARGET")
+    assert exists is True
     assert row["shortcode"] == "REALTARGET"
 
 
-def test_shortcode_missing_everywhere_falls_through_to_substring_as_before():
-    """A value that isn't a real shortcode anywhere (local or Notion) must still
-    work as a plain note/title search fragment — the fix must not break the
-    ordinary substring-match use case."""
-    _seed_gate("SUBROW1", note="the ai workflow doc one")
-    row = store.find_pending_gate("ai workflow")
-    assert row["shortcode"] == "SUBROW1"
+# --- get_attach_candidates / resolve_attachable_by_shortcode ------------------
+
+def test_local_attach_candidates_includes_awaiting_dm_rows():
+    _seed_gate("CAND1", note="the ai workflow doc", main_point="AI Workflow Guide")
+    candidates = store._local_attach_candidates()
+    assert [c["shortcode"] for c in candidates] == ["CAND1"]
+    assert candidates[0]["title"] == "AI Workflow Guide"
+    assert candidates[0]["note"] == "the ai workflow doc"
+
+
+def test_local_attach_candidates_includes_inbox_rows_with_unfulfilled_keyword():
+    """The BUG2 edge case: a row routed to Inbox despite having a gate_keyword
+    (keyword set without detected flipping true) must still be a candidate —
+    it has an unfulfilled gate even though its status isn't awaiting_dm."""
+    store.insert_processing("INBOXKW", "https://www.instagram.com/reel/INBOXKW/")
+    store.update_save("INBOXKW", status="done", gate_keyword="SEND")
+    candidates = store._local_attach_candidates()
+    assert [c["shortcode"] for c in candidates] == ["INBOXKW"]
+
+
+def test_local_attach_candidates_excludes_fulfilled_or_plain_inbox_rows():
+    store.insert_processing("FULFILLED", "https://www.instagram.com/reel/FULFILLED/")
+    store.update_save("FULFILLED", status="done", gate_keyword="SEND", gate_resource_url="https://x.com/r")
+    store.insert_processing("PLAININBOX", "https://www.instagram.com/reel/PLAININBOX/")
+    store.update_save("PLAININBOX", status="done")
+    assert store._local_attach_candidates() == []
+
+
+def test_resolve_attachable_by_shortcode_accepts_awaiting_dm():
+    _seed_gate("ATTACHABLE1")
+    row = store.resolve_attachable_by_shortcode("ATTACHABLE1")
+    assert row is not None
+    assert row["shortcode"] == "ATTACHABLE1"
+
+
+def test_resolve_attachable_by_shortcode_accepts_inbox_with_unfulfilled_keyword():
+    store.insert_processing("ATTACHABLE2", "https://www.instagram.com/reel/ATTACHABLE2/")
+    store.update_save("ATTACHABLE2", status="done", gate_keyword="SEND")
+    row = store.resolve_attachable_by_shortcode("ATTACHABLE2")
+    assert row is not None
+
+
+def test_resolve_attachable_by_shortcode_rejects_fulfilled_row():
+    store.insert_processing("DONE1", "https://www.instagram.com/reel/DONE1/")
+    store.update_save("DONE1", status="done", gate_keyword="SEND", gate_resource_url="https://x.com/r")
+    assert store.resolve_attachable_by_shortcode("DONE1") is None
+
+
+def test_resolve_attachable_by_shortcode_rejects_never_gated_row():
+    """Mirrors the Da8IIonEhGR incident shape directly: a row that exists but
+    was never gated at all (no keyword, plain Inbox/other status) must never
+    be accepted as an attach target, even by exact shortcode."""
+    store.insert_processing("NEVERGATED", "https://www.instagram.com/reel/NEVERGATED/")
+    store.update_save("NEVERGATED", status="photo_manual")
+    assert store.resolve_attachable_by_shortcode("NEVERGATED") is None

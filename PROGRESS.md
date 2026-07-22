@@ -1,5 +1,150 @@
 # PROGRESS.md — hardening/deployment session log
 
+## ⭐ /attach REDESIGNED: no more auto-commit fallback, verified writes, candidate-scoring resolution
+
+Full redesign per the agreed plan. Summary of what changed, starting with
+the specific diagnosis requested before the fix.
+
+### Da8IIonEhGR diagnosis (requested specifically — checked against real data, not assumed)
+
+Fetched the page's full raw properties directly from Notion. The decisive
+fact: **`created_time` and `last_edited_time` are IDENTICAL —
+`2026-07-19T08:06:00.000Z`, both.** This page has never been edited, at all,
+since the moment the pipeline first created it.
+
+That directly disproves the theory as literally stated ("had already left
+Awaiting DM status by the time attach was attempted") — if the row had ever
+transitioned OUT of Awaiting DM (whether via a real attach, nightly gate
+expiry, or anything else), `last_edited_time` would be later than
+`created_time`. It is not. **The row never entered Awaiting DM status at
+any point — not "left it," never had it.** It was created straight into
+`📷 Photo — manual` (comment_gate checkbox `false`, Gate keyword empty,
+Content type `unknown`, Value score `3`, Topics `[]` — every field shaped
+exactly like the caption-only degraded-extraction placeholder), because it's
+a photo/carousel post whose caption/transcript was never recovered — so its
+real Instagram gate (the "50 MCP servers" Substack offer the user saw by
+watching the actual post) was never programmatically detected in the first
+place.
+
+Corollary, also checked against real data: the Substack URL the user tried
+to attach exists on **no row anywhere** in the Saves database. Given the
+OLD code's "sole Awaiting DM row" auto-pick fallback (confirmed to be what
+the documented Shortcut recipe actually exercises, since it always sent
+`shortcode_or_note: null`), the most likely explanation is that the real
+`/attach` call found and wrote to a **different, genuinely-awaiting_dm row**
+instead — a real write, truthfully reported as "success," just not the row
+the user meant. Not a silent no-op; a silent *wrong* write. This is now
+structurally impossible after today's redesign (see below), independent of
+which exact row it actually was.
+
+### 1. Removed the "sole Awaiting DM row" auto-commit fallback entirely
+
+`store.resolve_exact_shortcode` (renamed from the private
+`_resolve_exact_shortcode`) is now the ONLY path that can auto-commit, and
+it only ever matches a genuine exact shortcode — never a substring, never
+"the only one pending." `AmbiguousGateMatch`, `_find_pending_gate_via_notion`,
+`_awaiting_dm_rows`, and the dead `get_most_recent_awaiting_dm` helper
+(never called anywhere) were deleted along with the fallback tiers they
+existed to support.
+
+### 2. /attach can no longer report false success
+
+The OLD `_commit_attach`-equivalent code updated local SQLite FIRST, then
+best-effort tried Notion, swallowing any failure ("SQLite is already
+updated, don't lose the attach over a Notion hiccup") and returning 200
+regardless. On Render's ephemeral disk, that "success" could vanish with
+zero durable trace on the next redeploy — exactly the risk profile the
+Da8IIonEhGR diagnosis above raised as a live possibility. The new
+`_commit_attach` in `app/main.py` writes to Notion FIRST (resolving a
+missing `notion_page_id` via the same `get_by_shortcode_or_notion` fallback
+`/retry` already uses) — only if that succeeds does it update local SQLite
+and let the caller report `200`. A Notion failure now returns a real `502`
+with `{"status": "failed", ...}`, and local status is left untouched.
+
+### 3. New candidate-scoring resolution path (never auto-commits)
+
+When there's no exact shortcode match:
+- `app/resource_lookup.py` (new) fetches the resource URL's own `<title>` /
+  `og:description` — deliberately NOT `scripts/ingest_resources.py`'s
+  heavier fetchers (those need beautifulsoup4/pypdf, LOCAL-ONLY per
+  `requirements-local.txt`, never installed on Render). Plain `httpx` +
+  regex, so this actually runs on the deployed app.
+- `store.get_attach_candidates()` (new, Notion-primary, local-SQLite
+  fallback on error — same FIX-2 pattern the digests use) pulls every
+  currently-open gate: Awaiting DM, **plus** Inbox rows that have a Gate
+  keyword but no Gate resource yet (the BUG2 edge case where a keyword got
+  set without `detected` flipping true — those rows have a genuinely
+  unfulfilled gate even though their status isn't Awaiting DM).
+  `app/notion_writer.find_attach_candidate_pages()` backs this with a
+  compound Notion filter (`Status = Awaiting DM OR (Gate keyword is not
+  empty AND Gate resource is empty)`).
+- `app/attach_matching.py` (new) scores each candidate: count of distinct
+  meaningful (4+ character) words shared between the resource's
+  title+description and the candidate's own title/note/topics/gate_keyword
+  — the same substring-overlap idea the old code used, turned into a
+  ranked score instead of a binary auto-commit trigger. Returns the top 3
+  candidates scoring >= 1, each with real differentiating detail
+  (shortcode, created date, topics, first line of main_point, its own
+  match_score) — never generic placeholders.
+- If nothing scores above the threshold (or there are zero open gates at
+  all): a clear `404 {"status": "unresolved", ...}`. If 1-3 candidates
+  score: a `409 {"status": "needs_confirmation", "candidates": [...]}` —
+  never an auto-commit either way.
+
+### 4. New `POST /attach/confirm` endpoint
+
+Commits a specific candidate chosen from a `409` response. Requires an
+exact `shortcode` (never guesses), validated against
+`store.resolve_attachable_by_shortcode` (the same broadened "Awaiting DM OR
+Inbox-with-unfulfilled-keyword" predicate as the candidate pool, factored
+into a single shared `store._is_attach_candidate` so both use the exact
+same definition of "still open"). Uses the same verified-write
+`_commit_attach` as the main endpoint — same `502`-not-`200` guarantee on a
+Notion failure.
+
+### 5. Durable audit log
+
+`app/attach_audit.py` (new): every `/attach` and `/attach/confirm` attempt —
+resolved instantly, resolved via a confirmed candidate, or unresolved — is
+logged locally (Render's log stream) AND appended to a persistent
+"🔍 Attach Audit Log" Notion page (`notion_writer.append_to_named_page`,
+new: like `upsert_named_page` but APPENDS instead of replacing, since
+history must survive here, unlike a digest). Best-effort only — a logging
+failure never breaks the actual attach flow. This is precisely what was
+missing during the Da8IIonEhGR/DbFDY3yTwlI investigation: nothing about
+either incident was ever recorded, so both had to be forensically
+reconstructed after the fact (Notion timestamp comparison, grepping every
+row for the resource URL, cross-checking Render's bodyless access logs).
+Future mismatches can now be looked up directly instead.
+
+### Full endpoint documentation
+
+Exact request/response shapes for both endpoints are written up in
+**README.md** ("Shortcut 2: Attach to ReelBrain (BUILD_SPEC §2.2 —
+REDESIGNED)") — everything needed to rebuild the Shortcut against the new
+flow, including a worked example of the `409` candidates payload.
+
+**IMPORTANT, not done here (by design):** the actual "Attach Resource"
+Shortcut on the user's phone still needs to be manually rebuilt to call
+`/attach/confirm` and show a native "Choose from List" step for the `409`
+case — that's a Shortcuts-app change, not something fixable in this repo.
+
+Tests: rewrote `tests/test_store.py` and `tests/test_notion_fallback.py`'s
+gate-resolution sections for the new `resolve_exact_shortcode` /
+`resolve_attachable_by_shortcode` / `get_attach_candidates` API (removed
+tests for the deleted substring/auto-pick behavior); rewrote
+`tests/test_attach_endpoint.py` and the 4 obsolete cases in
+`tests/test_coverage_gaps.py`; new `tests/test_attach_matching.py`,
+`tests/test_resource_lookup.py`, `tests/test_attach_audit.py`. Covers: exact
+match still instant, the false-success fix (Notion-write-failure and
+missing-page-id cases both now `502`, never `200`), zero-candidates is a
+clear failure, the Higgsfield-style scenario now returns real ranked
+candidates with genuinely differentiating detail instead of an auto-commit,
+and `/attach/confirm`'s own accept/reject/write-failure paths. Pytest: 493
+passed.
+
+---
+
 ## ⭐ /attach investigation — root cause found for both real incidents (Da8IIonEhGR, DbFDY3yTwlI); NO fix applied yet, awaiting decision
 
 Investigated two real, concrete `/attach` incidents. **Root cause for both:
