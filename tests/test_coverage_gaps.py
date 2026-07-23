@@ -131,7 +131,7 @@ def test_attach_shortcode_match_beats_note_match(monkeypatch):
     resp = client.post("/attach", json={
         "shortcode_or_note": "TRICKY", "resource_url": "https://x.com/r", "secret": "test-secret",
     })
-    assert resp.json()["shortcode"] == "TRICKY"  # exact shortcode wins over note substring
+    assert "TRICKY" in resp.json()["message"]  # exact shortcode wins over note substring
 
 
 def test_attach_no_exact_shortcode_with_pending_rows_never_auto_commits(monkeypatch):
@@ -153,7 +153,9 @@ def test_attach_no_exact_shortcode_with_pending_rows_never_auto_commits(monkeypa
         "shortcode_or_note": None, "resource_url": "https://x.com/r", "secret": "test-secret",
     })
     assert resp.status_code == 200
-    assert resp.json()["status"] == "unresolved"
+    body = resp.json()
+    assert body["action"] == "NOTIFY"
+    assert body["menu_items"] == []
     assert store.get_by_shortcode("FIRST")["status"] == "awaiting_dm"
     assert store.get_by_shortcode("SECOND")["status"] == "awaiting_dm"
 

@@ -267,104 +267,122 @@ Request body (JSON):
   is accepted but no longer does a "note substring" or "sole pending row" guess — it goes
   straight to candidate scoring (see below).
 
-**Response shape (flattened — read this carefully if you're wiring up the Shortcut):**
-every expected business outcome is **HTTP 200**, and the body is **flat** — `status` and
-everything else live at the JSON root, never nested under a `detail` key. This changed
-because `HTTPException`'s `detail=` parameter always nests the response body one level
-down, which required fragile multi-step dictionary navigation in Shortcuts (`Get
-Dictionary from Input` → `Get Value for detail` → `Get Value for candidates` → ...) —
-and that empirically broke: the candidates list silently evaluated empty. A flat `200`
-body removes that failure mode entirely. Only a genuine server error (the write itself
-failing) still returns a real non-200 status — see below.
+**Response shape (simplified further — this is the whole reason Shortcuts kept
+breaking):** iOS Shortcuts has no reliable way to loop through an array of dictionaries or
+navigate nested conditions client-side — every earlier attempt at that (including the
+first "flat" response shape, which still shipped a `candidates` array of objects) broke
+in practice. So now the server does **all** formatting, looping, and truncation, and the
+response is always exactly **three keys**, no nesting, no arrays-of-dictionaries:
 
-Four possible `status` values, all HTTP `200`:
+```json
+{"action": "NOTIFY" | "MENU", "message": "<string>", "menu_items": ["<string>", ...]}
+```
 
-1. **`"attached"`** — committed immediately (only when `shortcode_or_note` was an exact,
+The Shortcut only ever needs to check **one field** — `action` — and either show a
+notification (`message`) or a native **"Choose from List"** built directly from
+`menu_items` (already plain strings, zero further parsing needed to display them). Every
+internal business outcome collapses into one of these two, and only a genuine server
+error (the Notion write itself failing) is still a real non-`200` status — see below.
+`menu_items` is always `[]` when `action` is `"NOTIFY"`.
+
+Here's the exact JSON for all four internal outcomes (server-side logs/audit still record
+which of these four actually happened — see below — but the client never sees these names):
+
+1. **`attached`** — committed immediately (only when `shortcode_or_note` was an exact,
    real shortcode that's currently open — Awaiting DM, or Inbox with an unfulfilled
    gate keyword):
    ```json
-   {"status": "attached", "shortcode": "Da8IIonEhGR", "notion_url": "https://notion.so/..."}
+   {
+     "action": "NOTIFY",
+     "message": "✅ Attached to Da8IIonEhGR: Higgsfield is offering 24 hours of free access.",
+     "menu_items": []
+   }
    ```
-2. **`"not_found"`** — the exact shortcode you gave exists but isn't open for a gate
+2. **`not_found`** — the exact shortcode you gave exists but isn't open for a gate
    right now (already attached, or never gated at all — check the Notion row directly):
    ```json
-   {"status": "not_found", "message": "this shortcode exists but isn't awaiting a DM resource right now"}
+   {
+     "action": "NOTIFY",
+     "message": "⚠️ No match found — that shortcode isn't awaiting a DM resource right now. Attach manually in Notion.",
+     "menu_items": []
+   }
    ```
-3. **`"unresolved"`** — no exact shortcode was given (or it isn't a real shortcode), and
+3. **`unresolved`** — no exact shortcode was given (or it isn't a real shortcode), and
    nothing among the currently-open gates scored as a confident match against the
-   resource URL's own page title/description. Attach manually via the exact shortcode:
-   ```json
-   {"status": "unresolved", "message": "no confident match found — attach manually via an exact shortcode"}
-   ```
-4. **`"needs_confirmation"`** — no exact shortcode, but 1-3 candidates scored above the
-   confidence threshold:
+   resource URL's own page title/description:
    ```json
    {
-     "status": "needs_confirmation",
-     "message": "no exact shortcode — pick one of these and retry via POST /attach/confirm",
-     "resource_url": "https://...",
-     "candidates": [
-       {
-         "shortcode": "DbFDY3yTwlI",
-         "created": "2026-07-22",
-         "topics": ["ai-tools", "higgsfield"],
-         "main_point": "Higgsfield is offering 24 hours of free access.",
-         "gate_keyword": "video",
-         "match_score": 3
-       },
-       {
-         "shortcode": "Da8A4axznbT",
-         "created": "2026-07-19",
-         "topics": ["ai-tools", "image-processing"],
-         "main_point": "An app built with Higgsfield AI applies filters.",
-         "gate_keyword": null,
-         "match_score": 2
-       }
+     "action": "NOTIFY",
+     "message": "⚠️ No match found — nothing scored a confident match. Attach manually in Notion.",
+     "menu_items": []
+   }
+   ```
+4. **`needs_confirmation`** — no exact shortcode, but 1-3 candidates scored above the
+   confidence threshold. Each `menu_items` entry is pre-formatted server-side as
+   `"<main_point> | <shortcode>"` — **main_point first and prominent** (that's how you
+   actually recognize which reel it is), shortcode reduced to a trailing suffix purely so
+   the Shortcut can recover it after you pick:
+   ```json
+   {
+     "action": "MENU",
+     "message": "Which reel does this belong to?",
+     "menu_items": [
+       "Higgsfield is offering 24 hours of free access. | DbFDY3yTwlI",
+       "An app built with Higgsfield AI applies filters. | Da8A4axznbT"
      ]
    }
    ```
-   Show the candidates in a **native "Choose from List"** step (built from
-   `candidates`, e.g. `"{shortcode}: {main_point}"` per row) so you can actually
-   tell them apart, then call `/attach/confirm` with whichever one you pick.
+   Feed `menu_items` directly into a native **"Choose from List"** step — no looping, no
+   dictionary access. Once the user picks one, **split the chosen string on `"|"` and take
+   the LAST segment** to recover the shortcode, then call `/attach/confirm` with it.
 
-**`5xx` (502) — genuine write failure, NOT flattened.** The row was correctly
-identified, but the durable Notion write itself failed (network hiccup, etc.) — the
-attach was **NOT** recorded anywhere. This is a real error, not a business outcome, so
+**`5xx` (502) — genuine write failure, NOT folded into the three-key shape.** The row was
+correctly identified, but the durable Notion write itself failed (network hiccup, etc.) —
+the attach was **NOT** recorded anywhere. This is a real error, not a business outcome, so
 it keeps FastAPI's normal `{"detail": {"status": "failed", ...}}` shape and a non-200
 status. Retry; never treat this as success.
 
 #### `POST /attach/confirm`
 
-Commits a specific candidate you chose from a prior `needs_confirmation` response.
+Commits a specific candidate you chose from a prior `needs_confirmation`/`MENU` response.
 
 Request body (JSON):
 ```json
 {"shortcode": "DbFDY3yTwlI", "resource_url": "https://...", "secret": "<CAPTURE_SECRET>"}
 ```
-- `shortcode`: **required**, must be exact (e.g. copied from one of the
-  `needs_confirmation` response's `candidates`). This endpoint never guesses either.
+- `shortcode`: **required** — the shortcode you split off the end of whichever
+  `menu_items` string you picked (see above). This endpoint never guesses either.
 
-Response: the same flat, always-`200` `"attached"` / `"not_found"` shapes as `/attach`'s
-exact-shortcode path above (a `"needs_confirmation"`/`"unresolved"` response never
-applies here, since `shortcode` is required). A genuine write failure is still a real
-`502`, same shape as `/attach`'s.
+Response: the same three-key shape as `/attach` — in practice always `action: "NOTIFY"`
+here, since confirming never produces a menu:
+```json
+{"action": "NOTIFY", "message": "✅ Attached to DbFDY3yTwlI: Higgsfield is offering 24 hours of free access.", "menu_items": []}
+```
+or, if the shortcode isn't a pending attach target:
+```json
+{"action": "NOTIFY", "message": "⚠️ No match found — DbFDY3yTwlI is not a pending attach target.", "menu_items": []}
+```
+A genuine write failure is still a real `502`, same shape as `/attach`'s.
 
 Successfully attaching (via either endpoint) flips the entry `⏳ Awaiting DM → 📥 Inbox`
 and records the DM'd link on the Notion page's **Gate resource** field. Every attempt —
 resolved instantly, resolved via a confirmed candidate, or unresolved — is logged to a
 persistent "🔍 Attach Audit Log" page under your `NOTION_PARENT_PAGE_ID`, so a future
 mismatch can be looked up directly instead of reconstructed after the fact. Since the
-HTTP status code alone can no longer distinguish the four outcomes (they're all `200`
-now), each one is also logged server-side as `"attach resolved: <status>"` for anyone
-checking Render's logs.
+client-visible `action` field can no longer distinguish the four internal outcomes (three
+of the four are all `NOTIFY`), each one is still logged server-side as `"attach resolved:
+<attached|not_found|unresolved|needs_confirmation>"` for anyone checking Render's logs.
 
-**Shortcut rebuild note (yours to do, not server-side):** the Shortcut needs an "Ask for
-Input" or "Choose from Menu" step so it can pass a real `shortcode_or_note` when you know
-it, and a way to show `candidates` as a native picker when `status == "needs_confirmation"`
-before calling `/attach/confirm` with the chosen `shortcode`. Since everything is now a
-flat `200`, **branch on the `status` field itself** (e.g. an "If" action checking
-`Dictionary Value for status`), not on the HTTP status code — only a genuine `5xx` means
-something actually went wrong.
+**Shortcut rebuild note (yours to do, not server-side):** the whole point of this shape is
+that the Shortcut needs **zero loops and zero nested-dictionary navigation** — get the
+JSON, check `Dictionary Value for action`:
+- `"NOTIFY"` → show `message` in a "Show Notification" (or "Show Result") step. Done.
+- `"MENU"` → feed `menu_items` straight into "Choose from List", `message` as the prompt.
+  Take whatever the user picks, split on `"|"`, take the last piece, call
+  `/attach/confirm` with it as `shortcode`.
+
+Only a genuine `5xx` means something actually went wrong — everything else is a normal,
+expected outcome.
 
 ### Nightly cleanup job (BUILD_SPEC §2.3)
 

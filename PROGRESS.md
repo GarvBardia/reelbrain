@@ -1,5 +1,53 @@
 # PROGRESS.md — hardening/deployment session log
 
+## ⭐ /attach + /attach/confirm: collapsed to a two-action NOTIFY/MENU shape, all looping moved server-side
+
+**Why, exactly:** the previous flattening pass (below) removed the `detail`-nesting
+problem, but the Shortcut client still had to branch on four different `status`
+strings and, for `needs_confirmation`, loop over a `candidates` array of objects
+(dictionary-per-candidate) to build a picker. iOS Shortcuts has repeatedly broken
+trying to loop through arrays of dictionaries and parse nested conditions
+client-side — that's exactly the failure mode the first flattening pass was
+already fighting, just one level further in. The fix is to stop asking the
+Shortcut to loop or navigate nested data at all: move **all** formatting and
+looping logic server-side, so the client only ever needs to check one field and
+either show a notification or a native list.
+
+**What changed in `app/main.py`:** `/attach` and `/attach/confirm` now always
+return exactly one of two shapes, three keys total:
+```json
+{"action": "NOTIFY", "message": "<string>", "menu_items": []}
+{"action": "MENU", "message": "<string>", "menu_items": ["<main_point> | <shortcode>", ...]}
+```
+The four original business outcomes still exist internally and still drive
+logging/auditing (`attached`, `not_found`, `unresolved` → `NOTIFY`;
+`needs_confirmation` → `MENU`) — only what the **client** sees is collapsed to
+two values. Each `menu_items` entry is pre-formatted server-side via a new
+`_menu_item()` helper as `"<main_point> | <shortcode>"` — main_point first and
+prominent (truncated to 80 chars for a scannable native list row), shortcode
+reduced to a small trailing suffix the Shortcut splits off after the user picks,
+since a human recognizes "which reel is this" from what it's about, never from a
+shortcode they haven't memorized. `_notify()`/`_menu()` build the two response
+shapes; `_row_display_text()` produces the human-readable text for a specific row
+(main_point → Notion URL → shortcode, in that fallback order, so it's never
+blank). `store._row_title` was renamed to `store.row_title` (dropped the private
+prefix) since `main.py` now needs it too. **Genuine server errors are unchanged**
+— a real Notion-write failure still raises a real `502`, not folded into the
+three-key shape.
+
+**Tests:** rewrote all `/attach`/`/attach/confirm` assertions across
+`tests/test_attach_endpoint.py`, `tests/test_coverage_gaps.py`, and
+`tests/test_notion_fallback.py` to check `action`/`message`/`menu_items` instead
+of the old flat `status`/`candidates` shape. Matching/scoring logic in
+`app/attach_matching.py` was not touched — this was a response-shape-only change.
+
+**README.md updated** with the new three-key shape and a concrete worked example
+for all four outcomes, plus a rebuild note: the Shortcut needs zero loops and
+zero nested-dictionary navigation now — check `action`, then either show
+`message` or feed `menu_items` straight into "Choose from List".
+
+---
+
 ## ⭐ /attach + /attach/confirm: flattened response shape, always-200 business outcomes
 
 **Why, exactly:** `HTTPException`'s `detail=` parameter always nests the

@@ -375,21 +375,45 @@ def retry(shortcode: str, request: Request, background_tasks: BackgroundTasks) -
     return JSONResponse(status_code=202, content={"status": "processing", "shortcode": shortcode})
 
 
-def _candidate_summary(candidate: dict) -> dict:
-    """The response shape for one /attach candidate — enough to actually
-    differentiate it for a human, not three identically-labeled options (see
-    PROGRESS.md's redesign notes): shortcode, created date, topic tags, and
-    the first line of the main_point/title."""
+MENU_ITEM_MAIN_POINT_MAX_LEN = 80  # keep each native "Choose from List" row short and scannable
+
+
+def _menu_item(candidate: dict) -> str:
+    """One /attach candidate, pre-formatted server-side as a single string
+    for a native iOS "Choose from List" row — main_point FIRST and
+    prominent (what the reel is actually about, which is how a human
+    recognizes it — never a shortcode they haven't memorized), shortcode
+    reduced to a small trailing suffix rather than dropped entirely, since
+    the Shortcut still needs a way to recover the exact shortcode from
+    whichever item the user picked. Split on " | " and take the LAST segment
+    to get the shortcode back for /attach/confirm."""
     title = (candidate.get("title") or "").strip()
     first_line = title.splitlines()[0] if title else "(no title)"
-    return {
-        "shortcode": candidate["shortcode"],
-        "created": (candidate.get("created_at") or "")[:10],
-        "topics": candidate.get("topics") or [],
-        "main_point": first_line[:140],
-        "gate_keyword": candidate.get("gate_keyword") or None,
-        "match_score": candidate.get("match_score"),
-    }
+    truncated = first_line[:MENU_ITEM_MAIN_POINT_MAX_LEN]
+    if len(first_line) > MENU_ITEM_MAIN_POINT_MAX_LEN:
+        truncated = truncated.rstrip() + "…"
+    if not truncated:
+        truncated = "(no title)"
+    return f"{truncated} | {candidate['shortcode']}"
+
+
+def _notify(message: str) -> dict:
+    """Every /attach(/confirm) response is one of these two shapes (see
+    PROGRESS.md) — never a loop, never a nested dict, so the Shortcut client
+    only ever checks one field ("action") and either shows a notification or
+    a native picker, with zero client-side looping or dictionary navigation."""
+    return {"action": "NOTIFY", "message": message, "menu_items": []}
+
+
+def _menu(message: str, menu_items: list[str]) -> dict:
+    return {"action": "MENU", "message": message, "menu_items": menu_items}
+
+
+def _row_display_text(row) -> str:
+    """Best-effort human-readable text for a notification about a specific
+    row — main_point if we have one, else the Notion URL, else the
+    shortcode itself. Never blank."""
+    return store.row_title(row) or row["notion_page_url"] or row["shortcode"]
 
 
 def _commit_attach(row, resource_url: str) -> bool:
@@ -441,18 +465,19 @@ def attach(req: AttachRequest, request: Request) -> JSONResponse:
     via POST /attach/confirm, or a clear "unresolved" if nothing scores
     above the confidence threshold.
 
-    Response shape (see PROGRESS.md — flattened, always HTTP 200 for these
-    four expected business outcomes; a real write failure is still a
-    genuine 502): every response is a flat JSON body with "status" at the
-    root — never nested under a "detail" key. HTTPException's detail=
-    parameter always nests the body one level down, which required
-    fragile multi-step dictionary navigation in the iOS Shortcut client
-    and broke there (the candidates list silently evaluated empty). Flat
-    200s remove that failure mode entirely.
-      - {"status": "attached", "shortcode": ..., "notion_url": ...}
-      - {"status": "needs_confirmation", "message": ..., "resource_url": ..., "candidates": [...]}
-      - {"status": "not_found", "message": ...}
-      - {"status": "unresolved", "message": ...}
+    Response shape (see PROGRESS.md — simplified further after the first
+    flattening pass; a real write failure is still a genuine 502): every
+    response is one of exactly two shapes, three keys total, chosen so the
+    Shortcut client needs ZERO loops and ZERO nested-dictionary navigation —
+    it only ever checks "action" and either shows a notification or a
+    native "Choose from List" built directly from "menu_items" (each item
+    already a plain, pre-formatted string — all looping/formatting happens
+    here, server-side):
+      - {"action": "NOTIFY", "message": "...", "menu_items": []}
+      - {"action": "MENU", "message": "...", "menu_items": ["<main_point> | <shortcode>", ...]}
+    Internally the four original business outcomes (attached/not_found/
+    unresolved/needs_confirmation) still exist and are still what gets
+    logged/audited — only the two the CLIENT sees are collapsed to NOTIFY/MENU.
     """
     _check_rate_limit(request)
     _check_secret(req.secret)
@@ -465,13 +490,10 @@ def attach(req: AttachRequest, request: Request) -> JSONResponse:
                     req.shortcode_or_note, req.resource_url, "not_found_wrong_status",
                 )
                 logger.info("attach resolved: not_found")
-                return JSONResponse(
-                    status_code=200,
-                    content={
-                        "status": "not_found",
-                        "message": "this shortcode exists but isn't awaiting a DM resource right now",
-                    },
-                )
+                return JSONResponse(status_code=200, content=_notify(
+                    "⚠️ No match found — that shortcode isn't awaiting a DM resource "
+                    "right now. Attach manually in Notion."
+                ))
             if not _commit_attach(row, req.resource_url):
                 attach_audit.record(
                     req.shortcode_or_note, req.resource_url, "write_failed", shortcode=row["shortcode"],
@@ -487,10 +509,9 @@ def attach(req: AttachRequest, request: Request) -> JSONResponse:
                 )
             attach_audit.record(req.shortcode_or_note, req.resource_url, "attached", shortcode=row["shortcode"])
             logger.info("attach resolved: attached")
-            return JSONResponse(
-                status_code=200,
-                content={"status": "attached", "shortcode": row["shortcode"], "notion_url": row["notion_page_url"]},
-            )
+            return JSONResponse(status_code=200, content=_notify(
+                f"✅ Attached to {row['shortcode']}: {_row_display_text(row)}"
+            ))
 
     # No exact shortcode match (omitted, or not a real shortcode at all):
     # candidate-scoring resolution — never an auto-commit past this point.
@@ -501,29 +522,17 @@ def attach(req: AttachRequest, request: Request) -> JSONResponse:
     if not ranked:
         attach_audit.record(req.shortcode_or_note, req.resource_url, "unresolved")
         logger.info("attach resolved: unresolved")
-        return JSONResponse(
-            status_code=200,
-            content={
-                "status": "unresolved",
-                "message": "no confident match found — attach manually via an exact shortcode",
-            },
-        )
+        return JSONResponse(status_code=200, content=_notify(
+            "⚠️ No match found — nothing scored a confident match. Attach manually in Notion."
+        ))
 
-    summaries = [_candidate_summary(c) for c in ranked]
+    menu_items = [_menu_item(c) for c in ranked]
     attach_audit.record(
         req.shortcode_or_note, req.resource_url, "needs_confirmation",
         candidates=[c["shortcode"] for c in ranked],
     )
     logger.info("attach resolved: needs_confirmation")
-    return JSONResponse(
-        status_code=200,
-        content={
-            "status": "needs_confirmation",
-            "message": "no exact shortcode — pick one of these and retry via POST /attach/confirm",
-            "resource_url": req.resource_url,
-            "candidates": summaries,
-        },
-    )
+    return JSONResponse(status_code=200, content=_menu("Which reel does this belong to?", menu_items))
 
 
 @app.post("/attach/confirm")
@@ -533,9 +542,9 @@ def attach_confirm(req: AttachConfirmRequest, request: Request) -> JSONResponse:
     endpoint never guesses either; it only accepts a row that's still a
     genuine open attach target (see store.resolve_attachable_by_shortcode).
 
-    Response shape: flat, always HTTP 200 for "attached"/"not_found" (same
-    flattening as /attach — see its docstring); a real write failure is
-    still a genuine 502."""
+    Response shape: same NOTIFY/MENU shape as /attach (see its docstring) —
+    in practice always NOTIFY here, since confirming never produces a menu.
+    A real write failure is still a genuine 502."""
     _check_rate_limit(request)
     _check_secret(req.secret)
 
@@ -543,10 +552,9 @@ def attach_confirm(req: AttachConfirmRequest, request: Request) -> JSONResponse:
     if row is None:
         attach_audit.record(req.shortcode, req.resource_url, "confirm_not_found", shortcode=req.shortcode)
         logger.info("attach resolved: not_found")
-        return JSONResponse(
-            status_code=200,
-            content={"status": "not_found", "message": f"{req.shortcode} is not a pending attach target"},
-        )
+        return JSONResponse(status_code=200, content=_notify(
+            f"⚠️ No match found — {req.shortcode} is not a pending attach target."
+        ))
 
     if not _commit_attach(row, req.resource_url):
         attach_audit.record(req.shortcode, req.resource_url, "confirm_write_failed", shortcode=req.shortcode)
@@ -558,10 +566,9 @@ def attach_confirm(req: AttachConfirmRequest, request: Request) -> JSONResponse:
 
     attach_audit.record(req.shortcode, req.resource_url, "confirmed", shortcode=req.shortcode)
     logger.info("attach resolved: attached")
-    return JSONResponse(
-        status_code=200,
-        content={"status": "attached", "shortcode": row["shortcode"], "notion_url": row["notion_page_url"]},
-    )
+    return JSONResponse(status_code=200, content=_notify(
+        f"✅ Attached to {row['shortcode']}: {_row_display_text(row)}"
+    ))
 
 
 @app.post("/nightly")

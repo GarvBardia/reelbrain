@@ -97,7 +97,11 @@ def test_attach_by_explicit_shortcode(monkeypatch):
         json={"shortcode_or_note": "GATE001", "resource_url": RESOURCE_URL, "secret": "test-secret"},
     )
     assert resp.status_code == 200
-    assert resp.json() == {"status": "attached", "shortcode": "GATE001", "notion_url": "https://notion.so/page-GATE001"}
+    assert resp.json() == {
+        "action": "NOTIFY",
+        "message": "✅ Attached to GATE001: https://notion.so/page-GATE001",
+        "menu_items": [],
+    }
 
     row = store.get_by_shortcode("GATE001")
     assert row["status"] == "done"
@@ -124,7 +128,9 @@ def test_attach_explicit_shortcode_on_never_gated_row_404s_not_a_wrong_row(monke
         json={"shortcode_or_note": "PHOTOMANUAL1", "resource_url": RESOURCE_URL, "secret": "test-secret"},
     )
     assert resp.status_code == 200  # flattened: a business outcome, not an error (see PROGRESS.md)
-    assert resp.json()["status"] == "not_found"
+    body = resp.json()
+    assert body["action"] == "NOTIFY"
+    assert body["menu_items"] == []
     # critically: the unrelated pending row must be untouched — no silent
     # substitution just because something else happened to be Awaiting DM
     assert store.get_by_shortcode("UNRELATED1")["status"] == "awaiting_dm"
@@ -187,7 +193,9 @@ def test_attach_no_exact_shortcode_zero_candidates_is_a_clear_failure(monkeypatc
         json={"shortcode_or_note": None, "resource_url": RESOURCE_URL, "secret": "test-secret"},
     )
     assert resp.status_code == 200  # flattened business outcome
-    assert resp.json()["status"] == "unresolved"
+    body = resp.json()
+    assert body["action"] == "NOTIFY"
+    assert body["menu_items"] == []
 
 
 def test_attach_no_exact_shortcode_below_threshold_is_unresolved_not_a_guess(monkeypatch):
@@ -210,7 +218,9 @@ def test_attach_no_exact_shortcode_below_threshold_is_unresolved_not_a_guess(mon
         json={"shortcode_or_note": None, "resource_url": RESOURCE_URL, "secret": "test-secret"},
     )
     assert resp.status_code == 200  # flattened business outcome
-    assert resp.json()["status"] == "unresolved"
+    body = resp.json()
+    assert body["action"] == "NOTIFY"
+    assert body["menu_items"] == []
     assert store.get_by_shortcode("SOLE001")["status"] == "awaiting_dm"  # untouched
 
 
@@ -255,21 +265,18 @@ def test_attach_no_exact_shortcode_returns_ranked_candidates_with_real_detail(mo
     )
     assert resp.status_code == 200  # flattened business outcome
     body = resp.json()
-    assert body["status"] == "needs_confirmation"
+    assert body["action"] == "MENU"
+    assert body["message"]
 
-    candidates = body["candidates"]
-    shortcodes = {c["shortcode"] for c in candidates}
-    assert shortcodes == {"REALTARGET", "COINCIDENCE"}
-    # real, differentiating detail -- not generic/identical placeholders
-    by_shortcode = {c["shortcode"]: c for c in candidates}
-    assert by_shortcode["REALTARGET"]["main_point"] != by_shortcode["COINCIDENCE"]["main_point"]
-    assert "Higgsfield is offering" in by_shortcode["REALTARGET"]["main_point"]
-    assert "app built with Higgsfield" in by_shortcode["COINCIDENCE"]["main_point"]
-    assert by_shortcode["REALTARGET"]["topics"] == ["ai-tools", "higgsfield"]
-    assert by_shortcode["COINCIDENCE"]["topics"] == ["ai-tools", "filters"]
-    assert by_shortcode["REALTARGET"]["created"] != by_shortcode["COINCIDENCE"]["created"]
-    for c in candidates:
-        assert isinstance(c["match_score"], int) and c["match_score"] >= 1
+    menu_items = body["menu_items"]
+    assert len(menu_items) == 2
+    # main_point FIRST and prominent, shortcode reduced to a trailing suffix
+    # (see PROGRESS.md) -- each item is "<main_point> | <shortcode>", split on
+    # "|" taking the LAST segment to recover the shortcode for /attach/confirm.
+    by_shortcode = {item.rsplit("|", 1)[1].strip(): item for item in menu_items}
+    assert set(by_shortcode) == {"REALTARGET", "COINCIDENCE"}
+    assert by_shortcode["REALTARGET"].startswith("Higgsfield is offering")
+    assert by_shortcode["COINCIDENCE"].startswith("An app built with Higgsfield")
 
     # NEVER an auto-commit -- neither row touched
     assert store.get_by_shortcode("REALTARGET")["gate_resource_url"] is None
@@ -287,7 +294,11 @@ def test_attach_confirm_commits_the_chosen_candidate(monkeypatch):
         json={"shortcode": "PICKME", "resource_url": RESOURCE_URL, "secret": "test-secret"},
     )
     assert resp.status_code == 200
-    assert resp.json() == {"status": "attached", "shortcode": "PICKME", "notion_url": "https://notion.so/page-PICKME"}
+    assert resp.json() == {
+        "action": "NOTIFY",
+        "message": "✅ Attached to PICKME: https://notion.so/page-PICKME",
+        "menu_items": [],
+    }
     assert store.get_by_shortcode("PICKME")["status"] == "done"
     assert store.get_by_shortcode("PICKME")["gate_resource_url"] == RESOURCE_URL
 
@@ -302,7 +313,9 @@ def test_attach_confirm_rejects_a_shortcode_that_isnt_a_pending_target(monkeypat
         json={"shortcode": "NOTPENDING", "resource_url": RESOURCE_URL, "secret": "test-secret"},
     )
     assert resp.status_code == 200  # flattened business outcome
-    assert resp.json()["status"] == "not_found"
+    body = resp.json()
+    assert body["action"] == "NOTIFY"
+    assert body["menu_items"] == []
 
 
 def test_attach_confirm_notion_failure_reports_failure_not_false_success(monkeypatch):

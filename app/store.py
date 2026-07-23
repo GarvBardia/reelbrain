@@ -359,7 +359,7 @@ def get_by_shortcode_or_notion(shortcode: str) -> Optional[sqlite3.Row]:
     return _persist_notion_page(page)
 
 
-def _row_title(row: sqlite3.Row) -> str:
+def row_title(row: sqlite3.Row) -> str:
     """Locally-derived equivalent of the Notion page's Title (= the extraction's
     main_point) — there's no separate title column in SQLite. Rows with a real
     gate always have extraction_json populated, since gate detection happens
@@ -481,7 +481,7 @@ def _local_attach_candidates() -> list[dict]:
     return [
         {
             "shortcode": row["shortcode"],
-            "title": _row_title(row),
+            "title": row_title(row),
             "note": row["note"] or "",
             "gate_keyword": row["gate_keyword"] or "",
             "topics": tags_by_shortcode.get(row["shortcode"], []),

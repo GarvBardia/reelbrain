@@ -411,8 +411,8 @@ def test_attach_falls_back_to_notion_when_local_row_missing(monkeypatch):
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["status"] == "attached"
-    assert body["shortcode"] == "DZSFKNPPVW"
+    assert body["action"] == "NOTIFY"
+    assert "DZSFKNPPVW" in body["message"]
 
     # SQLite update actually happened against the recovered row
     row = store.get_by_shortcode("DZSFKNPPVW")
@@ -438,7 +438,9 @@ def test_attach_still_unresolved_when_neither_sqlite_nor_notion_has_it(monkeypat
         "secret": "test-secret",
     })
     assert resp.status_code == 200
-    assert resp.json()["status"] == "unresolved"
+    body = resp.json()
+    assert body["action"] == "NOTIFY"
+    assert body["menu_items"] == []
 
 
 def test_attach_round_trip_second_call_hits_locally_no_notion_query(monkeypatch):
