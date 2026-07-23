@@ -140,8 +140,9 @@ def test_attach_no_exact_shortcode_with_pending_rows_never_auto_commits(monkeypa
     row", auto-committing with no way to verify it was the semantically
     right one. That fallback tier is gone entirely — with no exact shortcode,
     the resource content is fetched and scored, and the result is always
-    either a ranked-candidates response (409) or a clear "unresolved" (404),
-    never a silent 200."""
+    either a ranked-candidates response or a clear "unresolved" — both
+    flattened to HTTP 200 (see PROGRESS.md: business outcomes, not errors) —
+    never a silent auto-commit."""
     client = _attach_client(monkeypatch)
     from app import resource_lookup
     monkeypatch.setattr(resource_lookup, "fetch_resource_title_and_description", lambda url: ("", ""))
@@ -151,8 +152,8 @@ def test_attach_no_exact_shortcode_with_pending_rows_never_auto_commits(monkeypa
     resp = client.post("/attach", json={
         "shortcode_or_note": None, "resource_url": "https://x.com/r", "secret": "test-secret",
     })
-    assert resp.status_code == 404
-    assert resp.json()["detail"]["status"] == "unresolved"
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "unresolved"
     assert store.get_by_shortcode("FIRST")["status"] == "awaiting_dm"
     assert store.get_by_shortcode("SECOND")["status"] == "awaiting_dm"
 

@@ -1,5 +1,59 @@
 # PROGRESS.md — hardening/deployment session log
 
+## ⭐ /attach + /attach/confirm: flattened response shape, always-200 business outcomes
+
+**Why, exactly:** `HTTPException`'s `detail=` parameter always nests the
+response body one level down — `{"detail": {"status": "needs_confirmation",
+"candidates": [...]}}`, never flat. The iOS Shortcut client requires
+multi-step dictionary navigation to reach a nested value (`Get Dictionary
+from Input` → `Get Value for "detail"` → `Get Value for "candidates"` →
+...), and that empirically broke in real use: the `candidates` list
+silently evaluated empty partway through the chain, with no error surfaced
+anywhere in the Shortcut. A flat, always-`200` body removes the nesting
+entirely, so there's nothing for that unwrap chain to fail on.
+
+**What changed in `app/main.py`:** all four expected business outcomes —
+`attached`, `not_found`, `unresolved`, `needs_confirmation` — are now
+`JSONResponse(status_code=200, content={"status": ..., ...})` with every
+field at the JSON root, on both `/attach` and `/attach/confirm`. **Genuine
+server errors are unchanged and deliberately NOT flattened** — a real
+Notion-write failure still raises `HTTPException(status_code=502,
+detail={"status": "failed", ...})`, since that's an actual error, not a
+business outcome, and this flattening was specifically for the four
+expected paths per instruction.
+
+**Checked for `response_model=` conflicts first, per instruction:** neither
+`/attach` nor `/attach/confirm` declares one (both were already plain
+`-> JSONResponse` handlers), so returning four differently-shaped bodies
+needed no schema changes, no `Union` type, nothing removed — just swapping
+`raise HTTPException(404/409, detail={...})` for
+`return JSONResponse(200, content={...})` at each of the four outcome
+points.
+
+**Visibility, since the status code alone can no longer distinguish the
+four outcomes:** each of the four outcome points (on both endpoints) now
+also logs `logger.info("attach resolved: <status>")` explicitly — e.g.
+`"attach resolved: needs_confirmation"` — so Render's logs remain
+diagnosable even though every response is `200`.
+
+**README.md updated** with the exact new response bodies for all four
+outcomes plus the unchanged `502` shape, and a note telling the Shortcut
+rebuild to branch on the `status` field inside the body (not the HTTP
+status code) — confirmed these match `app/main.py`'s actual
+`JSONResponse(...)` content dicts and `app/main.py::_candidate_summary`'s
+keys field-for-field, not just described from memory.
+
+Tests: rewrote every `test_attach_endpoint.py`/`test_coverage_gaps.py`/
+`test_notion_fallback.py` assertion that expected the old
+409/404-plus-`detail`-wrapper shape to expect the new flat `200` shape
+instead (write-failure/`502` assertions left untouched, since those are
+still genuine errors). Added 6 new tests confirming each of the six
+outcome-logging call sites (`attached`/`not_found`/`unresolved`/
+`needs_confirmation` on `/attach`, `attached`/`not_found` on
+`/attach/confirm`) actually emits its log line. Pytest: 518 passed.
+
+---
+
 ## ⭐ BUG 2 fixed: scoring quality (platform-suffix stripping + gate_keyword weight + stopwords)
 
 Implemented per the confirmed diagnosis (see the entry below this one) — no

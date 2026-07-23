@@ -267,81 +267,104 @@ Request body (JSON):
   is accepted but no longer does a "note substring" or "sole pending row" guess — it goes
   straight to candidate scoring (see below).
 
-Three possible responses:
+**Response shape (flattened — read this carefully if you're wiring up the Shortcut):**
+every expected business outcome is **HTTP 200**, and the body is **flat** — `status` and
+everything else live at the JSON root, never nested under a `detail` key. This changed
+because `HTTPException`'s `detail=` parameter always nests the response body one level
+down, which required fragile multi-step dictionary navigation in Shortcuts (`Get
+Dictionary from Input` → `Get Value for detail` → `Get Value for candidates` → ...) —
+and that empirically broke: the candidates list silently evaluated empty. A flat `200`
+body removes that failure mode entirely. Only a genuine server error (the write itself
+failing) still returns a real non-200 status — see below.
 
-1. **`200` — attached immediately** (only when `shortcode_or_note` was an exact,
+Four possible `status` values, all HTTP `200`:
+
+1. **`"attached"`** — committed immediately (only when `shortcode_or_note` was an exact,
    real shortcode that's currently open — Awaiting DM, or Inbox with an unfulfilled
    gate keyword):
    ```json
    {"status": "attached", "shortcode": "Da8IIonEhGR", "notion_url": "https://notion.so/..."}
    ```
-2. **`404` — not found or unresolved.** Two shapes, both `detail.status`:
-   - `"not_found"`: the exact shortcode you gave exists but isn't open for a gate right
-     now (already attached, or never gated at all — check the Notion row directly).
-   - `"unresolved"`: no exact shortcode was given (or it isn't a real shortcode), and
-     nothing among the currently-open gates scored as a confident match against the
-     resource URL's own page title/description. Attach manually via the exact shortcode.
-3. **`409` — needs confirmation.** No exact shortcode, but 1-3 candidates scored above
-   the confidence threshold:
+2. **`"not_found"`** — the exact shortcode you gave exists but isn't open for a gate
+   right now (already attached, or never gated at all — check the Notion row directly):
+   ```json
+   {"status": "not_found", "message": "this shortcode exists but isn't awaiting a DM resource right now"}
+   ```
+3. **`"unresolved"`** — no exact shortcode was given (or it isn't a real shortcode), and
+   nothing among the currently-open gates scored as a confident match against the
+   resource URL's own page title/description. Attach manually via the exact shortcode:
+   ```json
+   {"status": "unresolved", "message": "no confident match found — attach manually via an exact shortcode"}
+   ```
+4. **`"needs_confirmation"`** — no exact shortcode, but 1-3 candidates scored above the
+   confidence threshold:
    ```json
    {
-     "detail": {
-       "status": "needs_confirmation",
-       "message": "no exact shortcode — pick one of these and retry via POST /attach/confirm",
-       "resource_url": "https://...",
-       "candidates": [
-         {
-           "shortcode": "DbFDY3yTwlI",
-           "created": "2026-07-22",
-           "topics": ["ai-tools", "higgsfield"],
-           "main_point": "Higgsfield is offering 24 hours of free access.",
-           "gate_keyword": "video",
-           "match_score": 3
-         },
-         {
-           "shortcode": "Da8A4axznbT",
-           "created": "2026-07-19",
-           "topics": ["ai-tools", "image-processing"],
-           "main_point": "An app built with Higgsfield AI applies filters.",
-           "gate_keyword": null,
-           "match_score": 2
-         }
-       ]
-     }
+     "status": "needs_confirmation",
+     "message": "no exact shortcode — pick one of these and retry via POST /attach/confirm",
+     "resource_url": "https://...",
+     "candidates": [
+       {
+         "shortcode": "DbFDY3yTwlI",
+         "created": "2026-07-22",
+         "topics": ["ai-tools", "higgsfield"],
+         "main_point": "Higgsfield is offering 24 hours of free access.",
+         "gate_keyword": "video",
+         "match_score": 3
+       },
+       {
+         "shortcode": "Da8A4axznbT",
+         "created": "2026-07-19",
+         "topics": ["ai-tools", "image-processing"],
+         "main_point": "An app built with Higgsfield AI applies filters.",
+         "gate_keyword": null,
+         "match_score": 2
+       }
+     ]
    }
    ```
    Show the candidates in a **native "Choose from List"** step (built from
-   `detail.candidates`, e.g. `"{shortcode}: {main_point}"` per row) so you can actually
+   `candidates`, e.g. `"{shortcode}: {main_point}"` per row) so you can actually
    tell them apart, then call `/attach/confirm` with whichever one you pick.
 
-   **`5xx` (502) — write failed.** The row was correctly identified, but the durable
-   Notion write itself failed (network hiccup, etc.) — the attach was **NOT** recorded
-   anywhere. Retry; never treat this as success.
+**`5xx` (502) — genuine write failure, NOT flattened.** The row was correctly
+identified, but the durable Notion write itself failed (network hiccup, etc.) — the
+attach was **NOT** recorded anywhere. This is a real error, not a business outcome, so
+it keeps FastAPI's normal `{"detail": {"status": "failed", ...}}` shape and a non-200
+status. Retry; never treat this as success.
 
 #### `POST /attach/confirm`
 
-Commits a specific candidate you chose from a prior `409` response.
+Commits a specific candidate you chose from a prior `needs_confirmation` response.
 
 Request body (JSON):
 ```json
 {"shortcode": "DbFDY3yTwlI", "resource_url": "https://...", "secret": "<CAPTURE_SECRET>"}
 ```
-- `shortcode`: **required**, must be exact (e.g. copied from one of the `409`
-  response's `candidates`). This endpoint never guesses either.
+- `shortcode`: **required**, must be exact (e.g. copied from one of the
+  `needs_confirmation` response's `candidates`). This endpoint never guesses either.
 
-Response: the same `200`/`404`/`5xx` shapes as `/attach`'s exact-shortcode path above.
+Response: the same flat, always-`200` `"attached"` / `"not_found"` shapes as `/attach`'s
+exact-shortcode path above (a `"needs_confirmation"`/`"unresolved"` response never
+applies here, since `shortcode` is required). A genuine write failure is still a real
+`502`, same shape as `/attach`'s.
 
 Successfully attaching (via either endpoint) flips the entry `⏳ Awaiting DM → 📥 Inbox`
 and records the DM'd link on the Notion page's **Gate resource** field. Every attempt —
 resolved instantly, resolved via a confirmed candidate, or unresolved — is logged to a
 persistent "🔍 Attach Audit Log" page under your `NOTION_PARENT_PAGE_ID`, so a future
-mismatch can be looked up directly instead of reconstructed after the fact.
+mismatch can be looked up directly instead of reconstructed after the fact. Since the
+HTTP status code alone can no longer distinguish the four outcomes (they're all `200`
+now), each one is also logged server-side as `"attach resolved: <status>"` for anyone
+checking Render's logs.
 
 **Shortcut rebuild note (yours to do, not server-side):** the Shortcut needs an "Ask for
 Input" or "Choose from Menu" step so it can pass a real `shortcode_or_note` when you know
-it, and a way to show `detail.candidates` as a native picker on `409` before calling
-`/attach/confirm` with the chosen `shortcode`. Show the actual response body (not a
-blanket "success" toast) so a `404`/`409`/`5xx` is visible instead of silently swallowed.
+it, and a way to show `candidates` as a native picker when `status == "needs_confirmation"`
+before calling `/attach/confirm` with the chosen `shortcode`. Since everything is now a
+flat `200`, **branch on the `status` field itself** (e.g. an "If" action checking
+`Dictionary Value for status`), not on the HTTP status code — only a genuine `5xx` means
+something actually went wrong.
 
 ### Nightly cleanup job (BUILD_SPEC §2.3)
 

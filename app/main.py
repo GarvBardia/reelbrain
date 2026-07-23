@@ -437,9 +437,22 @@ def attach(req: AttachRequest, request: Request) -> JSONResponse:
     Anything short of an exact shortcode now fetches the resource_url's own
     title/description and scores it against currently-open gates (Awaiting
     DM, or Inbox-with-a-keyword-but-no-resource-yet). This NEVER auto-
-    commits: it returns up to 3 ranked candidates (409) for the caller to
-    confirm via POST /attach/confirm, or a clear 404 "unresolved" if nothing
-    scores above the confidence threshold.
+    commits: it returns up to 3 ranked candidates for the caller to confirm
+    via POST /attach/confirm, or a clear "unresolved" if nothing scores
+    above the confidence threshold.
+
+    Response shape (see PROGRESS.md — flattened, always HTTP 200 for these
+    four expected business outcomes; a real write failure is still a
+    genuine 502): every response is a flat JSON body with "status" at the
+    root — never nested under a "detail" key. HTTPException's detail=
+    parameter always nests the body one level down, which required
+    fragile multi-step dictionary navigation in the iOS Shortcut client
+    and broke there (the candidates list silently evaluated empty). Flat
+    200s remove that failure mode entirely.
+      - {"status": "attached", "shortcode": ..., "notion_url": ...}
+      - {"status": "needs_confirmation", "message": ..., "resource_url": ..., "candidates": [...]}
+      - {"status": "not_found", "message": ...}
+      - {"status": "unresolved", "message": ...}
     """
     _check_rate_limit(request)
     _check_secret(req.secret)
@@ -451,9 +464,10 @@ def attach(req: AttachRequest, request: Request) -> JSONResponse:
                 attach_audit.record(
                     req.shortcode_or_note, req.resource_url, "not_found_wrong_status",
                 )
-                raise HTTPException(
-                    status_code=404,
-                    detail={
+                logger.info("attach resolved: not_found")
+                return JSONResponse(
+                    status_code=200,
+                    content={
                         "status": "not_found",
                         "message": "this shortcode exists but isn't awaiting a DM resource right now",
                     },
@@ -462,6 +476,7 @@ def attach(req: AttachRequest, request: Request) -> JSONResponse:
                 attach_audit.record(
                     req.shortcode_or_note, req.resource_url, "write_failed", shortcode=row["shortcode"],
                 )
+                logger.info("attach resolved: failed")
                 raise HTTPException(
                     status_code=502,
                     detail={
@@ -471,6 +486,7 @@ def attach(req: AttachRequest, request: Request) -> JSONResponse:
                     },
                 )
             attach_audit.record(req.shortcode_or_note, req.resource_url, "attached", shortcode=row["shortcode"])
+            logger.info("attach resolved: attached")
             return JSONResponse(
                 status_code=200,
                 content={"status": "attached", "shortcode": row["shortcode"], "notion_url": row["notion_page_url"]},
@@ -484,9 +500,10 @@ def attach(req: AttachRequest, request: Request) -> JSONResponse:
 
     if not ranked:
         attach_audit.record(req.shortcode_or_note, req.resource_url, "unresolved")
-        raise HTTPException(
-            status_code=404,
-            detail={
+        logger.info("attach resolved: unresolved")
+        return JSONResponse(
+            status_code=200,
+            content={
                 "status": "unresolved",
                 "message": "no confident match found — attach manually via an exact shortcode",
             },
@@ -497,9 +514,10 @@ def attach(req: AttachRequest, request: Request) -> JSONResponse:
         req.shortcode_or_note, req.resource_url, "needs_confirmation",
         candidates=[c["shortcode"] for c in ranked],
     )
-    raise HTTPException(
-        status_code=409,
-        detail={
+    logger.info("attach resolved: needs_confirmation")
+    return JSONResponse(
+        status_code=200,
+        content={
             "status": "needs_confirmation",
             "message": "no exact shortcode — pick one of these and retry via POST /attach/confirm",
             "resource_url": req.resource_url,
@@ -511,28 +529,35 @@ def attach(req: AttachRequest, request: Request) -> JSONResponse:
 @app.post("/attach/confirm")
 def attach_confirm(req: AttachConfirmRequest, request: Request) -> JSONResponse:
     """Commits a specific candidate the caller chose from a prior /attach
-    "needs_confirmation" (409) response. shortcode is REQUIRED and exact —
-    this endpoint never guesses either; it only accepts a row that's still a
-    genuine open attach target (see store.resolve_attachable_by_shortcode)."""
+    "needs_confirmation" response. shortcode is REQUIRED and exact — this
+    endpoint never guesses either; it only accepts a row that's still a
+    genuine open attach target (see store.resolve_attachable_by_shortcode).
+
+    Response shape: flat, always HTTP 200 for "attached"/"not_found" (same
+    flattening as /attach — see its docstring); a real write failure is
+    still a genuine 502."""
     _check_rate_limit(request)
     _check_secret(req.secret)
 
     row = store.resolve_attachable_by_shortcode(req.shortcode)
     if row is None:
         attach_audit.record(req.shortcode, req.resource_url, "confirm_not_found", shortcode=req.shortcode)
-        raise HTTPException(
-            status_code=404,
-            detail={"status": "not_found", "message": f"{req.shortcode} is not a pending attach target"},
+        logger.info("attach resolved: not_found")
+        return JSONResponse(
+            status_code=200,
+            content={"status": "not_found", "message": f"{req.shortcode} is not a pending attach target"},
         )
 
     if not _commit_attach(row, req.resource_url):
         attach_audit.record(req.shortcode, req.resource_url, "confirm_write_failed", shortcode=req.shortcode)
+        logger.info("attach resolved: failed")
         raise HTTPException(
             status_code=502,
             detail={"status": "failed", "message": "Notion write failed — attach was NOT recorded, retry"},
         )
 
     attach_audit.record(req.shortcode, req.resource_url, "confirmed", shortcode=req.shortcode)
+    logger.info("attach resolved: attached")
     return JSONResponse(
         status_code=200,
         content={"status": "attached", "shortcode": row["shortcode"], "notion_url": row["notion_page_url"]},

@@ -425,7 +425,9 @@ def test_attach_falls_back_to_notion_when_local_row_missing(monkeypatch):
     assert update_call["properties"]["Status"]["select"]["name"] == "📥 Inbox"
 
 
-def test_attach_still_404s_when_neither_sqlite_nor_notion_has_it(monkeypatch):
+def test_attach_still_unresolved_when_neither_sqlite_nor_notion_has_it(monkeypatch):
+    """Flattened response (see PROGRESS.md): "unresolved" is a business
+    outcome, not an error -- always HTTP 200 now."""
     fake = FakeClient()  # empty everywhere
     monkeypatch.setattr(notion_writer, "_client", lambda: fake)
     client = _client(monkeypatch)
@@ -435,7 +437,8 @@ def test_attach_still_404s_when_neither_sqlite_nor_notion_has_it(monkeypatch):
         "resource_url": "https://instagram.com/direct/t/1/",
         "secret": "test-secret",
     })
-    assert resp.status_code == 404
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "unresolved"
 
 
 def test_attach_round_trip_second_call_hits_locally_no_notion_query(monkeypatch):

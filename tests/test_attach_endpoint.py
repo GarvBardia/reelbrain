@@ -123,8 +123,8 @@ def test_attach_explicit_shortcode_on_never_gated_row_404s_not_a_wrong_row(monke
         "/attach",
         json={"shortcode_or_note": "PHOTOMANUAL1", "resource_url": RESOURCE_URL, "secret": "test-secret"},
     )
-    assert resp.status_code == 404
-    assert resp.json()["detail"]["status"] == "not_found"
+    assert resp.status_code == 200  # flattened: a business outcome, not an error (see PROGRESS.md)
+    assert resp.json()["status"] == "not_found"
     # critically: the unrelated pending row must be untouched — no silent
     # substitution just because something else happened to be Awaiting DM
     assert store.get_by_shortcode("UNRELATED1")["status"] == "awaiting_dm"
@@ -186,8 +186,8 @@ def test_attach_no_exact_shortcode_zero_candidates_is_a_clear_failure(monkeypatc
         "/attach",
         json={"shortcode_or_note": None, "resource_url": RESOURCE_URL, "secret": "test-secret"},
     )
-    assert resp.status_code == 404
-    assert resp.json()["detail"]["status"] == "unresolved"
+    assert resp.status_code == 200  # flattened business outcome
+    assert resp.json()["status"] == "unresolved"
 
 
 def test_attach_no_exact_shortcode_below_threshold_is_unresolved_not_a_guess(monkeypatch):
@@ -209,8 +209,8 @@ def test_attach_no_exact_shortcode_below_threshold_is_unresolved_not_a_guess(mon
         "/attach",
         json={"shortcode_or_note": None, "resource_url": RESOURCE_URL, "secret": "test-secret"},
     )
-    assert resp.status_code == 404
-    assert resp.json()["detail"]["status"] == "unresolved"
+    assert resp.status_code == 200  # flattened business outcome
+    assert resp.json()["status"] == "unresolved"
     assert store.get_by_shortcode("SOLE001")["status"] == "awaiting_dm"  # untouched
 
 
@@ -253,8 +253,8 @@ def test_attach_no_exact_shortcode_returns_ranked_candidates_with_real_detail(mo
         "/attach",
         json={"shortcode_or_note": None, "resource_url": RESOURCE_URL, "secret": "test-secret"},
     )
-    assert resp.status_code == 409
-    body = resp.json()["detail"]
+    assert resp.status_code == 200  # flattened business outcome
+    body = resp.json()
     assert body["status"] == "needs_confirmation"
 
     candidates = body["candidates"]
@@ -301,8 +301,8 @@ def test_attach_confirm_rejects_a_shortcode_that_isnt_a_pending_target(monkeypat
         "/attach/confirm",
         json={"shortcode": "NOTPENDING", "resource_url": RESOURCE_URL, "secret": "test-secret"},
     )
-    assert resp.status_code == 404
-    assert resp.json()["detail"]["status"] == "not_found"
+    assert resp.status_code == 200  # flattened business outcome
+    assert resp.json()["status"] == "not_found"
 
 
 def test_attach_confirm_notion_failure_reports_failure_not_false_success(monkeypatch):
@@ -338,3 +338,79 @@ def test_attach_confirm_accepts_inbox_row_with_unfulfilled_keyword(monkeypatch):
     )
     assert resp.status_code == 200
     assert store.get_by_shortcode("INBOXKW")["gate_resource_url"] == RESOURCE_URL
+
+
+# --- flattened responses: outcome is now only distinguishable via logging -----
+#
+# Every business outcome is HTTP 200 now (see PROGRESS.md), so the status
+# code alone can no longer tell "attached" apart from "needs_confirmation"/
+# "not_found"/"unresolved" in server logs — each outcome must log its own
+# resolved status explicitly.
+
+import logging as _logging
+
+
+def test_logs_attached_outcome(monkeypatch, caplog):
+    client, _fake = _client(monkeypatch)
+    _seed_awaiting_dm("LOGATTACH")
+    with caplog.at_level(_logging.INFO):
+        client.post("/attach", json={
+            "shortcode_or_note": "LOGATTACH", "resource_url": RESOURCE_URL, "secret": "test-secret",
+        })
+    assert any("attach resolved: attached" in r.message for r in caplog.records)
+
+
+def test_logs_not_found_outcome(monkeypatch, caplog):
+    client, _fake = _client(monkeypatch)
+    _seed_photo_manual("LOGNOTFOUND")
+    with caplog.at_level(_logging.INFO):
+        client.post("/attach", json={
+            "shortcode_or_note": "LOGNOTFOUND", "resource_url": RESOURCE_URL, "secret": "test-secret",
+        })
+    assert any("attach resolved: not_found" in r.message for r in caplog.records)
+
+
+def test_logs_unresolved_outcome(monkeypatch, caplog):
+    client, _fake = _client(monkeypatch)
+    with caplog.at_level(_logging.INFO):
+        client.post("/attach", json={
+            "shortcode_or_note": None, "resource_url": RESOURCE_URL, "secret": "test-secret",
+        })
+    assert any("attach resolved: unresolved" in r.message for r in caplog.records)
+
+
+def test_logs_needs_confirmation_outcome(monkeypatch, caplog):
+    client, fake = _client(monkeypatch)
+    store.insert_processing("LOGCAND", "https://www.instagram.com/reel/LOGCAND/", note=None)
+    store.update_save("LOGCAND", status="awaiting_dm", notion_page_id="pg-LOGCAND")
+    fake.data_sources = _CandidateDataSources([
+        _candidate_page("LOGCAND", main_point="Scrollworld animation toolkit repository"),
+    ])
+    monkeypatch.setattr(
+        resource_lookup, "fetch_resource_title_and_description",
+        lambda url: ("Scrollworld animation toolkit", "A repository for scrollworld animation toolkit"),
+    )
+    with caplog.at_level(_logging.INFO):
+        client.post("/attach", json={
+            "shortcode_or_note": None, "resource_url": RESOURCE_URL, "secret": "test-secret",
+        })
+    assert any("attach resolved: needs_confirmation" in r.message for r in caplog.records)
+
+
+def test_logs_confirm_attached_outcome(monkeypatch, caplog):
+    client, _fake = _client(monkeypatch)
+    _seed_awaiting_dm("LOGCONFIRM")
+    with caplog.at_level(_logging.INFO):
+        client.post("/attach/confirm", json={
+            "shortcode": "LOGCONFIRM", "resource_url": RESOURCE_URL, "secret": "test-secret",
+        })
+    assert any("attach resolved: attached" in r.message for r in caplog.records)
+
+
+def test_logs_confirm_not_found_outcome(monkeypatch, caplog):
+    client, _fake = _client(monkeypatch)
+    with caplog.at_level(_logging.INFO):
+        client.post("/attach/confirm", json={
+            "shortcode": "NOSUCHROW", "resource_url": RESOURCE_URL, "secret": "test-secret",
+        })
+    assert any("attach resolved: not_found" in r.message for r in caplog.records)
