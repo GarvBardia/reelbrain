@@ -510,11 +510,18 @@ def test_run_research_context_one_entity_failure_does_not_block_others(monkeypat
         return _FakeGeminiResponse(f"real info about {entity}", chunks=[_FakeChunk()])
 
     monkeypatch.setattr(gemini_pipe, "_call_gemini_research", _fake_call)
+    # Phase 3: a failed grounded call now routes to the web-fetch fallback
+    # instead of silently skipping; nothing fetchable -> honest not-found.
+    from app import web_research
+    monkeypatch.setattr(web_research, "fetch_context_material", lambda e: (None, None))
 
     result = gemini_pipe.run_research_context(["GoodTool", "BrokenTool", "AnotherGoodTool"])
     assert calls == ["GoodTool", "BrokenTool", "AnotherGoodTool"]  # all three attempted
-    topics = {item.topic for item in result}
-    assert topics == {"GoodTool", "AnotherGoodTool"}  # broken one just skipped, not a placeholder
+    by_topic = {item.topic: item for item in result}
+    assert set(by_topic) == {"GoodTool", "BrokenTool", "AnotherGoodTool"}
+    assert by_topic["BrokenTool"].source == "web-fetch"
+    assert by_topic["BrokenTool"].context == gemini_pipe.NOT_FOUND_VIA_SEARCH
+    assert by_topic["GoodTool"].source == "search-grounding"
 
 
 def test_run_research_context_caps_at_max_research_entities(monkeypatch):

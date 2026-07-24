@@ -312,7 +312,9 @@ def _build_children(extraction: Optional[Extraction], caption: Optional[str]) ->
                     "children": [
                         {
                             "object": "block", "type": "paragraph",
-                            "paragraph": {"rich_text": _rich_text(f"{item.topic}: {item.context}")},
+                            "paragraph": {"rich_text": _rich_text(
+                                f"{item.topic} [{item.source}]: {item.context}"
+                            )},
                         }
                         for item in extraction.research_context
                     ],

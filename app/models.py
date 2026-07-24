@@ -110,6 +110,12 @@ class ResearchContextItem(BaseModel):
 
     topic: str
     context: str
+    # Where the context actually came from: "search-grounding" (a grounded
+    # Gemini call with real Google Search chunks), or "web-fetch" (the free
+    # fallback -- DuckDuckGo top result / GitHub README fetched for real and
+    # summarized). Either way the text is anchored to fetched material, never
+    # unlabeled model memory.
+    source: str = "search-grounding"
 
 
 class Extraction(BaseModel):

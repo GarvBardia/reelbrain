@@ -167,7 +167,7 @@ def test_pipeline_writes_research_context_as_body_toggle_not_a_property(monkeypa
     toggles = [b for b in call["children"] if b["type"] == "toggle"]
     research_toggle = next(t for t in toggles if t["toggle"]["rich_text"][0]["text"]["content"] == "Research Context")
     child_texts = [c["paragraph"]["rich_text"][0]["text"]["content"] for c in research_toggle["toggle"]["children"]]
-    assert child_texts == ["Cleanlist.ai: A LinkedIn scraping tool."]
+    assert child_texts == ["Cleanlist.ai [search-grounding]: A LinkedIn scraping tool."]
 
 
 def test_pipeline_no_research_context_toggle_when_empty(monkeypatch, tutorial_reel, tutorial_extraction):

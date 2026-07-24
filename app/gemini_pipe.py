@@ -592,6 +592,48 @@ def _call_gemini_research(entity: str):
     return response
 
 
+_WEBFETCH_CONTEXT_PROMPT = """Using ONLY the material below (fetched live from {url}), \
+write 2-3 sentences: what is "{entity}" and why does it matter? Restate only what the \
+material actually says — never add facts from your own knowledge. If the material does \
+not actually describe "{entity}", answer exactly: not found via search
+
+--- FETCHED MATERIAL ---
+{material}
+--- END FETCHED MATERIAL ---
+"""
+
+
+def _call_gemini_webfetch_context(entity: str, material: str, url: str) -> str:
+    """Plain (ungrounded) Gemini call that may ONLY restate genuinely-fetched
+    material — the free fallback when Search grounding isn't available on this
+    API key. The honesty guarantee holds because the material itself was
+    fetched for real (app/web_research.py), so nothing here is unverified
+    model memory presented as verified."""
+    from google import genai
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    _enforce_gemini_call_spacing()
+    with _GEMINI_SEMAPHORE:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[_WEBFETCH_CONTEXT_PROMPT.format(entity=entity, material=material, url=url)],
+        )
+    return (response.text or "").strip()
+
+
+def _research_via_web_fetch(entity: str) -> "ResearchContextItem":
+    """The fallback path for one entity: fetch real material (DDG top result /
+    GitHub README), summarize it, mark source \"web-fetch\". No material means
+    the honest not-found marker — never a training-data guess."""
+    from app import web_research
+
+    material, url = web_research.fetch_context_material(entity)
+    if not material:
+        return ResearchContextItem(topic=entity, context=NOT_FOUND_VIA_SEARCH, source="web-fetch")
+    text = _call_gemini_webfetch_context(entity, material, url)
+    return ResearchContextItem(topic=entity, context=text or NOT_FOUND_VIA_SEARCH, source="web-fetch")
+
+
 def _grounding_found_results(response) -> bool:
     """True only if Google Search grounding actually returned at least one
     supporting chunk for this call. This is the whole point of point 2 in the
@@ -615,13 +657,31 @@ def run_research_context(named_entities: list[str]) -> list[ResearchContextItem]
     entity: one entity's failure never blocks the others or raises, and an
     empty/None input just returns an empty list without calling Gemini at all."""
     results: list[ResearchContextItem] = []
+    grounding_blocked = False  # after one 429 on a grounded call, don't keep burning them
     for entity in (named_entities or [])[:MAX_RESEARCH_ENTITIES]:
-        try:
-            response = _call_gemini_research(entity)
-        except Exception:  # noqa: BLE001 - one entity's failure must not sink the others
-            logger.warning(
-                "run_research_context: Gemini call failed for entity %r", entity, exc_info=True,
-            )
+        if grounding_blocked:
+            response = None
+        else:
+            try:
+                response = _call_gemini_research(entity)
+            except Exception as exc:  # noqa: BLE001 - grounding unavailable/blocked -> fallback
+                logger.warning(
+                    "run_research_context: grounded call failed for entity %r "
+                    "— trying the web-fetch fallback", entity, exc_info=True,
+                )
+                if "429" in str(exc) or "RESOURCE_EXHAUSTED" in str(exc):
+                    grounding_blocked = True
+                response = None
+        if response is None:
+            # Free fallback: real fetched material (DDG/GitHub), source
+            # "web-fetch" — or the honest not-found marker. Best-effort: a
+            # fallback failure just skips this entity.
+            try:
+                results.append(_research_via_web_fetch(entity))
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "run_research_context: web-fetch fallback failed for %r", entity, exc_info=True,
+                )
             continue
         if not _grounding_found_results(response):
             logger.info(
