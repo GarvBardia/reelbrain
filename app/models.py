@@ -180,6 +180,12 @@ class ResourceExtraction(BaseModel):
     key_takeaways: list[str] = Field(default_factory=list, max_length=8)
     topic_tags: list[str] = Field(default_factory=list)
     resource_kind: Literal["github_repo", "google_doc", "web_article", "pdf", "other"] = "other"
+    # ONE imperative next step the reader could take with this resource
+    # ("Clone the repo and run the demo"), or exactly "none — informational".
+    # Same field/contract as Extraction.suggested_action on the reel notes.
+    # Defaults to "" so resources summarized before this field existed still
+    # validate.
+    suggested_action: str = ""
 
 
 def degraded_extraction(caption: Optional[str]) -> Extraction:

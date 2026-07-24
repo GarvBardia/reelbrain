@@ -463,6 +463,7 @@ Anti-slop rules (follow strictly):
 - `key_takeaways` are 0-8 concrete, specific points (a real technique, a named tool, a number) -- never generic filler like "this is useful information". Zero is correct if there is genuinely nothing concrete to extract.
 - `topic_tags`: 3-6 lowercase-kebab-case tags. Prefer these existing tags when they genuinely fit: {taxonomy}. Only introduce a new tag if none fit.
 - `resource_kind` must be exactly one of: github_repo, google_doc, web_article, pdf, other -- classify based on the content itself, not just the URL shape.
+- `suggested_action`: ONE imperative line stating the single most direct next step a reader could take with this resource (e.g. "Clone the repo and run the demo", "Copy the prompts into a Claude Project"). If it is purely informational with nothing to act on, use exactly "none — informational". Never more than one sentence, never vague.
 - Never invent content that isn't in the text below. If the resource is thin or mostly boilerplate, say so honestly in `summary` rather than padding.
 
 Return only the structured JSON, no markdown, no commentary.
