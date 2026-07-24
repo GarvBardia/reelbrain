@@ -459,6 +459,25 @@ def append_to_named_page(parent_page_id: str, title: str, new_blocks: list[dict]
     return {"page_id": page["id"], "url": page["url"]}
 
 
+def read_named_page_text(parent_page_id: str, title: str) -> Optional[str]:
+    """First paragraph text of the named child page under parent_page_id, or
+    None if the page doesn't exist / has no text. Used by the daily digest's
+    "Scout pick of the day" line — the Scout (scripts/scout.py --push-pick,
+    local) writes the page, and the digest (running on Render, no vault
+    access) reads it here. Best-effort by contract: callers treat None as
+    "no pick available", never an error."""
+    client = _client()
+    page_id = find_child_page_by_title(client, parent_page_id, title)
+    if not page_id:
+        return None
+    for block in client.blocks.children.list(block_id=page_id).get("results", []):
+        if block.get("type") == "paragraph":
+            text = _rt_text(block["paragraph"].get("rich_text"))
+            if text:
+                return text
+    return None
+
+
 def set_status(page_id: str, status: str) -> None:
     """BUILD_SPEC 2.3 (nightly job): flip Status only, no body-block rebuild."""
     client = _client()

@@ -378,6 +378,19 @@ def collect_day() -> dict:
     return local
 
 
+SCOUT_PICK_PAGE_TITLE = "🔭 Scout Pick"
+
+
+def _try_scout_pick() -> Optional[str]:
+    if not NOTION_PARENT_PAGE_ID:
+        return None
+    try:
+        return notion_writer.read_named_page_text(NOTION_PARENT_PAGE_ID, SCOUT_PICK_PAGE_TITLE)
+    except Exception:  # noqa: BLE001 - the pick is a garnish, never a failure mode
+        logger.warning("scout pick read failed", exc_info=True)
+        return None
+
+
 def _daily_synthesis_line(saves: list[dict]) -> str:
     return _synthesis_stat_line(saves, "today")
 
@@ -391,6 +404,16 @@ def render_daily_markdown(data: dict, ai_summary: Optional[str] = None) -> str:
     and skipping delivery silently would look identical to the job failing)."""
     day_of = _utc_naive_now().date().isoformat()
     lines = [f"# Daily reflection — {day_of}", ""]
+
+    # "Scout pick of the day" — read from the small "🔭 Scout Pick" Notion
+    # page that scripts/scout.py --push-pick maintains. Notion (not the vault
+    # file) because this digest runs on Render, which has no access to the
+    # local Obsidian vault. Best-effort: no page / a read failure just means
+    # no line, never a broken digest.
+    pick = _try_scout_pick()
+    if pick:
+        lines.append(f"🔭 Scout pick of the day: {pick}")
+        lines.append("")
 
     saves = data["saves"]
     if not saves:
