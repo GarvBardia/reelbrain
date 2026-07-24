@@ -1,5 +1,38 @@
 # PROGRESS.md — hardening/deployment session log
 
+## ⭐ Full resource-ingestion batch run (Phase 4 of the six-phase build)
+
+Ran `scripts/ingest_resources.py` against every Saves row with a non-empty
+Gate resource — 20 total. Results (from `ingest_resources_progress.json`):
+
+- **13 written** — real fetched content + Gemini summary/takeaways, each as a
+  `resources/{shortcode}-{slug}.md` vault note, bidirectionally linked on the
+  post-batch `scripts/sync_to_obsidian.py` re-run (129 notes, 121 topics).
+- **4 unreadable, flagged honestly, never fabricated:**
+  - `DZrQ7dMRx0m`, `DasLm6opzIO` — Google Drive files served as
+    `application/octet-stream` (not a fetchable PDF/HTML; likely needs login
+    or the Drive download interstitial).
+  - `DaYwajdCPOX`, `DZSFkNppVW_` — app.notion.com share links that load as
+    JS-only pages with almost no extractable text.
+- **3 degraded (transient, retryable):** `Dap3IoNo4Kt`, `DavPc6tNMRR`,
+  `DavJiHqPz95` — the Gemini free-tier DAILY cap
+  (`generate_content_free_tier_requests`, limit 20/day on this model) was
+  exhausted mid-batch. The fetches themselves succeeded; only the summary
+  call failed, and "degraded" is a non-terminal status the script retries.
+
+**Re-run command for the remaining items** (after the daily quota resets —
+"written" rows are terminal and skipped automatically):
+
+```
+venv\Scripts\python.exe scripts\ingest_resources.py
+```
+
+Local-only deps note: `requirements-local.txt` (beautifulsoup4/pypdf) had to
+be installed into the venv first — they are deliberately NOT in the main
+requirements.txt Render builds from.
+
+---
+
 ## ⭐ /attach + /attach/confirm: collapsed to a two-action NOTIFY/MENU shape, all looping moved server-side
 
 **Why, exactly:** the previous flattening pass (below) removed the `detail`-nesting
