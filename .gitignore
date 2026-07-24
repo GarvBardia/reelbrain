@@ -5,6 +5,7 @@ data/*.db
 data/videos/
 bulk_import_progress*.json
 *_progress.json
+recover_placeholders.log
 urls.txt
 reellist.txt
 __pycache__/
