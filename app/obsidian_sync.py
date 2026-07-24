@@ -186,6 +186,7 @@ def extract_note_fields(page: dict) -> dict:
         "url": _prop(props, "Reel URL").get("url") or "",
         "posted": posted or (page.get("created_time", "") or "")[:10],
         "gate_resource": _prop(props, "Gate resource").get("url") or "",
+        "suggested_action": _rt_text(_prop(props, "Suggested action").get("rich_text", [])),
     }
 
 
@@ -224,6 +225,14 @@ def build_note(fields: dict, creator: Optional[str], body_markdown: str,
     if fields["value_score"]:
         lines.append(f"Score: {fields['value_score']}")
     if fields["priority"] or fields["value_score"]:
+        lines.append("")
+    # The one imperative next step, right under the header where it's seen
+    # immediately — skipped entirely when there's nothing to do.
+    action = fields.get("suggested_action", "")
+    if action and action.lower() != "none — informational":
+        lines.append("## Do")
+        lines.append("")
+        lines.append(action)
         lines.append("")
     lines.append(body_markdown.rstrip())
     if resource_stem:

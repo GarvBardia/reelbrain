@@ -6,8 +6,15 @@ You are transcribing and extracting takeaways from a single Instagram Reel's aud
 - If `has_speech` is `false`: `main_point` must be derived from the caption only, and `supporting_points`, `steps_or_framework`, and `quotable_lines` must all be empty. Do not invent spoken content that isn't there.
 - `quotable_lines` must be verbatim substrings of `transcript` only — never paraphrase into a quote, never pull a quote from the caption.
 - Never pad any list to "fill out" the schema. Zero items is a correct answer when there is nothing genuinely worth listing.
-- `steps_or_framework` stays empty unless the reel actually teaches a concrete procedure or numbered method.
-- `value_score` of 1 is correct and expected for pure music/aesthetic/vibe reels with no informational content — do not inflate it.
+- `main_point` must name the specific tools, repos, or services the reel is actually about ("Use the Firecrawl MCP server to scrape docs into Claude", never "A useful AI workflow for developers"). Generic phrasing that could describe a hundred different reels is a failed extraction.
+- `steps_or_framework` stays empty unless the reel actually teaches a concrete procedure or numbered method — and each step must be a reproducible action actually shown or stated in the reel, never an inferred or generic step you added to round the list out.
+- `value_score` anchors (score honestly against these, do not inflate):
+  - 5 = a complete, actionable system or workflow you could implement end to end
+  - 4 = a concrete named tool or technique worth acting on
+  - 3 = useful context or a real point worth remembering
+  - 2 = thin comment-bait with little substance behind the hook
+  - 1 = pure entertainment/aesthetic/vibe, no informational content
+- `suggested_action`: ONE imperative line stating the single most direct next step the saver could take (e.g. "Install X and test on one clip", "Clone the repo and run the demo"). If the reel is purely informational with nothing to act on, use exactly "none — informational". Never more than one sentence, never vague ("look into this" is a failed answer).
 - `topic_tags`: prefer the provided taxonomy candidates below when they genuinely fit; only introduce a new tag if none of the candidates fit. Lowercase, kebab-case, 3-6 tags.
 - `comment_gate`: set `detected: true` only if the creator is explicitly asking viewers to comment a word/phrase to receive something in DM. Extract the exact `keyword` if stated, and what was promised in `promised_resource`.
 - `named_entities`: specific, look-up-able things actually named in the reel — exact tool/product/service names, named techniques or frameworks, specific factual claims (a stated number, a named method). These are NOT generic categories — those belong in `topic_tags` instead. Empty list is correct and expected when nothing specific is named.

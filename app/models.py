@@ -131,6 +131,11 @@ class Extraction(BaseModel):
     # claims -- the look-up-able things gemini_pipe.run_research_context
     # actually researches. Never fed into the taxonomy.
     named_entities: list[str] = Field(default_factory=list)
+    # ONE imperative next step the saver could actually take ("Install X and
+    # test on one clip"), or the literal "none — informational" when there is
+    # genuinely nothing to do. Drives the Notion "Suggested action" property
+    # and the Obsidian note's "## Do" line. Empty string on the degraded path.
+    suggested_action: str = ""
     content_type: Literal[
         "tutorial",
         "insight",

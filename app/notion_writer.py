@@ -110,6 +110,7 @@ def extract_saves_fields(page: dict) -> dict:
     permalink = (props.get("Reel URL") or {}).get("url") or ""
     status_label = ((props.get("Status") or {}).get("select") or {}).get("name", "")
     title = _rt_text((props.get("Title") or {}).get("title"))
+    suggested_action = _rt_text((props.get("Suggested action") or {}).get("rich_text")) or None
     return {
         "shortcode": shortcode,
         "permalink": permalink,
@@ -117,6 +118,7 @@ def extract_saves_fields(page: dict) -> dict:
         "status_label": status_label,
         "gate_keyword": gate_keyword,
         "title": title,
+        "suggested_action": suggested_action,
         "page_id": page.get("id", ""),
         "url": page.get("url", ""),
     }
@@ -253,6 +255,10 @@ def _build_properties(
         props["Comment gate"] = {"checkbox": extraction.comment_gate.detected}
         if extraction.comment_gate.keyword:
             props["Gate keyword"] = {"rich_text": _rich_text(extraction.comment_gate.keyword)}
+        if extraction.suggested_action:
+            # One imperative next step (or "none — informational"). Declared on
+            # the live DB by scripts/add_suggested_action_property.py.
+            props["Suggested action"] = {"rich_text": _rich_text(extraction.suggested_action)}
     return props
 
 

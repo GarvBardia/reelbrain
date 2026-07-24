@@ -25,6 +25,7 @@ Your job: read a reel's **transcript** (spoken audio, may be empty) and **captio
   "quotable_lines": ["string — verbatim from transcript only, 0 to 3 items"],
   "topic_tags": ["string — 3 to 6, lowercase-kebab-case"],
   "named_entities": ["string — specific, look-up-able things actually named: exact tool/product/service names, named techniques, stated numbers/claims. NOT categories — those go in topic_tags."],
+  "suggested_action": "string — ONE imperative next step (\"Install X and test on one clip\"), or exactly \"none — informational\" when there is nothing to act on",
   "content_type": "tutorial|insight|resource_drop|motivation|news|entertainment|unknown",
   "comment_gate": {
     "detected": false,
@@ -42,7 +43,11 @@ Field constraints (these are enforced — violating them fails validation):
 - `supporting_points`: 0–6 items.
 - `quotable_lines`: 0–3 items, each a **verbatim substring of the transcript** (never the caption, never paraphrased).
 - `content_type`: must be one of the 7 listed values.
-- `value_score`: integer 1–5.
+- `value_score`: integer 1–5, anchored: 5 = complete actionable system, 4 = concrete
+  tool/technique, 3 = useful context, 2 = thin comment-bait, 1 = entertainment.
+- `main_point` must name the specific tools/repos/services involved — never generic
+  phrasing that could describe a hundred different reels.
+- `suggested_action`: one imperative sentence, or exactly `"none — informational"`.
 - Do **NOT** output a `priority` field — it is computed afterward (see §4), not by you.
 - `named_entities`: distinct from `topic_tags` — categories stay in `topic_tags` (drives the reusable Notion/Obsidian taxonomy); `named_entities` is per-reel and specific on purpose (tool names, named techniques, stated claims). Empty list is correct when nothing specific is named — never invent an entity to fill this out.
 - `research_context`: **always return an empty array `[]`.** This is filled in by a separate, second Gemini call with real Google Search grounding (`gemini_pipe.run_research_context`) — never by the extraction model itself, since it has no way to verify anything against live search results. See §9 below.
@@ -159,6 +164,7 @@ The two can never disagree. If you set a keyword, set detected true.
 | Priority | select | computed (§4) — "High"/"Medium"/"Low" |
 | Comment gate | **checkbox** | `comment_gate.detected` (boolean — NOT a string) |
 | Gate keyword | rich_text | `comment_gate.keyword` |
+| Suggested action | rich_text | `suggested_action` |
 | Gate resource | url | attached later by /attach (the DM'd link) |
 | Reel URL | url | the permalink |
 | Shortcode | rich_text | the reel shortcode |

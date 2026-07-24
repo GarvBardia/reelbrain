@@ -7,7 +7,14 @@ You are analyzing a single Instagram photo/carousel post's CAPTION ONLY for a pe
 - `supporting_points`, `steps_or_framework`, and `quotable_lines` must stay empty unless the caption itself genuinely contains that content — never invent or infer beyond what's written in the caption.
 - `quotable_lines`, if used at all, must be verbatim substrings of the caption only.
 - Never pad any list to "fill out" the schema. Zero items is a correct answer when the caption doesn't support more.
-- `value_score` of 1 is correct and expected when the caption carries little informational content — do not inflate it just because something must be scored.
+- `main_point` must name the specific tools, repos, or services the caption is actually about ("Use the Firecrawl MCP server to scrape docs into Claude", never "A useful AI workflow for developers"). Generic phrasing that could describe a hundred different posts is a failed extraction.
+- `value_score` anchors (score honestly against these, do not inflate):
+  - 5 = a complete, actionable system or workflow you could implement end to end
+  - 4 = a concrete named tool or technique worth acting on
+  - 3 = useful context or a real point worth remembering
+  - 2 = thin comment-bait with little substance behind the hook
+  - 1 = pure entertainment/aesthetic/vibe, no informational content
+- `suggested_action`: ONE imperative line stating the single most direct next step the saver could take (e.g. "Install X and test on one clip", "Clone the repo and run the demo"). If the caption is purely informational with nothing to act on, use exactly "none — informational". Never more than one sentence, never vague ("look into this" is a failed answer).
 - `topic_tags`: prefer the provided taxonomy candidates below when they genuinely fit; only introduce a new tag if none of the candidates fit. Lowercase, kebab-case, 3-6 tags.
 - `comment_gate`: set `detected: true` only if the caption is explicitly asking viewers to comment a word/phrase to receive something in DM. Extract the exact `keyword` if stated, and what was promised in `promised_resource`.
 - `named_entities`: specific, look-up-able things actually named in the caption — exact tool/product/service names, named techniques or frameworks, specific factual claims (a stated number, a named method). These are NOT generic categories — those belong in `topic_tags` instead. Empty list is correct and expected when nothing specific is named.
