@@ -8,6 +8,7 @@ bulk_import_progress*.json
 recover_placeholders.log
 urls.txt
 reellist.txt
+resource.txt
 __pycache__/
 *.pyc
 .pytest_cache/

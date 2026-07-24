@@ -211,6 +211,38 @@ def test_rerun_skips_already_ingested(tmp_path):
     assert fetches == []                               # terminal -> not re-fetched
 
 
+# --- attach-only mode: zero Gemini calls, no note writes ------------------------
+
+def test_attach_only_commits_attach_but_skips_ingest(tmp_path):
+    (tmp_path / "resources").mkdir()
+    candidates = [{"shortcode": "GATE1", "title": "claude mcp servers", "note": "",
+                   "topics": ["claude-ai"], "gate_keyword": "STACK", "created_at": "2026-07-20"}]
+    committed = []
+    extract_calls = []
+    res = _run(
+        tmp_path, ["https://x.com/guide"], attach_only=True,
+        candidates=candidates, reel_stems={"GATE1": "2026-07-20-GATE1"},
+        fetch_fn=lambda url, kind: ("Install the full STACK of claude mcp servers now", None),
+        commit_fn=lambda sc, url: committed.append((sc, url)) or True,
+        extract_fn=lambda *a: extract_calls.append(a) or _extraction(),
+    )
+    assert committed == [("GATE1", "https://x.com/guide")]   # attach still happens
+    assert res["attached"][0]["shortcode"] == "GATE1"
+    assert extract_calls == []                                # zero Gemini calls
+    assert res["ingested"] == []
+    assert list((tmp_path / "resources").glob("*.md")) == []  # no note written
+
+
+def test_attach_only_does_not_mark_ingest_status(tmp_path):
+    (tmp_path / "resources").mkdir()
+    _run(tmp_path, ["https://x.com/a"], attach_only=True)
+    # nothing marked ingested/unreadable -> a later full run still processes it
+    prog = tmp_path / "prog.json"
+    import json
+    saved = json.loads(prog.read_text(encoding="utf-8")) if prog.exists() else {}
+    assert saved.get("x.com/a", {}).get("ingest_status") != "ingested"
+
+
 # --- Gemini 429 stops the run cleanly -------------------------------------------
 
 def test_quota_stop_halts_and_reports(tmp_path):

@@ -402,6 +402,7 @@ def run(
     audit_fn: Callable[..., None],
     sleep_fn: Callable[[float], None] = time.sleep,
     print_fn: Callable[..., None] = print,
+    attach_only: bool = False,
 ) -> dict:
     """Injectable core so tests never touch the network, Gemini, Notion, or the
     clock. Returns a structured summary."""
@@ -480,6 +481,14 @@ def run(
             reel_stem = reel_stems.get(matched_shortcode) if matched_shortcode else None
             slug = resource_slug(fetched_title, url)
 
+            if attach_only:
+                # Matching/attaching needs zero Gemini calls -- skip Part 2
+                # entirely (no fetch of taxonomy-based summary, no note write,
+                # no ingest_status recorded) so a quota-exhausted day can still
+                # get every confident attach done. A later full run still
+                # ingests this URL from scratch.
+                continue
+
             # --- PART 2: ingest ---
             if dry_run:
                 link = f"linked to {matched_shortcode}" if matched_shortcode else "unlinked"
@@ -539,6 +548,10 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--progress-file", default=DEFAULT_PROGRESS_FILE)
+    parser.add_argument("--attach-only", action="store_true",
+                        help="Part 1 (match+attach) only -- skip vault ingestion/Gemini entirely. "
+                             "Useful when the Gemini daily quota is exhausted but attaching still "
+                             "needs to happen (matching+attaching makes zero Gemini calls).")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -574,14 +587,16 @@ def main() -> None:
 
     print(f"{len(raw_urls)} URLs in {resource_file.name} -> {len(urls)} unique "
           f"({sum(dup_counts.values())} duplicate line(s) collapsed)")
+    mode = "DRY-RUN (no writes)" if args.dry_run else ("LIVE, attach-only" if args.attach_only else "LIVE")
     print(f"open gate candidates: {len(candidates)} | already-attached URLs: {len(attached_map)} | "
-          f"mode: {'DRY-RUN (no writes)' if args.dry_run else 'LIVE'}\n")
+          f"mode: {mode}\n")
 
     result = run(
         urls, vault, Path(args.progress_file), dry_run=args.dry_run,
         candidates=candidates, attached_map=attached_map, reel_stems=reel_stems, taxonomy=taxonomy,
         fetch_fn=fetch_resource_content, classify_fn=classify_resource_url,
         extract_fn=run_resource_extraction, commit_fn=commit_fn, audit_fn=attach_audit.record,
+        attach_only=args.attach_only,
     )
 
     print("\n" + "=" * 70)
@@ -600,8 +615,14 @@ def main() -> None:
                 result["already"], result["unreadable"],
             ), encoding="utf-8",
         )
-        update_index_unlinked(vault / "_index.md", result["unlinked_index"])
-        print(f"\nwrote {UNMATCHED_REPORT} and updated {vault / '_index.md'} (Unlinked resources block)")
+        if args.attach_only:
+            # Part 2 never ran -> unlinked_index is empty; don't blow away
+            # whatever a prior full run already wrote there.
+            print(f"\nwrote {UNMATCHED_REPORT} (attach-only: _index.md left untouched, "
+                  "re-run without --attach-only to ingest + update it)")
+        else:
+            update_index_unlinked(vault / "_index.md", result["unlinked_index"])
+            print(f"\nwrote {UNMATCHED_REPORT} and updated {vault / '_index.md'} (Unlinked resources block)")
         print("NEXT: run `python scripts/sync_to_obsidian.py` to render the reel-side "
               "'## Attached Resource' links for the newly-attached rows.")
     else:
