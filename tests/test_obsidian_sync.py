@@ -130,7 +130,7 @@ def test_full_sync_writes_note_with_frontmatter_sections_and_stubs(monkeypatch, 
 
     result = sync(str(tmp_path))
 
-    note_path = tmp_path / "reels" / "2026-07-01-AAA111.md"
+    note_path = tmp_path / "reels" / "sleep-tips.md"
     assert note_path.exists()
     content = note_path.read_text(encoding="utf-8")
 
@@ -163,7 +163,7 @@ def test_reel_note_shows_plain_text_priority_and_score_no_emoji(monkeypatch, tmp
     _seed_row("PRI1")
 
     sync(str(tmp_path))
-    content = (tmp_path / "reels" / "2026-07-01-PRI1.md").read_text(encoding="utf-8")
+    content = (tmp_path / "reels" / "claude-tips.md").read_text(encoding="utf-8")
 
     assert "priority: High" in content        # frontmatter
     assert "Priority: High" in content        # body, plain text
@@ -205,11 +205,11 @@ def test_related_section_from_stored_embeddings(monkeypatch, tmp_path):
 
     sync(str(tmp_path))
 
-    a_note = (tmp_path / "reels" / "2026-07-01-REL_A.md").read_text(encoding="utf-8")
+    a_note = (tmp_path / "reels" / "first.md").read_text(encoding="utf-8")
     assert "## Related" in a_note
-    assert "[[reels/2026-07-01-REL_B]]" in a_note   # nearest other save, as a real wikilink
+    assert "[[reels/second]]" in a_note   # nearest other save, as a real wikilink
     # the note never links to itself
-    assert "[[reels/2026-07-01-REL_A]]" not in a_note
+    assert "[[reels/first]]" not in a_note
 
 
 def test_no_embedding_means_no_related_section(monkeypatch, tmp_path):
@@ -218,7 +218,7 @@ def test_no_embedding_means_no_related_section(monkeypatch, tmp_path):
     _seed_row("LONE1")
 
     sync(str(tmp_path))
-    content = (tmp_path / "reels" / "2026-07-01-LONE1.md").read_text(encoding="utf-8")
+    content = (tmp_path / "reels" / "alone.md").read_text(encoding="utf-8")
     assert "## Related" not in content
 
 
@@ -236,7 +236,7 @@ def test_idempotent_rerun_updates_in_place(monkeypatch, tmp_path):
 
     notes = list((tmp_path / "reels").glob("*.md"))
     assert len(notes) == 1
-    assert notes[0].name == "2026-07-01-IDEM1.md"  # original path kept
+    assert notes[0].name == "v1.md"  # original path kept
     assert "✅ Processed/Reviewed" in notes[0].read_text(encoding="utf-8")
 
 
@@ -363,7 +363,7 @@ def test_topic_note_gets_real_saved_reels_index_not_just_a_stub(monkeypatch, tmp
     topic_note = (tmp_path / "topics" / "sleep.md").read_text(encoding="utf-8")
     assert AUTO_START in topic_note and AUTO_END in topic_note
     assert "## Saved Reels" in topic_note
-    assert "[[reels/2026-07-01-SR1|Sleep Tips]]" in topic_note
+    assert "[[reels/sleep-tips|Sleep Tips]]" in topic_note
     assert "Score: 4" in topic_note  # plain-text Score, replacing the old "value 4" phrasing
     assert "Main insight here" in topic_note  # the reel's Main Point, pulled in
 
@@ -378,7 +378,7 @@ def test_creator_note_also_gets_saved_reels_index(monkeypatch, tmp_path):
     creator_note = (tmp_path / "creators" / "janedoe.md").read_text(encoding="utf-8")
     assert AUTO_START in creator_note
     assert "## Saved Reels" in creator_note
-    assert "[[reels/2026-07-01-CR1|A Reel]]" in creator_note
+    assert "[[reels/a-reel|A Reel]]" in creator_note
 
 
 def test_manually_edited_notes_section_survives_resync(monkeypatch, tmp_path):
@@ -431,8 +431,8 @@ def test_auto_block_updates_when_new_reel_tagged_with_existing_topic(monkeypatch
 
     content = topic_path.read_text(encoding="utf-8")
     assert "keep me" in content  # user note untouched
-    assert "[[reels/2026-07-01-FIRST1|First Reel]]" in content
-    assert "[[reels/2026-07-10-SECOND1|Second Reel]]" in content
+    assert "[[reels/first-reel|First Reel]]" in content
+    assert "[[reels/second-reel|Second Reel]]" in content
     # higher value_score (5) sorts before the lower one (3)
     assert content.index("Second Reel") < content.index("First Reel")
 
@@ -613,7 +613,7 @@ def test_sync_includes_research_context_section_in_reel_note(monkeypatch, tmp_pa
 
     sync(str(tmp_path))
 
-    note = (tmp_path / "reels" / "2026-07-01-RCX1.md").read_text(encoding="utf-8")
+    note = (tmp_path / "reels" / "a-reel.md").read_text(encoding="utf-8")
     assert "## Research Context" in note
     assert "Cleanlist.ai: A LinkedIn scraping tool." in note
 
@@ -659,7 +659,7 @@ def test_sync_links_reel_note_to_pre_existing_resource_and_folds_into_topic_inde
 
     sync(str(tmp_path))
 
-    reel_note = (tmp_path / "reels" / "2026-07-01-RLK1.md").read_text(encoding="utf-8")
+    reel_note = (tmp_path / "reels" / "great-reel.md").read_text(encoding="utf-8")
     assert "## Attached Resource" in reel_note
     assert "[[resources/RLK1-a-great-guide]]" in reel_note
 

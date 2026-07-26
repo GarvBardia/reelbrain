@@ -190,9 +190,30 @@ def extract_note_fields(page: dict) -> dict:
     }
 
 
-def note_filename(fields: dict) -> str:
-    date = fields["posted"] or "undated"
-    return f"{date}-{fields['shortcode']}.md"
+# Reel note filenames are the main_point itself (slugified), not date-shortcode
+# -- so Obsidian's graph view shows readable node names. See Task 2,
+# PROGRESS.md, and scripts/rename_reel_notes.py (the one-time migration for
+# notes written before this convention).
+MAIN_POINT_SLUG_MAX_LEN = 60
+
+
+def slugify_main_point(main_point: str) -> str:
+    slug = re.sub(r"[^a-z0-9-]+", "-", (main_point or "").strip().lower()).strip("-")
+    slug = slug[:MAIN_POINT_SLUG_MAX_LEN].rstrip("-")
+    return slug or "untitled"
+
+
+def note_filename(fields: dict, used_slugs: Optional[set[str]] = None) -> str:
+    """Slugified main_point, max MAIN_POINT_SLUG_MAX_LEN chars. If that slug is
+    already taken (by a DIFFERENT save, tracked via used_slugs across a sync
+    pass), the shortcode is appended to disambiguate -- two reels can genuinely
+    share a near-identical main_point."""
+    slug = slugify_main_point(fields["title"])
+    if used_slugs is not None:
+        if slug in used_slugs:
+            slug = f"{slug}-{fields['shortcode'].lower()}"
+        used_slugs.add(slug)
+    return f"{slug}.md"
 
 
 def build_note(fields: dict, creator: Optional[str], body_markdown: str,
@@ -425,10 +446,11 @@ def sync(vault_path: Optional[str] = None) -> dict:
     all_fields = [extract_note_fields(page) for page in pages]
     all_fields = [f for f in all_fields if f["shortcode"]]
     existing = existing_notes_by_shortcode(vault)
+    used_slugs = {path.stem for path in existing.values()}
     path_by_shortcode: dict[str, Path] = {}
     for fields in all_fields:
         path_by_shortcode[fields["shortcode"]] = existing.get(
-            fields["shortcode"], vault / "reels" / note_filename(fields)
+            fields["shortcode"], vault / "reels" / note_filename(fields, used_slugs)
         )
 
     resource_notes = existing_resource_notes(vault)
