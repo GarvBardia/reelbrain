@@ -1,5 +1,90 @@
 # PROGRESS.md — hardening/deployment session log
 
+## ⭐ Cleanup pass: Notion deep clean, vault renaming, orphan repair, full re-sync
+
+Four-task cleanup. Final state: **150 Notion rows = 150 vault reel notes, 0
+dangling wikilinks, 0 rows archived, 637 tests passing.**
+
+### Task 1 — Notion deep clean (`scripts/notion_deep_clean.py`)
+
+Four archive conditions, print-and-stop by default (`--apply` to act, never
+hard-deletes — sets Status to Archived).
+
+**Two conditions needed a carve-out the spec didn't anticipate.** Every
+unrecovered placeholder row has empty Topics AND value_score "3" by
+construction (`gemini_pipe.degraded_extraction`'s defaults), and several embed
+as near-duplicates of *each other* since they're all the same fallback text.
+So conditions 2 (pure noise) and 4 (near-dup-only) would have swept up every
+placeholder immediately, overriding condition 1's explicit "skip rows with
+recovery attempts remaining". Live proof: 11 of 15 raw hits were exactly this.
+Both conditions now exclude placeholder titles; condition 1 is authoritative
+for those rows.
+
+**0 rows archived.** The 3 genuine candidates all had `content_type: unknown`
+(failed extraction, not worthless content), so per the chosen order they went
+through topic-tagging first — and all 3 came back with real tags
+(`DatJq40lVD_` → trading-bots, `DbB9FZZiZgc` → client-acquisition,
+`DZqghOOt0bJ` → education/humor). None warranted archiving. 1 new candidate
+(`DbM7N7kPo3V`) surfaced later and is pending tagging.
+
+### Task 2 — reel notes named by main_point (`scripts/rename_reel_notes.py`)
+
+Obsidian's graph showed opaque codes. Reel notes are now named by slugified
+main_point (60 chars max, shortcode appended on collision).
+`obsidian_sync.note_filename()` follows the same convention for new notes, and
+`sync()` seeds a `used_slugs` set from existing filenames so a new note never
+collides with a renamed one. Frontmatter shortcode is untouched — Notion
+operations never depend on the filename.
+
+**129/129 renamed**, bodies intact, zero dangling links introduced (verified by
+a full-vault audit). Vault backed up first. Also repaired 4 **pre-existing**
+dangling links in IMPLEMENTATION_QUEUE.md: they were hand-written in Phase 5
+with guessed date prefixes that never matched a real file
+(`2026-07-15-DaVWwzxp6n8` vs the real `2026-07-03-...`). Re-derived from
+frontmatter — and the Phase 5 lesson is recorded: derive wikilinks, never
+hand-write them.
+
+### Task 3 — orphan scan/repair (`scripts/vault_orphans.py`)
+
+Two documented deviations, both driven by what the code actually does:
+
+1. **Case 1 as specified is unreachable here.** Reel frontmatter itself
+   contains `topics: - "[[topics/x]]"`, so a topic with 2+ reels *always* has
+   inbound links and can never be an orphan. A test caught this. Redefined to
+   the reachable version: a topic that has the reels but is missing its
+   generated "## Saved Reels" block.
+2. **Case 4 never deletes a row in an active workflow state** (Failed — retry /
+   Awaiting DM / processing) even when contentless — "Failed — retry" means the
+   pipeline still intends to reprocess it. 4 rows protected this way.
+
+**Bug this run exposed and fixed:** case 2 built its Gemini tagging list
+straight from orphan notes, bypassing the placeholder guard
+`notion_deep_clean.find_topicless_rows` already had. Gemini then described the
+PLACEHOLDER TEXT instead of the reel, writing junk tags ("captions",
+"transcripts", "content-unavailable") onto 2 rows. Those writes were reverted
+in Notion, the guard moved into a new extracted `build_tagging_rows()`, and a
+regression test pins it.
+
+**Orphans 33 → 22 while the vault GREW 129 → 150** (16 reels reconnected via
+tagging, 11 placeholders correctly skipped, 0 deleted, 0 resource/topic
+orphans). 18 reels still need tags, blocked only by the Gemini free-tier cap.
+
+### Task 4 — full sync + verify
+
+Sync is idempotent (150 notes both runs). Verified: Notion active rows (150) ==
+vault reel notes (150); 0 dangling wikilinks vault-wide; 13 resource notes; 159
+topic notes. Scout re-run over the cleaned dataset — IMPLEMENTATION_QUEUE.md
+now ranks the competitor-intel dashboard into the top 5 and flags 9Router's
+raised urgency (the Gemini 20/day cap blocked three separate jobs today).
+
+**Standing blocker:** the Gemini free tier is 20 requests/day/model. It stopped
+resource ingestion, topic backfill, and orphan reconnection today. The
+remaining backlog (18 untagged reels, 11 placeholder rows, 4 retry-pending
+fetches) needs either several days of small runs, the scheduled recovery
+worker, or a paid/fallback route — which is precisely why 9Router sits at #2.
+
+---
+
 ## ⭐ Full resource-ingestion batch run (Phase 4 of the six-phase build)
 
 Ran `scripts/ingest_resources.py` against every Saves row with a non-empty
