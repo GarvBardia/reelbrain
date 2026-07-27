@@ -142,6 +142,13 @@ class Extraction(BaseModel):
     # genuinely nothing to do. Drives the Notion "Suggested action" property
     # and the Obsidian note's "## Do" line. Empty string on the degraded path.
     suggested_action: str = ""
+    # 1-2 sentences a reader with ZERO context could follow -- no jargon
+    # without a plain-language gloss, no assuming they saw the reel. This is
+    # the first line of every Obsidian note and the topic-page listing text.
+    # main_point stays precise and names tools; plain_summary EXPLAINS.
+    # Defaults to "" so rows extracted before this field existed still
+    # validate (callers fall back to main_point).
+    plain_summary: str = ""
     content_type: Literal[
         "tutorial",
         "insight",

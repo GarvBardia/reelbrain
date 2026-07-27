@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 from app import notion_writer, store
+from app.topic_descriptions import TOPIC_DESCRIPTIONS
 
 logger = logging.getLogger("reelbrain.obsidian")
 
@@ -187,6 +188,7 @@ def extract_note_fields(page: dict) -> dict:
         "posted": posted or (page.get("created_time", "") or "")[:10],
         "gate_resource": _prop(props, "Gate resource").get("url") or "",
         "suggested_action": _rt_text(_prop(props, "Suggested action").get("rich_text", [])),
+        "plain_summary": _rt_text(_prop(props, "Plain summary").get("rich_text", [])),
     }
 
 
@@ -239,6 +241,12 @@ def build_note(fields: dict, creator: Optional[str], body_markdown: str,
     lines.append("")
     lines.append(f"# {fields['title'] or fields['shortcode']}")
     lines.append("")
+    # The zero-context explanation goes FIRST, before priority/score, so the
+    # note makes sense to someone who has never seen the reel (Phase C).
+    plain = fields.get("plain_summary", "")
+    if plain:
+        lines.append(f"> {plain}")
+        lines.append("")
     # Plain-text Priority/Score lines, no emoji — visible immediately on
     # opening the note, not just buried in frontmatter YAML.
     if fields["priority"]:
@@ -324,8 +332,11 @@ def _format_entry_line(entry: dict) -> str:
         return f"- 📄 [[resources/{entry['stem']}|{entry['title']}]] — {entry.get('main_point') or 'attached resource'}"
     priority_part = f"Priority: {entry['priority']}" if entry.get("priority") else "Priority: —"
     score_part = f"Score: {entry['value_score']}" if entry["value_score"] is not None else "Score: —"
-    main_point = entry["main_point"] or "(no main point)"
-    return f"- [[{folder}/{entry['stem']}|{entry['title']}]] — {priority_part} — {score_part} — {main_point}"
+    # Phase C: the listing text is the zero-context explanation when we have
+    # one -- a topic page should be readable by someone who's never seen any
+    # of these reels. Falls back to main_point for rows not yet backfilled.
+    summary = entry.get("plain_summary") or entry["main_point"] or "(no main point)"
+    return f"- [[{folder}/{entry['stem']}|{entry['title']}]] — {priority_part} — {score_part} — {summary}"
 
 
 def write_stub_index(vault: Path, folder: str, name: str, entries: list[dict]) -> Path:
@@ -333,8 +344,16 @@ def write_stub_index(vault: Path, folder: str, name: str, entries: list[dict]) -
     tagged with this topic/creator, regenerated every sync. Sorted value desc,
     then date desc. Anything the user wrote above this block survives."""
     path = vault / folder / f"{_slugify(name)}.md"
+    # Phase C: a plain-English statement of what this category actually covers,
+    # so a topic page means something to someone with zero context. Lives INSIDE
+    # the auto block (regenerated every sync), not just in default_header, which
+    # only applies the first time the file is created.
+    description = TOPIC_DESCRIPTIONS.get(name, "")
     default_header = f"# {name}\n\n## Notes\n"
-    lines = ["## Saved Reels", ""]
+    lines: list[str] = []
+    if description:
+        lines += ["### What this covers", "", description, ""]
+    lines += ["## Saved Reels", ""]
     lines.extend(_format_entry_line(e) for e in _sort_entries(entries))
     upsert_auto_block(path, default_header, lines)
     return path
@@ -485,6 +504,7 @@ def sync(vault_path: Optional[str] = None) -> dict:
             "value_score": int(raw_score) if str(raw_score).isdigit() else None,
             "posted": fields["posted"],
             "main_point": main_point,
+            "plain_summary": fields.get("plain_summary", ""),
             "priority": fields["priority"],
         }
 

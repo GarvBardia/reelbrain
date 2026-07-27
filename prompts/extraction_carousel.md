@@ -18,7 +18,8 @@ You are extracting takeaways from a single Instagram CAROUSEL post for a persona
 - `topic_tags`: prefer the provided taxonomy candidates when they genuinely fit; only introduce a new tag if none fit. Lowercase, kebab-case, 3-6 tags.
 - `named_entities`: the specific, look-up-able things named anywhere across the slides — exact tool/product/service names, named techniques, stated numbers. Not categories.
 - `suggested_action`: ONE imperative line — the single most direct next step (e.g. "Install the Firecrawl MCP server and scrape one doc"). If purely informational, use exactly "none — informational".
-- `plain_summary`: 1-2 sentences a curious 12-year-old could follow, assuming zero prior knowledge of any tool named. Explain what it lets you DO, in plain words. Bad: "Uses MCP to chain agents." Good: "Connects Claude to other apps so it can do multi-step jobs on its own."
+- `main_point` must STAND ALONE — assume the reader never saw the post and has never heard of any tool named on the slides. Never use jargon without a plain-language gloss in the same sentence.
+- `plain_summary`: 1-2 deliberately simple sentences for someone who has never heard of ANY of these tools. Explain what it actually lets you DO and why that matters, in everyday words. Bad: "Uses MCP to chain agents." Good: "Connects Claude to other apps so it can do multi-step jobs on its own."
 - `comment_gate`: set `detected: true` only if the post explicitly asks viewers to comment a word/phrase to receive something in DM. Extract the exact `keyword` and what was promised.
 - `content_type`: pick from the 7 allowed values based on what the slides actually do — a step-by-step carousel is `tutorial`, a list of tools is `resource_drop`.
 - `research_context`: always return an empty array `[]`. A separate pass fills it in.

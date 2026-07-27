@@ -20,7 +20,11 @@ def test_prompts_carry_suggested_action_and_value_anchors(name):
     assert "none — informational" in text
     assert "complete, actionable system" in text          # value_score 5 anchor
     assert "thin comment-bait" in text                    # value_score 2 anchor
-    assert "name the specific tools" in text              # main_point specificity
+    # main_point specificity. Phase C replaced the earlier "must name the
+    # specific tools" wording with a stronger stand-alone requirement that
+    # still mandates keeping the tool names (and adds a jargon-gloss rule).
+    assert "STANDS ALONE" in text
+    assert "Keep the specific tool names" in text
 
 
 # --- Notion property write + read-back ------------------------------------------

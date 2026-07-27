@@ -111,6 +111,7 @@ def extract_saves_fields(page: dict) -> dict:
     status_label = ((props.get("Status") or {}).get("select") or {}).get("name", "")
     title = _rt_text((props.get("Title") or {}).get("title"))
     suggested_action = _rt_text((props.get("Suggested action") or {}).get("rich_text")) or None
+    plain_summary = _rt_text((props.get("Plain summary") or {}).get("rich_text")) or None
     return {
         "shortcode": shortcode,
         "permalink": permalink,
@@ -119,6 +120,7 @@ def extract_saves_fields(page: dict) -> dict:
         "gate_keyword": gate_keyword,
         "title": title,
         "suggested_action": suggested_action,
+        "plain_summary": plain_summary,
         "page_id": page.get("id", ""),
         "url": page.get("url", ""),
     }
@@ -259,6 +261,10 @@ def _build_properties(
             # One imperative next step (or "none — informational"). Declared on
             # the live DB by scripts/add_suggested_action_property.py.
             props["Suggested action"] = {"rich_text": _rich_text(extraction.suggested_action)}
+        if extraction.plain_summary:
+            # Zero-context explanation; declared by
+            # scripts/add_plain_summary_property.py.
+            props["Plain summary"] = {"rich_text": _rich_text(extraction.plain_summary)}
     return props
 
 
