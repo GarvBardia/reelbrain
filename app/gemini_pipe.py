@@ -18,10 +18,17 @@ from app.models import Extraction, ReelData, ResearchContextItem, degraded_extra
 logger = logging.getLogger("reelbrain.gemini")
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-# gemini-2.0-flash is no longer reliably on the free tier (returns immediate 429s).
-# The current free-tier lineup is the Gemini 2.5 family — 2.5-flash is the direct
-# fast/cheap replacement. Override via GEMINI_MODEL env var if needed.
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest").strip()
+# MUST be a CONCRETE, PINNED model id — never a rolling alias like
+# `gemini-flash-latest` or `gemini-flash`. INCIDENT (2026-07-28): the default was
+# `gemini-flash-latest`, which Google silently resolves to whatever the newest
+# Flash is at call time. Over a 28-day window that alias moved across 2.5 / 3.5 /
+# 3.6 Flash, and the free tier's ~20 req/day cap is PER CONCRETE MODEL — so calls
+# scattered across three independent quotas, the newer two got exhausted by other
+# usage, and daily_runner 429'd on call one while 2.5-flash sat at 1/20 unused.
+# Pinning to one real version makes the per-model quota trackable (see
+# app/gemini_quota.py). `gemini-2.5-flash` is a current, valid, non-aliased id
+# (confirmed against ai.google.dev/gemini-api/docs/models) with fresh quota here.
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
 # text-embedding-004 was shut down by Google on Jan 14, 2026 — gemini-embedding-001
 # is the replacement. It defaults to 3072-dim output; we pin it to 768 via
 # output_dimensionality so it stays compatible with the existing sqlite-vec schema
@@ -89,6 +96,16 @@ def _enforce_gemini_call_spacing() -> None:
         if elapsed < MIN_GEMINI_CALL_SPACING_SECONDS:
             time.sleep(MIN_GEMINI_CALL_SPACING_SECONDS - elapsed)
     store.set_state(_LAST_GEMINI_CALL_STATE_KEY, str(time.time()))
+    # Record the call against the configured model's daily quota. Every one of
+    # the six generate_content sites routes through here first (embeddings, a
+    # separate model + quota, do NOT), so this is the single choke point where
+    # the true per-model call count is known.
+    try:
+        from app import gemini_quota
+
+        gemini_quota.record_call(GEMINI_MODEL)
+    except Exception:  # noqa: BLE001 - quota bookkeeping must never break a call
+        logger.debug("gemini_quota.record_call failed", exc_info=True)
 
 
 def _has_audio_stream(video_path: str) -> Optional[bool]:

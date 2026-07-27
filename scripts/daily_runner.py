@@ -223,9 +223,14 @@ def run_day(
     }
 
 
-def format_log_paragraph(summary: dict, named_entities_remaining: Optional[int]) -> str:
+def format_log_paragraph(summary: dict, named_entities_remaining: Optional[int],
+                         model: str = "?") -> str:
     """ONE clear paragraph: what ran, quota used, what's still pending, and the
-    named_entities countdown (the number the user actually wants to watch)."""
+    named_entities countdown (the number the user actually wants to watch).
+
+    Always names the Gemini model, and names it again on a 429 — so debugging a
+    quota stop never requires opening the AI Studio dashboard to learn which
+    model version actually hit its cap (the incident that motivated this)."""
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     mode = "DRY-RUN" if summary["dry_run"] else "live"
 
@@ -239,10 +244,10 @@ def format_log_paragraph(summary: dict, named_entities_remaining: Optional[int])
             pending_bits.append(f"{step.name}: {step.pending_before} pending — {step.note}")
 
     parts = [
-        f"[{stamp}] {mode} pass. "
+        f"[{stamp}] {mode} pass (model {model}). "
         f"Ran: {', '.join(ran_bits) if ran_bits else 'nothing (no pending work)'}. "
         f"Quota: {summary['used']}/{summary['budget']} calls used"
-        + (", STOPPED on a 429" if summary["quota_stopped"] else "")
+        + (f", STOPPED on a 429 (model {model} exhausted)" if summary["quota_stopped"] else "")
         + "."
     ]
     if pending_bits:
@@ -389,15 +394,29 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true",
                         help="list what each step WOULD do; makes no Gemini calls and no writes")
-    parser.add_argument("--budget", type=int, default=DAILY_GEMINI_BUDGET)
+    parser.add_argument("--budget", type=int, default=None,
+                        help="override the day's call budget; default is the TRUE "
+                             "remaining quota for the configured model (gemini_quota)")
     parser.add_argument("--log-file", default=LOG_FILE)
     args = parser.parse_args()
 
-    print(f"daily runner — budget {args.budget} Gemini calls"
+    from app import gemini_pipe, gemini_quota
+
+    model = gemini_pipe.GEMINI_MODEL
+    # The real remaining budget for THIS model today, measured from persisted call
+    # timestamps — not an assumed "20 fresh every run". A second run the same day
+    # correctly sees a smaller budget; a model already spent elsewhere sees ~0.
+    if args.budget is not None:
+        budget = args.budget
+    else:
+        budget = gemini_quota.remaining_today(model, limit=DAILY_GEMINI_BUDGET)
+
+    print(f"daily runner — model {model}, budget {budget} Gemini calls "
+          f"(true remaining today)"
           f"{' (DRY-RUN)' if args.dry_run else ''}\n")
 
-    summary = run_day(build_steps(), budget=args.budget, dry_run=args.dry_run)
-    paragraph = format_log_paragraph(summary, count_named_entities_remaining())
+    summary = run_day(build_steps(), budget=budget, dry_run=args.dry_run)
+    paragraph = format_log_paragraph(summary, count_named_entities_remaining(), model=model)
 
     print("\n" + "=" * 70)
     if args.dry_run:

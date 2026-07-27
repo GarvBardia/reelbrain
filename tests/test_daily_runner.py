@@ -285,3 +285,17 @@ def test_dry_run_plan_spends_no_budget():
     step, _ = _step("named_entities", pending=5, result={"written": 5})
     summary = dr.run_day([step], budget=20, dry_run=True, print_fn=lambda m: None)
     assert summary["used"] == 0
+
+
+# --- the log names the Gemini model (the quota-incident fix) -------------------------
+
+def test_log_paragraph_names_the_model():
+    line = dr.format_log_paragraph(_summary([]), named_entities_remaining=5,
+                                   model="gemini-2.5-flash")
+    assert "model gemini-2.5-flash" in line
+
+
+def test_log_paragraph_names_the_model_on_a_429():
+    line = dr.format_log_paragraph(_summary([], quota=True), named_entities_remaining=5,
+                                   model="gemini-2.5-flash")
+    assert "STOPPED on a 429 (model gemini-2.5-flash exhausted)" in line
