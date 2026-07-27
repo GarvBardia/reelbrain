@@ -3,6 +3,7 @@ blocks.children.list by block id), real local SQLite + sqlite-vec for the Relate
 links, tmp_path as the vault."""
 from app import obsidian_sync, store
 from app.obsidian_sync import AUTO_END, AUTO_START, _slugify, sync, upsert_auto_block
+from app.vault_paths import INDEX_FILENAME
 
 
 # --- fake Notion client (read side) -------------------------------------------
@@ -267,8 +268,8 @@ def test_topics_index_lists_counts(monkeypatch, tmp_path):
     _seed_row("IX2")
 
     sync(str(tmp_path))
-    index = (tmp_path / "_index.md").read_text(encoding="utf-8")
-    assert "# Topics Index" in index
+    index = (tmp_path / INDEX_FILENAME).read_text(encoding="utf-8")
+    assert "# ReelBrain Index" in index
     assert "[[topics/sleep|sleep]] — 2 saves" in index
     assert "[[topics/money|money]] — 1 save" in index
 
@@ -461,7 +462,7 @@ def test_saved_reels_sorted_by_value_desc_then_date_desc(monkeypatch, tmp_path):
 
 
 def test_index_groups_by_priority_first_with_topic_counts(monkeypatch, tmp_path):
-    """_index.md's new structure (replacing the old alphabetical/by-volume topic
+    """ReelBrain-Index.md's new structure (replacing the old alphabetical/by-volume topic
     dump): grouped by Priority tier first, each section listing topic links with
     a count of how many reels at that tier carry the topic."""
     pages = [
@@ -479,7 +480,7 @@ def test_index_groups_by_priority_first_with_topic_counts(monkeypatch, tmp_path)
         _seed_row(s)
 
     sync(str(tmp_path))
-    index = (tmp_path / "_index.md").read_text(encoding="utf-8")
+    index = (tmp_path / INDEX_FILENAME).read_text(encoding="utf-8")
 
     assert AUTO_START in index and AUTO_END in index
     assert "## High Priority" in index
@@ -502,7 +503,7 @@ def test_index_priority_section_shows_none_when_empty(monkeypatch, tmp_path):
     _seed_row("SOLO1")
 
     sync(str(tmp_path))
-    index = (tmp_path / "_index.md").read_text(encoding="utf-8")
+    index = (tmp_path / INDEX_FILENAME).read_text(encoding="utf-8")
     high_section = index[index.index("## High Priority"):index.index("## Medium Priority")]
     assert "(none)" in high_section
 
@@ -515,7 +516,7 @@ def test_index_rows_without_priority_property_fall_into_low(monkeypatch, tmp_pat
     _seed_row("NOPRI1")
 
     sync(str(tmp_path))
-    index = (tmp_path / "_index.md").read_text(encoding="utf-8")
+    index = (tmp_path / INDEX_FILENAME).read_text(encoding="utf-8")
     low_section = index[index.index("## Low Priority"):]
     assert "[[topics/sleep|sleep]] — 1 save" in low_section
 
@@ -526,11 +527,11 @@ def test_index_manual_preamble_survives_resync(monkeypatch, tmp_path):
     _seed_row("IXP1")
     sync(str(tmp_path))
 
-    index_path = tmp_path / "_index.md"
+    index_path = tmp_path / INDEX_FILENAME
     content = index_path.read_text(encoding="utf-8")
     index_path.write_text(
-        content.replace("# Topics Index", "# Topics Index\n\nMy personal preamble note.")
-        if "# Topics Index" in content else "My personal preamble note.\n\n" + content,
+        content.replace("# ReelBrain Index", "# ReelBrain Index\n\nMy personal preamble note.")
+        if "# ReelBrain Index" in content else "My personal preamble note.\n\n" + content,
         encoding="utf-8",
     )
 
