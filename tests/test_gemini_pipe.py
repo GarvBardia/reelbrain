@@ -241,7 +241,11 @@ def test_caption_only_extraction_prompt_carries_no_audio_upload(monkeypatch):
 
     def _fake_call(prompt):
         calls.append(prompt)
-        return Extraction(main_point="x", value_score=2).model_dump_json()
+        # topic_tags present so the Phase-H empty-topics retry does NOT fire --
+        # this test is about which CALL PATH is used, not about that retry
+        # (which has its own tests in test_topic_guarantee.py).
+        return Extraction(main_point="x", value_score=2,
+                          topic_tags=["claude-ai"]).model_dump_json()
 
     monkeypatch.setattr(gemini_pipe, "_call_gemini_text_only", _fake_call)
     monkeypatch.setattr(gemini_pipe, "_call_gemini", lambda *a, **kw: (_ for _ in ()).throw(

@@ -7,14 +7,18 @@ database's data source ID once (cached) and uses it everywhere.
 """
 from __future__ import annotations
 
+import logging
 import os
 from typing import Optional
 
+from app import topic_guarantee
 from app.models import Extraction, ReelData
 
 # .strip(): env values pasted into a hosting dashboard often carry a trailing
 # newline, which makes an illegal HTTP header value (httpx.LocalProtocolError)
 # when the token goes into an Authorization header. Strip every credential/ID.
+logger = logging.getLogger("reelbrain.notion_writer")
+
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN", "").strip()
 NOTION_DB_ID = os.environ.get("NOTION_DB_ID", "").strip()
 NOTION_CREATORS_DB_ID = os.environ.get("NOTION_CREATORS_DB_ID", "").strip()
@@ -273,7 +277,20 @@ def _build_properties(
         props["Related"] = {"relation": [{"id": pid} for pid in related_page_ids]}
     if extraction:
         props["Content type"] = {"select": {"name": extraction.content_type}}
-        props["Topics"] = {"multi_select": [{"name": t} for t in extraction.topic_tags]}
+        # PHASE H GUARD — the backstop that makes "no reel without topics"
+        # structural rather than merely likely. Every caller in the codebase
+        # funnels through here, so refusing an empty write here is what
+        # actually enforces the guarantee. Logs loudly and applies the derived
+        # fallback (from named_entities + content_type) instead of persisting
+        # an empty field. Never invents a subject.
+        topics = topic_guarantee.ensure_topics(extraction)
+        if not extraction.topic_tags:
+            logger.error(
+                "REFUSING to write %s with zero Topics — applying fallback %s. "
+                "An empty-topic row becomes a vault orphan and can never gain "
+                "Priority from a topic match.", reel.shortcode, topics,
+            )
+        props["Topics"] = {"multi_select": [{"name": t} for t in topics]}
         props["Value score"] = {"select": {"name": str(extraction.value_score)}}
         props["Priority"] = {"select": {"name": extraction.priority}}
         props["Comment gate"] = {"checkbox": extraction.comment_gate.detected}

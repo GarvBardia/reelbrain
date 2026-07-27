@@ -46,6 +46,15 @@ CAROUSEL_PROMPT_TEMPLATE_PATH = (
 # single hashtag or emoji).
 MIN_CAPTION_WORDS_FOR_EXTRACTION = 10
 
+# Phase H: when Gemini returns ZERO topic_tags, ask once more with an explicit
+# demand before accepting it. One extra call, only on the empty case.
+EMPTY_TOPICS_RETRY_INSTRUCTION = (
+    "\n\nIMPORTANT: your previous answer returned an EMPTY topic_tags list. "
+    "You MUST return 3-6 lowercase-kebab-case topic tags describing what this "
+    "is about. Reuse the taxonomy candidates above where they fit. Returning "
+    "an empty topic_tags list is not an acceptable answer."
+)
+
 # Free tier is ~10-15 RPM at <20 fetches/day total — this just prevents bursts
 # if /retry and /capture happen to overlap.
 _GEMINI_SEMAPHORE = threading.Semaphore(2)
@@ -523,6 +532,7 @@ def run_caption_only_extraction(
         )
         return _degraded(caption)
 
+    extraction = _retry_if_topics_empty(extraction, prompt, _call_gemini_text_only)
     _merge_comment_gate(extraction, caption)
     extraction.priority = compute_priority(extraction.topic_tags, extraction.value_score)
     extraction.research_context = run_research_context(extraction.named_entities)
@@ -777,6 +787,25 @@ def run_research_context(named_entities: list[str]) -> list[ResearchContextItem]
         text = (response.text or "").strip()
         results.append(ResearchContextItem(topic=entity, context=text or NOT_FOUND_VIA_SEARCH))
     return results
+
+
+def _retry_if_topics_empty(extraction, prompt: str, call_fn):
+    """One extra Gemini call when topic_tags came back empty (Phase H).
+    Returns the better of the two extractions. Never raises — on any failure
+    the original extraction is kept and the notion_writer guard still applies
+    the derived fallback, so a row can never be written topic-less."""
+    if extraction.topic_tags:
+        return extraction
+    logger.warning("extraction returned zero topic_tags — retrying once with an explicit demand")
+    try:
+        retried = _parse(call_fn(prompt + EMPTY_TOPICS_RETRY_INSTRUCTION))
+    except Exception:  # noqa: BLE001 - best effort; fallback chain covers us
+        logger.warning("topic retry failed; the derive-fallback guard will apply", exc_info=True)
+        return extraction
+    if retried.topic_tags:
+        logger.info("topic retry succeeded: %s", retried.topic_tags)
+        return retried
+    return extraction
 
 
 def _merge_comment_gate(extraction: Extraction, caption: Optional[str]) -> None:
