@@ -81,6 +81,29 @@ def send_ntfy_alert(message: str) -> bool:
         return False
 
 
+def send_push(message: str, title: str = "ReelBrain", tags: str = "warning",
+              priority: str = "high") -> bool:
+    """Generic ntfy push (the cookie alert above is a specialization of this).
+    Used by health_watchdog to send its single daily failure notification.
+    Returns True on success; never raises."""
+    if not NTFY_TOPIC:
+        return False
+    try:
+        import httpx
+
+        response = httpx.post(
+            f"{NTFY_BASE_URL}/{NTFY_TOPIC}",
+            content=message.encode("utf-8"),
+            headers={"Title": title, "Priority": priority, "Tags": tags},
+            timeout=NTFY_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        return True
+    except Exception:  # noqa: BLE001 - best-effort notification, never the critical path
+        logger.warning("ntfy.sh push failed", exc_info=True)
+        return False
+
+
 def send_notion_alert(message: str) -> Optional[dict]:
     """Creates a distinctly-titled page under the parent page — a lightweight
     "System Alerts" area without needing a whole new database."""

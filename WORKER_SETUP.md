@@ -214,3 +214,29 @@ Identical to the nightly entry above, with two differences:
    requirement, "Do not start a new instance", allow run-on-demand).
 
 Right-click → **Run** once, then read the console tail and `TAXONOMY_DRIFT.md`.
+
+---
+
+# Health Watchdog (`health_watchdog.py`) — already in the nightly .bat
+
+Runs six daily checks and sends ONE ntfy push only if something failed —
+**silence means healthy**. It's already wired into `nightly_autonomous.bat`
+after `daily_runner.py`, so the existing nightly Task Scheduler entry runs it;
+there is no separate schedule to create.
+
+Checks: `/health` (cookie_health + sqlite_vec), Daily Reflection page edited
+within 26h, vault count == Notion count, all 4 GitHub Actions last-runs green,
+daily_runner not stuck on quota (3+ zero-progress 429 days), and zero
+empty-Topics rows.
+
+Needs, in `.env` (all optional — a missing one degrades that check, never the
+whole run): `REELBRAIN_URL` (default the Render URL), `GITHUB_REPO` (default
+`GarvBardia/reelbrain`), and `NTFY_TOPIC` for the push.
+
+**The GitHub Actions check needs `GITHUB_TOKEN`** — the repo is private, so an
+unauthenticated read can't see it. Create a fine-grained PAT scoped to this repo
+with **Actions: Read-only** and put it in `.env` as `GITHUB_TOKEN=...`. Without
+it, that one check is skipped (reported, but never a false alarm) — every other
+check still runs.
+
+Manual run (never pushes): `python scripts\health_watchdog.py --dry-run`
