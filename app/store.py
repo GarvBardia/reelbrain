@@ -520,6 +520,10 @@ def get_attach_candidates() -> list[dict]:
             "note": fields["note"] or "",
             "gate_keyword": fields["gate_keyword"] or "",
             "topics": digest_fields["topics"],
+            # Phase G: the exact tools this reel named. This is what makes
+            # attach_matching's NAMED_ENTITY_MATCH_WEIGHT actually do anything
+            # -- before it was persisted, that whole code path was inert.
+            "named_entities": digest_fields.get("named_entities") or [],
             "created_at": page.get("created_time", ""),
             "page_id": fields["page_id"],
         })

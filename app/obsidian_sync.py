@@ -190,6 +190,7 @@ def extract_note_fields(page: dict) -> dict:
         "gate_resource": _prop(props, "Gate resource").get("url") or "",
         "suggested_action": _rt_text(_prop(props, "Suggested action").get("rich_text", [])),
         "plain_summary": _rt_text(_prop(props, "Plain summary").get("rich_text", [])),
+        "named_entities": [e["name"] for e in _prop(props, "Named entities").get("multi_select", [])],
     }
 
 
@@ -234,6 +235,8 @@ def build_note(fields: dict, creator: Optional[str], body_markdown: str,
         lines.append("topics:")
         for topic in fields["topics"]:
             lines.append(f'  - "[[topics/{_slugify(topic)}]]"')
+    if fields.get("named_entities"):
+        lines.append(f"named_entities: [{', '.join(fields['named_entities'])}]")
     if fields["url"]:
         lines.append(f"url: {fields['url']}")
     if fields["posted"]:
@@ -274,6 +277,11 @@ def build_note(fields: dict, creator: Optional[str], body_markdown: str,
         lines.append("## Attached Resource")
         lines.append("")
         lines.append(f"- [[resources/{resource_stem}]]")
+    if fields.get("named_entities"):
+        lines.append("")
+        lines.append("## Named entities")
+        lines.append("")
+        lines.append(", ".join(fields["named_entities"]))
     if related_stems:
         lines.append("")
         lines.append("## Related")

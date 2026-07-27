@@ -73,6 +73,25 @@ def _get_or_create_creator(client, username: Optional[str], fullname: Optional[s
     return page["id"]
 
 
+def _multi_select_names(values: list[str], limit: int = 10) -> list[str]:
+    """Sanitize values for a Notion multi_select.
+
+    Notion REJECTS a multi_select option containing a comma outright
+    ("Invalid multi_select option, commas not allowed") -- and it rejects the
+    WHOLE property write, not just that option, so one bad entity silently
+    costs you every entity on the row. Learned live: an entity like
+    "Agent answers leads, books calls, and runs follow ups" failed the entire
+    update. Commas become a middle dot; blanks and duplicates are dropped."""
+    seen, out = set(), []
+    for value in values or []:
+        name = (value or "").replace(",", " ·").strip()
+        name = " ".join(name.split())[:100]
+        if name and name.lower() not in seen:
+            seen.add(name.lower())
+            out.append(name)
+    return out[:limit]
+
+
 def _rich_text(content: str) -> list[dict]:
     return [{"type": "text", "text": {"content": content[:2000]}}] if content else []
 
@@ -112,6 +131,7 @@ def extract_saves_fields(page: dict) -> dict:
     title = _rt_text((props.get("Title") or {}).get("title"))
     suggested_action = _rt_text((props.get("Suggested action") or {}).get("rich_text")) or None
     plain_summary = _rt_text((props.get("Plain summary") or {}).get("rich_text")) or None
+    named_entities = [e["name"] for e in (props.get("Named entities") or {}).get("multi_select", [])]
     return {
         "shortcode": shortcode,
         "permalink": permalink,
@@ -121,6 +141,7 @@ def extract_saves_fields(page: dict) -> dict:
         "title": title,
         "suggested_action": suggested_action,
         "plain_summary": plain_summary,
+        "named_entities": named_entities,
         "page_id": page.get("id", ""),
         "url": page.get("url", ""),
     }
@@ -216,6 +237,7 @@ def extract_digest_fields(page: dict) -> dict:
         "priority": (((props.get("Priority") or {}).get("select")) or {}).get("name", ""),
         "value_score": (((props.get("Value score") or {}).get("select")) or {}).get("name", ""),
         "status_label": (((props.get("Status") or {}).get("select")) or {}).get("name", ""),
+        "named_entities": [e["name"] for e in (props.get("Named entities") or {}).get("multi_select", [])],
         "permalink": (props.get("Reel URL") or {}).get("url") or "",
         "page_url": page.get("url", ""),
     }
@@ -261,6 +283,16 @@ def _build_properties(
             # One imperative next step (or "none — informational"). Declared on
             # the live DB by scripts/add_suggested_action_property.py.
             props["Suggested action"] = {"rich_text": _rich_text(extraction.suggested_action)}
+        if extraction.named_entities:
+            # The exact tools/products this reel named. Persisted so /attach's
+            # scorer can match them against a resource's text -- previously
+            # extracted but never stored, which made the single most specific
+            # matching signal inert (see PROGRESS.md, Phase G). Declared on the
+            # live DB by scripts/add_named_entities_property.py.
+            props["Named entities"] = {
+                "multi_select": [{"name": n} for n in
+                                 _multi_select_names(extraction.named_entities, limit=10)]
+            }
         if extraction.plain_summary:
             # Zero-context explanation; declared by
             # scripts/add_plain_summary_property.py.
