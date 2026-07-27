@@ -66,7 +66,13 @@ load_dotenv()
 logger = logging.getLogger("reelbrain.recover_placeholders")
 
 PHOTO_MANUAL_LABEL = "📷 Photo — manual"
+FAILED_RETRY_LABEL = "⚠️ Failed — retry"
 PLACEHOLDER_TITLE = "No caption or transcript available."
+# Statuses this worker owns. Failed—retry rows never had a successful fetch at
+# all (their Title is still the raw permalink), and Render's datacenter IP is
+# exactly why — so the home-IP worker is the right place to retry them
+# automatically, rather than leaving them to rot or archiving them.
+RECOVERABLE_STATUSES = {PHOTO_MANUAL_LABEL, FAILED_RETRY_LABEL}
 MAX_ATTEMPTS = 3
 DEFAULT_PROGRESS_FILE = "recover_placeholders_progress.json"
 QUOTA_MARKERS = ("429", "RESOURCE_EXHAUSTED")
@@ -93,11 +99,21 @@ class _QuotaWatcher(logging.Handler):
             self.quota_hit = True
 
 
+def _title_is_bare_permalink(title: str, shortcode: str) -> bool:
+    """A Failed—retry row never got a real extraction, so its Title is still
+    the raw Instagram permalink the capture came in with."""
+    return bool(title) and title.startswith("http") and shortcode in title
+
+
 def find_placeholder_rows() -> list[dict]:
-    """Every row still needing recovery: Photo — manual status OR the literal
-    placeholder title (which can also appear on non-photo rows whose fetch
-    degraded). Broader than recover_photo_captions.find_placeholder_rows,
-    which only looked at photo_manual rows."""
+    """Every row still needing recovery:
+      - Photo — manual (yt-dlp can't fetch these; OG caption may still work)
+      - ⚠️ Failed — retry (fetch never succeeded at all, usually because
+        Render's datacenter IP is blocked — the home-IP path may well work)
+      - any row still showing the literal placeholder title, whatever its
+        status (a non-photo row whose extraction degraded)
+    Broader than recover_photo_captions.find_placeholder_rows, which only
+    looked at photo_manual rows."""
     from app import notion_writer
 
     pages = notion_writer.find_saves_pages_since("1970-01-01T00:00:00")
@@ -106,7 +122,11 @@ def find_placeholder_rows() -> list[dict]:
         fields = notion_writer.extract_saves_fields(page)
         if not fields["shortcode"]:
             continue
-        if fields["status_label"] == PHOTO_MANUAL_LABEL or fields["title"] == PLACEHOLDER_TITLE:
+        if (
+            fields["status_label"] in RECOVERABLE_STATUSES
+            or fields["title"] == PLACEHOLDER_TITLE
+            or _title_is_bare_permalink(fields["title"], fields["shortcode"])
+        ):
             rows.append(fields)
     return rows
 

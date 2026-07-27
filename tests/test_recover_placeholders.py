@@ -21,6 +21,40 @@ def _page(shortcode, title, status):
     }
 
 
+def test_selection_includes_failed_retry_rows(monkeypatch):
+    """Failed—retry rows never had a successful fetch (Title is still the raw
+    permalink). Render's blocked IP is usually why, so the home-IP worker is
+    exactly the right place to retry them -- rather than archiving them."""
+    from app import notion_writer
+
+    pages = [
+        _page("FAILED1", "https://www.instagram.com/reel/FAILED1/", "⚠️ Failed — retry"),
+        _page("FINE1", "A real title", "📥 Inbox"),
+    ]
+    monkeypatch.setattr(notion_writer, "find_saves_pages_since", lambda iso: pages)
+    assert [r["shortcode"] for r in rp.find_placeholder_rows()] == ["FAILED1"]
+
+
+def test_selection_catches_bare_permalink_title_on_any_status(monkeypatch):
+    """A row whose Title is still its own permalink never got extracted,
+    whatever status it now carries."""
+    from app import notion_writer
+
+    pages = [_page("BARE1", "https://www.instagram.com/reel/BARE1/", "📥 Inbox")]
+    monkeypatch.setattr(notion_writer, "find_saves_pages_since", lambda iso: pages)
+    assert [r["shortcode"] for r in rp.find_placeholder_rows()] == ["BARE1"]
+
+
+def test_unrelated_url_in_title_does_not_falsely_match(monkeypatch):
+    """The permalink check requires the row's OWN shortcode in the URL, so a
+    row whose title merely happens to start with a link isn't swept in."""
+    from app import notion_writer
+
+    pages = [_page("REAL1", "https://example.com/some-article-about-things", "📥 Inbox")]
+    monkeypatch.setattr(notion_writer, "find_saves_pages_since", lambda iso: pages)
+    assert rp.find_placeholder_rows() == []
+
+
 def test_selection_matches_photo_manual_or_placeholder_title(monkeypatch):
     from app import notion_writer
 

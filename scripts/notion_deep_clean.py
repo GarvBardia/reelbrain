@@ -11,8 +11,13 @@ JOB A — find + archive noise rows (never hard-deletes; sets Status to
      worker hasn't touched yet, or hasn't exhausted its attempts, is NEVER
      archived here — "the recovery worker will still get to it" beats
      "presumed dead."
-  2. Pure noise: no Topics, Value score == "3", no Gate keyword, no Gate
-     resource — nothing to recover, nothing gating, nothing tagged.
+  2. No Topics AND no Gate keyword AND no Gate resource AND no real
+     extraction (Content type "unknown" — the marker
+     gemini_pipe.degraded_extraction sets when the model call failed or the
+     caption was too thin, so main_point is just a raw caption dump).
+  2b. DUPLICATE SHORTCODES: rows sharing a shortcode, keeping the RICHEST one
+     (see richness_score — Gate resource first, then a real extraction, then
+     topic count, then a real title, then recency) and archiving the rest.
   3. Stale low-signal: Status = Low signal AND created > 30 days ago (the
      nightly auto-archive's own job, but only acts on updated_at in local
      SQLite, which is ephemeral on Render — this is a Notion-side backstop
@@ -46,6 +51,7 @@ import json
 import logging
 import re
 import sys
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -66,6 +72,16 @@ MAX_RECOVERY_ATTEMPTS = 3  # must match scripts/recover_placeholders.py's MAX_AT
 
 PLACEHOLDER_AGE_DAYS = 7
 LOW_SIGNAL_AGE_DAYS = 30
+
+# Statuses that mean the pipeline still has work planned for this row. The
+# noise conditions must NEVER archive these: "⚠️ Failed — retry" means the
+# fetch never succeeded at all, so "main_point is a raw caption dump" really
+# means "we never got any content" — archiving would discard a saved reel the
+# system never genuinely tried. Photo — manual rows belong to the recovery
+# worker (condition 1 owns them, with its own attempts-tracking).
+# Live case that forced this: 4 Failed—retry rows matched condition 2
+# literally and would have been silently discarded.
+PENDING_WORK_STATUSES = {"⚠️ Failed — retry", PHOTO_MANUAL_LABEL, "processing"}
 
 _EMPTY_TRANSCRIPT_MARKERS = {"(no speech detected)", "(unavailable)", ""}
 
@@ -129,20 +145,78 @@ def _page_body_is_thin(client, page_id: str) -> bool:
     return True
 
 
+def richness_score(page: dict) -> tuple:
+    """How much real content a row carries, for picking the survivor among
+    duplicate shortcodes. Ordered by what's most expensive to recreate:
+    an attached Gate resource (a DM'd link you'd have to re-fetch) outranks
+    everything, then a real extraction, then topics, then a real title, then
+    recency as the final tiebreak."""
+    from app import notion_writer
+
+    props = page.get("properties", {})
+    fields = notion_writer.extract_saves_fields(page)
+    digest = notion_writer.extract_digest_fields(page)
+    content_type = ((props.get("Content type") or {}).get("select") or {}).get("name", "")
+    return (
+        1 if (props.get("Gate resource") or {}).get("url") else 0,
+        1 if content_type not in ("unknown", "") else 0,
+        len(digest["topics"]),
+        1 if fields["title"] and fields["title"] != PLACEHOLDER_TITLE else 0,
+        1 if fields["gate_keyword"] else 0,
+        page.get("last_edited_time", ""),
+    )
+
+
+def find_duplicate_shortcode_losers(pages: list[dict]) -> list[tuple[str, dict, dict]]:
+    """Rows sharing a shortcode, minus the richest one per shortcode.
+    Returns [(shortcode, loser_page, winner_page), ...] so the caller can
+    report exactly what's being kept in each case."""
+    from app import notion_writer
+
+    by_shortcode: dict[str, list[dict]] = defaultdict(list)
+    for page in pages:
+        shortcode = notion_writer.extract_saves_fields(page)["shortcode"]
+        if shortcode:
+            by_shortcode[shortcode].append(page)
+
+    losers = []
+    for shortcode, group in by_shortcode.items():
+        if len(group) < 2:
+            continue
+        ranked = sorted(group, key=richness_score, reverse=True)
+        winner = ranked[0]
+        for loser in ranked[1:]:
+            losers.append((shortcode, loser, winner))
+    return losers
+
+
 def find_archive_candidates(
     pages: list[dict], recovery_progress: dict, *, now_check_body_fn=_page_body_is_thin, client=None,
 ) -> list[dict]:
-    """Returns [{"shortcode", "title", "reasons": [...]}], one entry per row
-    that matches at least one of the four conditions (a row matching more
-    than one condition lists every reason, never duplicated)."""
+    """Returns [{"shortcode", "title", "reasons": [...], "page_id": ...}], one
+    entry per row that matches at least one of the four conditions (a row
+    matching more than one lists every reason, never duplicated).
+
+    Keyed by PAGE ID, not shortcode -- duplicate-shortcode rows are themselves
+    one of the conditions, so two different pages can share a shortcode and
+    must stay distinguishable."""
     from app import notion_writer
 
     candidates: dict[str, dict] = {}
 
-    def _add(shortcode: str, title: str, reason: str) -> None:
-        entry = candidates.setdefault(shortcode, {"shortcode": shortcode, "title": title, "reasons": []})
+    def _add(page_id: str, shortcode: str, title: str, reason: str) -> None:
+        entry = candidates.setdefault(
+            page_id, {"page_id": page_id, "shortcode": shortcode, "title": title, "reasons": []})
         if reason not in entry["reasons"]:
             entry["reasons"].append(reason)
+
+    # Condition 3 (NEW): duplicate shortcodes -- keep the richest, archive the rest.
+    for shortcode, loser, winner in find_duplicate_shortcode_losers(pages):
+        loser_fields = notion_writer.extract_saves_fields(loser)
+        winner_fields = notion_writer.extract_saves_fields(winner)
+        _add(loser.get("id", ""), shortcode, loser_fields["title"],
+             f"duplicate shortcode -- keeping the richer row "
+             f"(kept page {winner_fields['page_id'][:8]}, title {winner_fields['title'][:40]!r})")
 
     for page in pages:
         fields = notion_writer.extract_saves_fields(page)
@@ -157,6 +231,7 @@ def find_archive_candidates(
         status_label = fields["status_label"]
         value_score = digest["value_score"]
         gate_keyword = fields["gate_keyword"]
+        content_type = ((props.get("Content type") or {}).get("select") or {}).get("name", "")
         age_days = _created_days_ago(page)
 
         # Condition 1: permanent placeholder failure
@@ -166,24 +241,33 @@ def find_archive_candidates(
             and age_days > PLACEHOLDER_AGE_DAYS
             and _has_exhausted_recovery_attempts(shortcode, recovery_progress)
         ):
-            _add(shortcode, title, f"permanent placeholder failure ({MAX_RECOVERY_ATTEMPTS} recovery "
+            _add(fields["page_id"], shortcode, title, f"permanent placeholder failure ({MAX_RECOVERY_ATTEMPTS} recovery "
                                     f"attempts exhausted, {age_days:.0f}d old)")
 
-        # Condition 2: pure noise -- DELIBERATELY excludes placeholder rows.
-        # Every placeholder/degraded row (title == PLACEHOLDER_TITLE) already
-        # has topics=[] and value_score="3" by construction (see
-        # gemini_pipe.degraded_extraction's defaults), so a literal reading of
-        # this condition would catch EVERY not-yet-recovered placeholder
-        # immediately -- defeating condition 1's explicit "skip rows with
-        # recovery attempts remaining" carve-out. Condition 1 is the
-        # authoritative rule for placeholder rows; this one is reserved for
-        # genuinely topic-less non-placeholder rows.
-        if title != PLACEHOLDER_TITLE and not topics and value_score == "3" and not gate_keyword and not gate_resource:
-            _add(shortcode, title, "pure noise (no topics, value 3, no gate)")
+        # Condition 2: no topics, no gate of any kind, and no REAL extraction --
+        # i.e. main_point is just a raw caption dump. content_type "unknown" is
+        # the authoritative marker for that: gemini_pipe.degraded_extraction
+        # sets it whenever the extraction call failed or the caption was too
+        # thin, and a genuine extraction always picks one of the 6 real types.
+        #
+        # DELIBERATELY excludes placeholder rows: every unrecovered placeholder
+        # has topics=[] AND content_type "unknown" by construction, so a literal
+        # reading would catch EVERY one immediately -- defeating condition 1's
+        # explicit "skip rows with recovery attempts remaining" carve-out.
+        # Condition 1 is authoritative for placeholder rows.
+        if (
+            title != PLACEHOLDER_TITLE
+            and status_label not in PENDING_WORK_STATUSES
+            and not topics
+            and not gate_keyword
+            and not gate_resource
+            and content_type in ("unknown", "")
+        ):
+            _add(fields["page_id"], shortcode, title, "no topics, no gate, raw caption dump (content_type unknown)")
 
         # Condition 3: stale low-signal
         if status_label == LOW_SIGNAL_LABEL and age_days > LOW_SIGNAL_AGE_DAYS:
-            _add(shortcode, title, f"stale low-signal ({age_days:.0f}d old)")
+            _add(fields["page_id"], shortcode, title, f"stale low-signal ({age_days:.0f}d old)")
 
         # Condition 4: near-duplicate-only, no real content -- also excludes
         # placeholder rows, same reasoning as condition 2. In practice several
@@ -192,25 +276,42 @@ def find_archive_candidates(
         # them here too and, again, defeat condition 1's attempts-tracking.
         if title != PLACEHOLDER_TITLE and topics == ["near-duplicate"] and client is not None:
             if now_check_body_fn(client, fields["page_id"]):
-                _add(shortcode, title, "near-duplicate-only, no real content")
+                _add(fields["page_id"], shortcode, title, "near-duplicate-only, no real content")
 
-    return sorted(candidates.values(), key=lambda c: c["shortcode"])
+    return sorted(candidates.values(), key=lambda c: (c["shortcode"], c["page_id"]))
 
 
 def apply_archive(candidates: list[dict]) -> int:
+    """Archives by PAGE ID, never by shortcode lookup.
+
+    This matters specifically because of the duplicate-shortcode condition:
+    find_page_by_shortcode returns the FIRST match, which for a duplicate pair
+    could be the row we decided to KEEP -- archiving the winner and leaving the
+    loser. Targeting the page id we actually classified removes that whole
+    class of error.
+
+    The local-SQLite mirror is only updated for non-duplicate archives: when a
+    duplicate loser is archived its shortcode still has a live winner row, so
+    marking that shortcode 'archived' locally would misrepresent the survivor."""
     from app import notion_writer, store
 
     count = 0
     for c in candidates:
-        page = notion_writer.find_page_by_shortcode(c["shortcode"])
-        if page is None:
-            logger.warning("archive: %s no longer found in Notion, skipping", c["shortcode"])
+        page_id = c.get("page_id")
+        if not page_id:
+            logger.warning("archive: no page_id for %s, skipping", c["shortcode"])
             continue
-        notion_writer.set_status(page["id"], "archived")
+        is_duplicate_loser = any(r.startswith("duplicate shortcode") for r in c["reasons"])
         try:
-            store.update_save(c["shortcode"], status="archived")
-        except Exception:  # noqa: BLE001 - local SQLite mirror is best-effort
-            pass
+            notion_writer.set_status(page_id, "archived")
+        except Exception:  # noqa: BLE001 - report and continue; one bad page must not sink the pass
+            logger.exception("archive: Notion write failed for page %s (%s)", page_id, c["shortcode"])
+            continue
+        if not is_duplicate_loser:
+            try:
+                store.update_save(c["shortcode"], status="archived")
+            except Exception:  # noqa: BLE001 - local SQLite mirror is best-effort
+                pass
         count += 1
     return count
 
@@ -255,13 +356,32 @@ def suggest_tags(title: str, taxonomy: list[str]) -> list[str]:
     return [t for t in tags if t][:6]
 
 
+def title_is_bare_permalink(title: str, shortcode: str) -> bool:
+    """A row whose Title is still its own Instagram permalink never got a real
+    extraction — the fetch failed before anything could be summarized."""
+    return bool(title) and title.startswith("http") and shortcode in title
+
+
 def find_topicless_rows(pages: list[dict]) -> list[dict]:
+    """Rows with empty Topics that have a REAL main_point worth tagging.
+
+    Excludes every row whose "title" isn't genuine extracted prose:
+      - the literal placeholder, and
+      - a bare permalink (Failed—retry rows never got extracted at all).
+    REGRESSION (live, twice now): tagging such a row makes Gemini describe the
+    PLACEHOLDER or the URL rather than the reel — it produced junk tags like
+    "captions"/"transcripts" for placeholders and
+    "instagram"/"reels"/"short-form-video" for a permalink. Both had to be
+    reverted by hand. Those rows belong to recover_placeholders.py, which can
+    fetch real content first."""
     from app import notion_writer
 
     rows = []
     for page in pages:
         fields = notion_writer.extract_saves_fields(page)
         if not fields["shortcode"] or fields["title"] == PLACEHOLDER_TITLE:
+            continue
+        if title_is_bare_permalink(fields["title"], fields["shortcode"]):
             continue
         digest = notion_writer.extract_digest_fields(page)
         if digest["topics"]:
