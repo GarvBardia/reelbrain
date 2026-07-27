@@ -2549,3 +2549,76 @@ endpoints, ops docs).
 default (set during your live testing) is `gemini-2.5-flash` — I documented what the code
 does. If you meant to switch the default to `gemini-flash-latest`, that's a one-line
 change in `app/gemini_pipe.py`.
+
+---
+
+# Final build session (2026-07-28) — autonomy core + taxonomy apply + guardians
+
+Five phases, each committed separately. Full suite at the end: **840 passed, 1 xfailed**
+(the auto-attach safety gate, deliberately red).
+
+## Phase -1 — `--dry-run` is now genuinely free (`8eb2b21`)
+`ingest_resources` was fetching + summarizing before checking `dry_run`, so the "safe
+status check" quietly burned Gemini budget mid-backfill. Moved the dry-run branch above
+the fetch/extract calls; a dry run now makes ZERO network + Gemini calls and only reports
+what it WOULD do. `daily_runner --dry-run` prints per-step pending counts + estimated
+call cost. Tests assert the zero-fetch guarantee by spying on the fetch/extract fns.
+
+## Phase 0 — approved taxonomy merges applied (`20391db`)
+New `app/taxonomy.py` is the single source of truth for the 20-merge map + 12 parent
+categories (shared by the apply script, the Obsidian index, and vault_librarian). Applied
+live: **34 rows retagged, 0 errors**; **zero priority drift** (hard gate: compute_priority
+before==after for every changed row, checked before any write; only Topics are written,
+never Priority). **20 merge-caused orphan notes deleted** (all pure-auto), 7 pre-existing
+orphans left untouched, 0 with user content. Row count **174==174** pre/post. Snapshot
+JSON written first for rollback. `mcp-servers`/`fable-5`/`agentic-os` kept unmerged as
+specified.
+
+## Phase J2 — Vault Librarian, monthly (`1c6a0fa`)
+`scripts/vault_librarian.py`: orphan reconnection (reuses vault_orphans.classify, so the
+Failed-retry/Awaiting-DM exclusion is inherited), free topic enforcement, tag-drift
+detection → `TAXONOMY_DRIFT.md` (**report only, never auto-merges**), Notion-vs-vault count
+reconciliation, full re-sync. Dry-run default; monthly Task Scheduler entry documented.
+First live run flagged `mcp-server`~`mcp-servers` and `startup`~`startups` — real
+near-duplicates worth review.
+
+## Phase J4 — Health Watchdog, daily (`610ba4f`)
+`scripts/health_watchdog.py`: six checks, ONE ntfy push only on failure — **silence means
+healthy**. Wired into `nightly_autonomous.bat`. Quota check flags STUCK (3+ zero-progress
+429 days), not productive exhaustion. Workflow check uses the GitHub REST API (gh CLI
+isn't installed); repo is private, so it SKIPS without `GITHUB_TOKEN` rather than firing a
+daily false alarm. Live dry-run: all six green.
+
+## Phase K — final verification
+- **Sync + links:** re-synced; Notion **174 == 174** vault reel notes; **zero dangling
+  wikilinks** (the one stale source, `ReelBrain-ScoutInput.md`, cleared by regenerating
+  the Scout input).
+- **Attach accuracy (report only — auto-attach stays OFF):** named_entities backfill is
+  **51/174 processed** (123 remaining in the countdown), of which only **8 rows actually
+  carry entities** (the rest yielded none). On the 12-pair regression pool, only **1 of 92**
+  candidates currently has live entities, so accuracy is **unchanged at top-1 42% /
+  top-3 58%** — the named_entities lever is still almost entirely inert because the
+  quota-bound backfill has barely started. Auto-attach remains gated OFF regardless.
+- **Scout queue:** input regenerated (101 sections). Producing the ranked
+  `IMPLEMENTATION_QUEUE.md` from it is the manual `claude -p "$(cat SCOUT_PROMPT.md)"` step.
+
+## What is fully autonomous now
+- **Nightly** (`nightly_autonomous.bat`, one Task Scheduler entry): `daily_runner.py`
+  spends the day's Gemini budget across the backlog in priority order and resumes where it
+  stopped, then `health_watchdog.py` runs and stays silent unless something broke.
+- **Structural guarantees** hold without intervention: no reel without topics (Phase H),
+  priority invariance under taxonomy edits (Phase 0 gate), quota-safe dry-runs.
+
+## What still needs periodic manual input
+- **Monthly:** run/confirm `vault_librarian.py --apply`; review `TAXONOMY_DRIFT.md` and,
+  for any real duplicate, add it to `taxonomy.MERGES` and re-run `apply_taxonomy.py` (which
+  re-checks priority invariance). A taxonomy MERGE is never automated.
+- **Weekly:** review the Scout pick (`SCOUT_PROMPT.md` → `IMPLEMENTATION_QUEUE.md`).
+- **One-time setup:** create the nightly + monthly Task Scheduler entries (WORKER_SETUP.md);
+  add `GITHUB_TOKEN` (fine-grained PAT, Actions:read) to `.env` to activate the workflow
+  health check; fill in `ReelBrain-Installed.md`.
+
+## System health at session end
+174 rows, all with topics; taxonomy merged and drift-free; vault and Notion in sync with
+zero dangling links; test suite green (840/1 xfail); named_entities backfill on track to
+clear in ~7 days of nightly runs, which will then unblock a real accuracy remeasurement.
