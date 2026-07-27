@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 from app import notion_writer, store
+from app.taxonomy import group_topics_under_parents
 from app.topic_descriptions import TOPIC_DESCRIPTIONS
 from app.vault_paths import INDEX_FILENAME
 
@@ -385,7 +386,35 @@ def write_topics_index(vault: Path, topic_entries: dict[str, list[dict]]) -> Non
             by_priority.setdefault(priority, {})
             by_priority[priority][topic] = by_priority[priority].get(topic, 0) + 1
 
+    # Total saves per topic, for the count shown beside each category entry.
+    total_by_topic: dict[str, int] = {t: len(e) for t, e in topic_entries.items()}
+
     lines: list[str] = []
+
+    # Phase 0: lead with the 12 parent categories (TAXONOMY_PROPOSAL.md §1), so
+    # the index reads as a structured map, not a flat priority dump. Child tags
+    # stay individual Notion tags; this grouping is Obsidian-only.
+    grouped, loose = group_topics_under_parents(list(topic_entries.keys()))
+    if grouped or loose:
+        lines.append("## Categories")
+        lines.append("")
+        for parent, topics in grouped.items():
+            lines.append(f"### {parent}")
+            for topic in sorted(topics, key=lambda t: (-total_by_topic.get(t, 0), t)):
+                count = total_by_topic.get(topic, 0)
+                plural = "save" if count == 1 else "saves"
+                lines.append(f"- [[topics/{_slugify(topic)}|{topic}]] — {count} {plural}")
+            lines.append("")
+        if loose:
+            lines.append("### (uncategorized topics)")
+            for topic in sorted(loose, key=lambda t: (-total_by_topic.get(t, 0), t)):
+                count = total_by_topic.get(topic, 0)
+                plural = "save" if count == 1 else "saves"
+                lines.append(f"- [[topics/{_slugify(topic)}|{topic}]] — {count} {plural}")
+            lines.append("")
+
+    # The priority view stays — opening the vault should still surface what
+    # needs attention first, now below the category map.
     for priority in PRIORITY_ORDER:
         topics = by_priority.get(priority, {})
         lines.append(f"## {priority} Priority")

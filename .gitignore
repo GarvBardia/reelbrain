@@ -16,3 +16,5 @@ __pycache__/
 venv/
 nightly_autonomous.log
 daily_runner.log
+taxonomy_snapshot_*.json
+TAXONOMY_DRIFT.md
