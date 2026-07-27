@@ -181,3 +181,36 @@ work and `/attach` remeasurement are unblocked.
 
 `nightly_autonomous.log` (also gitignored) captures raw stdout/stderr from the
 .bat for when you need to debug a run rather than read its summary.
+
+---
+
+# Monthly: Vault Librarian (`vault_librarian.py`)
+
+A separate MONTHLY maintenance pass (not nightly). It reconnects orphaned
+notes, enforces topics on any topic-less rows, detects tag drift since the
+Phase 0 merge, reconciles Notion vs vault counts, and re-syncs.
+
+- Report only, safe: `python scripts\vault_librarian.py`
+- Remediate + re-sync: `python scripts\vault_librarian.py --apply`
+
+Drift findings are written to `TAXONOMY_DRIFT.md` — **the librarian never
+merges tags itself**. To act on a finding, add it to `app/taxonomy.MERGES` and
+re-run `apply_taxonomy.py`, which re-checks priority invariance before writing.
+
+## Task Scheduler steps (monthly)
+
+Identical to the nightly entry above, with two differences:
+
+1. **General tab** — Name: `ReelBrain monthly librarian`. Same "Run only when
+   user is logged on" (needs your session + residential IP for the re-sync).
+2. **Triggers tab → New…** — Begin: **On a schedule** → **Monthly** → Months:
+   select **all 12** → Days: **1**. Start time: a time you're logged on, offset
+   from the nightly run (e.g. **11:00 PM**) so they don't overlap.
+3. **Actions tab → New…** — Program/script:
+   `C:\Users\garvb\reelbrain\venv\Scripts\python.exe`
+   Add arguments: `scripts\vault_librarian.py --apply`
+   Start in: `C:\Users\garvb\reelbrain`
+4. **Conditions / Settings** — same as the nightly entry (uncheck AC-power
+   requirement, "Do not start a new instance", allow run-on-demand).
+
+Right-click → **Run** once, then read the console tail and `TAXONOMY_DRIFT.md`.

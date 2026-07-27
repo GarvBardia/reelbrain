@@ -113,6 +113,28 @@ PARENTS: dict[str, list[str]] = {
 # The automation tag that is explicitly NOT a topic (proposal preamble).
 NON_TOPIC_TAGS: frozenset[str] = frozenset({"near-duplicate"})
 
+# Intentionally-loose one-offs kept as their own tags (proposal §1): too
+# specific to force under a parent, but still canonical — NOT drift.
+LOOSE_TAGS: frozenset[str] = frozenset({
+    "looksmaxxing", "style-ai", "gamification", "wildlife-conservation",
+    "tech-news", "mobile-development", "react-native", "app-development",
+})
+
+# Similarity at/above which a NEW tag is flagged as a possible near-duplicate of
+# a canonical one. Tuned so "ai-workflow"/"ai-workflows" (~0.95) trips it but
+# genuinely distinct tags do not. Report-only — never an auto-merge threshold.
+DRIFT_SIMILARITY_THRESHOLD = 0.85
+
+
+def canonical_tags() -> set[str]:
+    """The known-good post-merge taxonomy: every parent's children, every merge
+    TARGET, and the loose one-offs. A live tag outside this set is 'new' and a
+    candidate for the drift check."""
+    tags: set[str] = set(LOOSE_TAGS) | set(MERGES.values()) | set(NON_TOPIC_TAGS)
+    for children in PARENTS.values():
+        tags.update(children)
+    return tags
+
 
 def apply_merges(topics: list[str], merges: dict[str, str] = MERGES) -> list[str]:
     """Rewrite a row's topics through the merge map: each merged-away tag becomes
@@ -163,6 +185,33 @@ def group_topics_under_parents(topics: list[str]) -> tuple[dict[str, list[str]],
         if topic not in placed and topic not in NON_TOPIC_TAGS:
             loose.append(topic)
     return grouped, loose
+
+
+def find_tag_drift(
+    live_tags: list[str],
+    threshold: float = DRIFT_SIMILARITY_THRESHOLD,
+) -> list[dict]:
+    """Flag live tags that look like near-duplicates of a CANONICAL tag but
+    aren't one — i.e. taxonomy drift since the last merge. Report only: returns
+    [{new_tag, nearest_canonical, score}] sorted worst-first, NEVER merges.
+
+    A tag already in the canonical set is fine by definition and skipped. For
+    each new tag we report only its single closest canonical match above the
+    threshold (a suggestion for a human to confirm, not a decision)."""
+    canonical = canonical_tags()
+    findings: list[dict] = []
+    for tag in sorted(set(live_tags)):
+        if tag in canonical or tag in NON_TOPIC_TAGS:
+            continue
+        best_tag, best_score = "", 0.0
+        for cand in canonical:
+            score = normalized_similarity(tag, cand)
+            if score > best_score:
+                best_tag, best_score = cand, score
+        if best_score >= threshold:
+            findings.append({"new_tag": tag, "nearest_canonical": best_tag,
+                             "score": round(best_score, 3)})
+    return sorted(findings, key=lambda f: -f["score"])
 
 
 def normalized_similarity(a: str, b: str) -> float:
