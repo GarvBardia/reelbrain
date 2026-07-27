@@ -142,7 +142,7 @@ def _routed_status(extraction) -> str:
 def recover_one(fields: dict) -> dict:
     """Full per-row recovery: media-first, OG-caption fallback, in-place Notion
     update. Returns {"status": "recovered"|"no_caption"|"error"|"quota_stop", ...}."""
-    from app import fetcher, gemini_pipe, notion_writer, store
+    from app import carousel, fetcher, gemini_pipe, notion_writer, store
     from app.models import ReelData
     from scripts.local_fetch import _try_media_fetch
     from scripts.recover_photo_captions import clean_og_caption, fetch_og_tags_with_bot_ua
@@ -161,19 +161,51 @@ def recover_one(fields: dict) -> dict:
             reel = fetcher._info_to_reel_data(shortcode, permalink, info)
             extraction = gemini_pipe.run_extraction(reel, note=None, taxonomy=store.get_taxonomy())
             path = "full"
+            slide_count = 0
         else:
             tags = fetch_og_tags_with_bot_ua(permalink)
             caption, username = clean_og_caption(tags) if tags else (None, None)
-            if not caption:
-                return {"status": "no_caption", "detail": "no media and no OG caption retrievable"}
+
+            # CAROUSEL SLIDE READING: try to read the actual slides before
+            # settling for the caption. Carousels routinely put ALL their value
+            # on slides 2..N while the caption is just "Comment X for the link"
+            # -- caption-only extraction throws that away entirely.
+            images, slide_count, carousel_error = carousel.fetch_carousel_images(shortcode)
+            extraction = None
+            path = None
+            if images:
+                logger.info("%s: read %d/%d carousel slides, running multimodal extraction",
+                            shortcode, len(images), slide_count)
+                extraction = gemini_pipe.run_carousel_extraction(
+                    images, caption=caption, creator=username, note=None,
+                    taxonomy=store.get_taxonomy(),
+                )
+                if extraction is not None:
+                    path = f"carousel-{len(images)}-slides"
+                else:
+                    # Distinguishable in the logs from "no images available":
+                    # we HAD the slides, the model call is what failed.
+                    logger.warning("%s: slides fetched but multimodal extraction failed — "
+                                   "falling back to caption-only", shortcode)
+            else:
+                # The explicit requirement: never let "no images available"
+                # look the same as "images available but unread".
+                logger.info("%s: no carousel slides read (%s) — caption-only",
+                            shortcode, carousel_error)
+
+            if extraction is None:
+                if not caption:
+                    return {"status": "no_caption",
+                            "detail": f"no media, no readable slides ({carousel_error}), no OG caption"}
+                extraction = gemini_pipe.run_caption_only_extraction(
+                    caption, creator=username, note=None, taxonomy=store.get_taxonomy()
+                )
+                path = "caption-only"
+
             reel = ReelData(
                 shortcode=shortcode, permalink=permalink, caption=caption,
                 creator_username=username, is_photo_or_carousel=True,
             )
-            extraction = gemini_pipe.run_caption_only_extraction(
-                caption, creator=username, note=None, taxonomy=store.get_taxonomy()
-            )
-            path = "caption-only"
 
         degraded = extraction.content_type == "unknown" and not extraction.topic_tags
         if degraded:
@@ -194,6 +226,7 @@ def recover_one(fields: dict) -> dict:
 
     return {
         "status": "recovered", "path": path, "new_status": status,
+        "slide_count": slide_count,
         "title": extraction.main_point[:80], "topics": extraction.topic_tags,
     }
 

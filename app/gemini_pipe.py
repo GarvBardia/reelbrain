@@ -34,6 +34,12 @@ PROMPT_TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "prompts" / "ext
 CAPTION_ONLY_PROMPT_TEMPLATE_PATH = (
     Path(__file__).resolve().parent.parent / "prompts" / "extraction_caption_only.md"
 )
+# Carousels: every slide image is sent to Gemini in ONE multimodal call, so it
+# can read the text rendered on the slides and follow the sequence. See
+# app/carousel.py for how the slide URLs are obtained.
+CAROUSEL_PROMPT_TEMPLATE_PATH = (
+    Path(__file__).resolve().parent.parent / "prompts" / "extraction_carousel.md"
+)
 # Below this many words, a caption is too thin to extract anything meaningful
 # from — fall back to the honest placeholder rather than risking Gemini
 # hallucinating content from almost nothing (e.g. a caption that's just a
@@ -174,6 +180,83 @@ def _build_caption_only_prompt(caption: Optional[str], creator: Optional[str], n
     return _fill_prompt_template(
         CAPTION_ONLY_PROMPT_TEMPLATE_PATH, caption, creator, note, taxonomy, validation_errors
     )
+
+
+def _build_carousel_prompt(caption: Optional[str], creator: Optional[str], note: Optional[str],
+                           taxonomy: list[str], slide_count: int,
+                           validation_errors: Optional[str] = None) -> str:
+    text = _fill_prompt_template(
+        CAROUSEL_PROMPT_TEMPLATE_PATH, caption, creator, note, taxonomy, validation_errors
+    )
+    return text.replace("{slide_count}", str(slide_count))
+
+
+def _call_gemini_carousel(prompt: str, images: list[bytes]) -> str:
+    """ONE multimodal call carrying every slide, in order, alongside the
+    prompt. Deliberately a single call rather than one-per-slide: the whole
+    value is Gemini seeing the SEQUENCE (slide 3 only means something in the
+    context of 1 and 2), and it also costs one request instead of N against a
+    20-requests/day free tier."""
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    _enforce_gemini_call_spacing()
+    parts: list = [prompt]
+    for image in images:
+        parts.append(types.Part.from_bytes(data=image, mime_type="image/jpeg"))
+    with _GEMINI_SEMAPHORE:
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=parts,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=Extraction,
+            ),
+        )
+    return response.text
+
+
+def run_carousel_extraction(
+    images: list[bytes], caption: Optional[str], creator: Optional[str],
+    note: Optional[str], taxonomy: list[str],
+) -> Optional[Extraction]:
+    """Multimodal carousel extraction — Gemini READS the slides.
+
+    Returns None (never a placeholder) if there are no images or the call
+    fails, so the caller can fall back to caption-only and log WHY. Same
+    degrade-honestly contract as run_resource_extraction.
+    """
+    if not images:
+        logger.info("run_carousel_extraction: no slide images supplied — caller should fall back")
+        return None
+
+    prompt = _build_carousel_prompt(caption, creator, note, taxonomy, len(images))
+
+    for attempt in range(2):  # one retry, same convention as the other paths
+        try:
+            raw = _call_gemini_carousel(prompt, images)
+            extraction = _parse(raw)
+            _merge_comment_gate(extraction, caption)
+            extraction.priority = compute_priority(extraction.topic_tags, extraction.value_score)
+            return extraction
+        except (json.JSONDecodeError, ValidationError) as exc:
+            logger.warning(
+                "run_carousel_extraction: schema validation failed (attempt %d/2): %s", attempt + 1, exc,
+            )
+            prompt = _build_carousel_prompt(
+                caption, creator, note, taxonomy, len(images), validation_errors=str(exc),
+            )
+        except Exception as exc:  # noqa: BLE001 - network/API errors get no retry budget
+            logger.exception(
+                "run_carousel_extraction: Gemini call failed (attempt %d/2): %s", attempt + 1, exc,
+            )
+            break
+
+    logger.warning(
+        "run_carousel_extraction: giving up after exhausting attempts — caller must fall back to caption-only",
+    )
+    return None
 
 
 def _call_gemini(audio_path: str, prompt: str) -> str:
