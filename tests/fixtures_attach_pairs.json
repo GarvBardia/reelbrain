@@ -1,0 +1,1332 @@
+{
+ "pool": [
+  {
+   "shortcode": "DXC52o1AQFn",
+   "title": "Use a trending GitHub memory repo to give Claude permanent memory across sessions with 95% reduced t",
+   "note": " ",
+   "gate_keyword": "memory",
+   "topics": [
+    "claude",
+    "ai-tools",
+    "automation"
+   ],
+   "created_at": "2026-07-27T05:13:00.000Z",
+   "page_id": "3aa24f9e-ca09-81d8-8098-e24db6b74dbb"
+  },
+  {
+   "shortcode": "DaTD3yOx922",
+   "title": "Use Google NotebookLM to analyze content performance and create custom coaching materials rather tha",
+   "note": " ",
+   "gate_keyword": "content",
+   "topics": [
+    "notebooklm",
+    "content-creation",
+    "ai-tools",
+    "ai-marketing"
+   ],
+   "created_at": "2026-07-27T05:12:00.000Z",
+   "page_id": "3aa24f9e-ca09-8132-a7ec-e8909390a002"
+  },
+  {
+   "shortcode": "DbRa487xRES",
+   "title": "An AI agent system built using Claude over a weekend to automate and run a small business.",
+   "note": " ",
+   "gate_keyword": "SYSTEMS",
+   "topics": [
+    "ai-agents",
+    "claude",
+    "automation",
+    "small-business"
+   ],
+   "created_at": "2026-07-27T05:10:00.000Z",
+   "page_id": "3aa24f9e-ca09-81df-ae5a-d4a59a0844a3"
+  },
+  {
+   "shortcode": "DZ26TQGkcdN",
+   "title": "Automate Instagram Reels creation and lead generation from viral video analysis to script, visuals, ",
+   "note": " ",
+   "gate_keyword": "GUIDE",
+   "topics": [
+    "claude",
+    "ai-tools",
+    "lead-generation",
+    "ai-agents"
+   ],
+   "created_at": "2026-07-25T18:11:00.000Z",
+   "page_id": "3a824f9e-ca09-81e8-80cb-f26d16c67287"
+  },
+  {
+   "shortcode": "DbMHomZR1-U",
+   "title": "Use Sakya AI to send bulk marketing emails to leads for free.",
+   "note": " ",
+   "gate_keyword": "link",
+   "topics": [
+    "lead-generation",
+    "ai-tools",
+    "entrepreneurship"
+   ],
+   "created_at": "2026-07-25T18:05:00.000Z",
+   "page_id": "3a824f9e-ca09-81eb-b039-cc5e2310b0c5"
+  },
+  {
+   "shortcode": "DbJl-7UyIhq",
+   "title": "Use the Higgsfield MCP server content pipeline in Claude to grant your agent 19 video production ski",
+   "note": " ",
+   "gate_keyword": "credits",
+   "topics": [
+    "claude",
+    "ai-agents",
+    "mcp-server",
+    "ai-tools"
+   ],
+   "created_at": "2026-07-25T18:01:00.000Z",
+   "page_id": "3a824f9e-ca09-81b2-9da2-d3f61eab06c8"
+  },
+  {
+   "shortcode": "DbJtLyLAJ2D",
+   "title": "Use Scout, a free open-source tool, to scrape and verify emails from social media bios without paid ",
+   "note": " ",
+   "gate_keyword": "LEADS",
+   "topics": [
+    "software-development",
+    "lead-generation",
+    "web-scraping",
+    "open-source"
+   ],
+   "created_at": "2026-07-25T17:54:00.000Z",
+   "page_id": "3a824f9e-ca09-819c-b9b2-c342c07380d9"
+  },
+  {
+   "shortcode": "DbJpTJxuIu2",
+   "title": "Layers AI offers a project library and refined prompt system to help designers build 3D web interact",
+   "note": " ",
+   "gate_keyword": "Prompt",
+   "topics": [
+    "ai-tools",
+    "prompt-engineering",
+    "vibe-coding",
+    "software-development"
+   ],
+   "created_at": "2026-07-25T17:43:00.000Z",
+   "page_id": "3a824f9e-ca09-817d-acbb-c777645a1a4e"
+  },
+  {
+   "shortcode": "DbLpxfKPKoN",
+   "title": "Use YouMind to browse and copy over 30,000 AI image and video prompts organized by style, model, and",
+   "note": " ",
+   "gate_keyword": "PROMPT",
+   "topics": [
+    "ai-tools",
+    "prompt-engineering"
+   ],
+   "created_at": "2026-07-25T17:33:00.000Z",
+   "page_id": "3a824f9e-ca09-813f-b5ff-e633c18f0e0e"
+  },
+  {
+   "shortcode": "DbJc-RQNN1C",
+   "title": "Comment for more ways to make vibe-coded apps look professional.\nStop letting your vibe-coded app lo",
+   "note": " ",
+   "gate_keyword": "",
+   "topics": [],
+   "created_at": "2026-07-25T05:43:00.000Z",
+   "page_id": "3a824f9e-ca09-814e-bbde-f32e57280bb0"
+  },
+  {
+   "shortcode": "DXwo4xAxmsG",
+   "title": "Use Claude and an MCP server to detect user friction in vibe-coded apps and generate prompts for cod",
+   "note": " ",
+   "gate_keyword": "software",
+   "topics": [
+    "vibe-coding",
+    "mcp-server",
+    "claude",
+    "ai-agents",
+    "software-development",
+    "elu"
+   ],
+   "created_at": "2026-07-24T17:20:00.000Z",
+   "page_id": "3a724f9e-ca09-812f-bd7c-ddf2b219c2d5"
+  },
+  {
+   "shortcode": "DbHTI-2CIeO",
+   "title": "How to build a dev team with 4 AI Agents in Claude\n\nLike the post and comment “dev” and I’ll send yo",
+   "note": " ",
+   "gate_keyword": "dev",
+   "topics": [
+    "claude-ai",
+    "developer-tools",
+    "productivity-hacks",
+    "ai-agents"
+   ],
+   "created_at": "2026-07-24T13:31:00.000Z",
+   "page_id": "3a724f9e-ca09-815e-9d51-e44e2a80d6aa"
+  },
+  {
+   "shortcode": "DbJYkEZG-8k",
+   "title": "A curated list of five developer repositories—uv, ripgrep, firecrawl, storm, and awesome-claude-skil",
+   "note": "recovered by the placeholder worker from a home-IP fetch",
+   "gate_keyword": "REPO",
+   "topics": [
+    "developer-tools",
+    "productivity-hacks",
+    "claude-ai"
+   ],
+   "created_at": "2026-07-24T13:31:00.000Z",
+   "page_id": "3a724f9e-ca09-8181-8bfe-d9d75954c982"
+  },
+  {
+   "shortcode": "DbDkHnPltZD",
+   "title": "Outlines 5 levels of leveraging Claude for content creation, from basic single prompts to a fully au",
+   "note": "recovered by the placeholder worker from a home-IP fetch",
+   "gate_keyword": "SERVICE",
+   "topics": [
+    "claude-ai",
+    "productivity-hacks",
+    "ai-agents",
+    "content-creation"
+   ],
+   "created_at": "2026-07-24T13:28:00.000Z",
+   "page_id": "3a724f9e-ca09-811d-81b2-e24bdd8c3bc3"
+  },
+  {
+   "shortcode": "DYuu2v0AorV",
+   "title": "Combining Hermes Agent with NotebookLM creates a 24/7 AI research system that gives you a major comp",
+   "note": " ",
+   "gate_keyword": "HERMES",
+   "topics": [
+    "ai-automation",
+    "workflow-automation",
+    "ai-research",
+    "notebooklm"
+   ],
+   "created_at": "2026-07-24T13:05:00.000Z",
+   "page_id": "3a724f9e-ca09-8177-b727-dd06363f4662"
+  },
+  {
+   "shortcode": "DbAYF_bDc_0",
+   "title": "No caption or transcript available.",
+   "note": " \n\n⚠️ photo/carousel post — no auto-transcript, open the reel URL to view",
+   "gate_keyword": "",
+   "topics": [],
+   "created_at": "2026-07-24T13:04:00.000Z",
+   "page_id": "3a724f9e-ca09-8180-b2a6-d6bb14af37b7"
+  },
+  {
+   "shortcode": "DbC0npWR0jn",
+   "title": "Comment 'BUILD' to learn how to create modern website portfolios like the ones featured.",
+   "note": " ",
+   "gate_keyword": "BUILD",
+   "topics": [
+    "web-design",
+    "web-development",
+    "portfolio-design"
+   ],
+   "created_at": "2026-07-23T09:01:00.000Z",
+   "page_id": "3a624f9e-ca09-816c-a3ca-e1528987bddb"
+  },
+  {
+   "shortcode": "DZLBMRjRzMW",
+   "title": "Comment “skill” and I’ll send you the prompts \n\n#ai #startup #aitools #founder",
+   "note": " ",
+   "gate_keyword": "skill",
+   "topics": [
+    "ai-prompts",
+    "ai-tools",
+    "startups",
+    "founders",
+    "productivity-hacks"
+   ],
+   "created_at": "2026-07-23T08:54:00.000Z",
+   "page_id": "3a624f9e-ca09-8121-a55f-ed16b39868de"
+  },
+  {
+   "shortcode": "DZc2ci4xCp6",
+   "title": "Autonomous AI agents can easily be set up to scrape, generate, and post Instagram carousels fully as",
+   "note": " ",
+   "gate_keyword": "content",
+   "topics": [
+    "ai-agents",
+    "automation",
+    "content-creation",
+    "instagram"
+   ],
+   "created_at": "2026-07-22T11:47:00.000Z",
+   "page_id": "3a524f9e-ca09-811a-9762-f083c56adc8b"
+  },
+  {
+   "shortcode": "DYf-n9PguD5",
+   "title": "An open-source Claude Code skill called video-use automates complete video editing and animation usi",
+   "note": " ",
+   "gate_keyword": "VIDEO",
+   "topics": [
+    "video-editing",
+    "ai-agents",
+    "automation",
+    "content-creation",
+    "open-source"
+   ],
+   "created_at": "2026-07-22T11:33:00.000Z",
+   "page_id": "3a524f9e-ca09-81da-ab92-c87cb3a7aae0"
+  },
+  {
+   "shortcode": "DY2sWnWoNJA",
+   "title": "Startups can defy conventional odds and succeed through perseverance, with the creator offering a li",
+   "note": " ",
+   "gate_keyword": "Startup",
+   "topics": [
+    "lead-generation",
+    "saas-ideas",
+    "content-creation",
+    "cold-outreach"
+   ],
+   "created_at": "2026-07-22T08:57:00.000Z",
+   "page_id": "3a524f9e-ca09-8194-a7df-d8de3dd4190c"
+  },
+  {
+   "shortcode": "DbDp2tsuerZ",
+   "title": "How to create drone-style and spectator POV video scenes without a drone using Lovart Canvas and See",
+   "note": " ",
+   "gate_keyword": "WORLD CUP",
+   "topics": [
+    "ai-agents",
+    "ai-video",
+    "content-creation",
+    "ai-tools"
+   ],
+   "created_at": "2026-07-22T08:44:00.000Z",
+   "page_id": "3a524f9e-ca09-81da-b076-d53bf8b2516c"
+  },
+  {
+   "shortcode": "DbE2l29phyv",
+   "title": "The creator details an automated AI agent workflow using Firecrawl, Gmail, PandaDoc, and Stripe to g",
+   "note": " \n\n⚠️ no audio track in source video — summarized from caption only, no transcript",
+   "gate_keyword": "FIND",
+   "topics": [
+    "ai-agents",
+    "automation",
+    "lead-generation",
+    "cold-outreach",
+    "sales-automation"
+   ],
+   "created_at": "2026-07-22T08:01:00.000Z",
+   "page_id": "3a524f9e-ca09-814c-af54-ffa5d1541dbd"
+  },
+  {
+   "shortcode": "DbBWhq-pO25",
+   "title": "Comment “CHART” and I’ll DM you the full agent graph build: the exact prompts, the attacker prompt, ",
+   "note": " ",
+   "gate_keyword": "CHART",
+   "topics": [
+    "developer-tools",
+    "ai-agents",
+    "prompt-engineering",
+    "ai-security",
+    "llm-agents"
+   ],
+   "created_at": "2026-07-22T07:48:00.000Z",
+   "page_id": "3a524f9e-ca09-81ee-ad60-e41115e03579"
+  },
+  {
+   "shortcode": "DbFDY3yTwlI",
+   "title": "Higgsfield is offering 24 hours of free, unlimited access to all of its AI models.",
+   "note": " ",
+   "gate_keyword": "video",
+   "topics": [
+    "content-creation",
+    "creator-economy",
+    "ai-tools"
+   ],
+   "created_at": "2026-07-22T06:39:00.000Z",
+   "page_id": "3a524f9e-ca09-8197-8ca3-ef3b30944743"
+  },
+  {
+   "shortcode": "DbCz4Utg07j",
+   "title": "comment “email” for the FULL guide",
+   "note": " \n\n⚠️ no audio track in source video — summarized from caption only, no transcript",
+   "gate_keyword": "email",
+   "topics": [
+    "email-marketing",
+    "lead-generation",
+    "social-media-marketing",
+    "growth-hacking"
+   ],
+   "created_at": "2026-07-22T05:11:00.000Z",
+   "page_id": "3a524f9e-ca09-810d-9b1f-e68e46bb6604"
+  },
+  {
+   "shortcode": "Da00M-Tv_AN",
+   "title": "Instead of doing everything yourself, I built AI agents to handle it. Content creation, auto posting",
+   "note": " ",
+   "gate_keyword": "AGENTS",
+   "topics": [
+    "productivity-hacks",
+    "developer-tools",
+    "ai-agents",
+    "content-creation",
+    "automation"
+   ],
+   "created_at": "2026-07-21T13:32:00.000Z",
+   "page_id": "3a424f9e-ca09-815b-af0a-f73304b176c0"
+  },
+  {
+   "shortcode": "DaiWZTfs3x9",
+   "title": "How to create stylized AI animations using Grok's imagine tool combined with motion prompts.",
+   "note": "",
+   "gate_keyword": "Winter",
+   "topics": [
+    "ai-plugins",
+    "claude-ai",
+    "ai-video",
+    "generative-ai",
+    "animation-workflow"
+   ],
+   "created_at": "2026-07-21T11:29:00.000Z",
+   "page_id": "3a424f9e-ca09-815f-b8d1-c3a354c2203b"
+  },
+  {
+   "shortcode": "DXupkURBCz5",
+   "title": "The 'Prompt Master' tool allows you to generate highly effective AI mega prompts internally within C",
+   "note": "",
+   "gate_keyword": "agent",
+   "topics": [
+    "claude-ai",
+    "developer-tools",
+    "productivity-hacks",
+    "ai-plugins"
+   ],
+   "created_at": "2026-07-21T11:27:00.000Z",
+   "page_id": "3a424f9e-ca09-81ee-9827-cbd49c62bf05"
+  },
+  {
+   "shortcode": "DatHa0gOR4l",
+   "title": "The creator is offering a playbook detailing how to build and sell various digital products or softw",
+   "note": "",
+   "gate_keyword": "GUIDE",
+   "topics": [
+    "developer-tools",
+    "productivity-hacks"
+   ],
+   "created_at": "2026-07-21T11:27:00.000Z",
+   "page_id": "3a424f9e-ca09-81e6-b934-e443c5340e9c"
+  },
+  {
+   "shortcode": "DaacoWejUai",
+   "title": "Claude can reverse-engineer Mark Cuban's business-building strategy into five free prompts, availabl",
+   "note": "",
+   "gate_keyword": "MARK",
+   "topics": [
+    "claude-ai",
+    "productivity-hacks",
+    "ai-prompts"
+   ],
+   "created_at": "2026-07-21T11:27:00.000Z",
+   "page_id": "3a424f9e-ca09-81a1-bc9b-e2a21a10b78b"
+  },
+  {
+   "shortcode": "DZuHZfSDj2-",
+   "title": "A 5-part blueprint for building a local, voice-driven AI command center that runs entirely on your o",
+   "note": "",
+   "gate_keyword": "Build",
+   "topics": [
+    "claude-ai",
+    "developer-tools",
+    "local-ai",
+    "ai-agents"
+   ],
+   "created_at": "2026-07-21T11:26:00.000Z",
+   "page_id": "3a424f9e-ca09-817f-bf57-d7bf7cafb40a"
+  },
+  {
+   "shortcode": "DawD8vcNJC7",
+   "title": "Build luxury Apple-style scroll animation websites in under five minutes without code using Google F",
+   "note": "",
+   "gate_keyword": "WEBSITE",
+   "topics": [
+    "claude-ai",
+    "no-code",
+    "web-design",
+    "ai-tools",
+    "productivity-hacks"
+   ],
+   "created_at": "2026-07-21T11:26:00.000Z",
+   "page_id": "3a424f9e-ca09-813f-a1de-d852a0301b49"
+  },
+  {
+   "shortcode": "DaxrltihiEM",
+   "title": "The Kickbacks browser plugin pays you to view tiny sponsor ads on AI loading screens, sharing 50% of",
+   "note": "",
+   "gate_keyword": "PAID",
+   "topics": [
+    "ai-plugins",
+    "claude-ai",
+    "productivity-hacks",
+    "passive-income"
+   ],
+   "created_at": "2026-07-21T11:26:00.000Z",
+   "page_id": "3a424f9e-ca09-817a-bbef-f33672f177f9"
+  },
+  {
+   "shortcode": "Dax8uqyzVWv",
+   "title": "A massive, community-curated GitHub list offers free tiers of hosting, domains, APIs, and other deve",
+   "note": "",
+   "gate_keyword": "tool",
+   "topics": [
+    "developer-tools",
+    "productivity-hacks",
+    "open-source"
+   ],
+   "created_at": "2026-07-21T11:25:00.000Z",
+   "page_id": "3a424f9e-ca09-8132-a998-ea4065047e59"
+  },
+  {
+   "shortcode": "DayP5WwtYM5",
+   "title": "How to build a node-based workflow to generate and edit high-quality 4K AI videos using Arcads and G",
+   "note": "",
+   "gate_keyword": "AI",
+   "topics": [
+    "ai-plugins",
+    "productivity-hacks",
+    "ai-video",
+    "ai-generation"
+   ],
+   "created_at": "2026-07-21T11:25:00.000Z",
+   "page_id": "3a424f9e-ca09-813c-b9aa-c805a2390440"
+  },
+  {
+   "shortcode": "DaxsXR-APbZ",
+   "title": "Leverage the Cleanlist.ai Chrome extension to harvest prospect contact data from LinkedIn, then use ",
+   "note": "",
+   "gate_keyword": "LINKEDIN",
+   "topics": [
+    "productivity-hacks",
+    "lead-generation",
+    "cold-calling",
+    "ai-workflows",
+    "client-acquisition"
+   ],
+   "created_at": "2026-07-21T11:25:00.000Z",
+   "page_id": "3a424f9e-ca09-8182-bfaa-c8479d4bd609"
+  },
+  {
+   "shortcode": "Da0jSm-tDsI",
+   "title": "Three essential YouTube videos to help you master Claude Code, build AI agents, and set up multi-age",
+   "note": "",
+   "gate_keyword": "Claude",
+   "topics": [
+    "claude-ai",
+    "developer-tools",
+    "productivity-hacks"
+   ],
+   "created_at": "2026-07-21T11:24:00.000Z",
+   "page_id": "3a424f9e-ca09-81ac-89e0-d0d91ca543af"
+  },
+  {
+   "shortcode": "DbBmPeHobmf",
+   "title": "How to close high-ticket clients on Twitter by integrating and automating your lead generation with ",
+   "note": " ",
+   "gate_keyword": "CLAUDE",
+   "topics": [
+    "lead-generation",
+    "artificial-intelligence",
+    "automation",
+    "entrepreneurship"
+   ],
+   "created_at": "2026-07-21T10:43:00.000Z",
+   "page_id": "3a424f9e-ca09-81c4-bec1-d2f1a5acf43f"
+  },
+  {
+   "shortcode": "DX8ZkaIyDl_",
+   "title": "Building an app with modern online tools is just the first step; founders must understand how to hos",
+   "note": " ",
+   "gate_keyword": "Jugaad",
+   "topics": [
+    "startups",
+    "app-development",
+    "entrepreneurship"
+   ],
+   "created_at": "2026-07-21T08:00:00.000Z",
+   "page_id": "3a424f9e-ca09-8127-9fc0-cbcdcf974658"
+  },
+  {
+   "shortcode": "DadlBU2AAiD",
+   "title": "An automated workflow to generate high-quality B2B outbound leads and book meetings without manual c",
+   "note": " ",
+   "gate_keyword": "system",
+   "topics": [
+    "startups",
+    "artificial-intelligence",
+    "lead-generation",
+    "automation"
+   ],
+   "created_at": "2026-07-21T07:50:00.000Z",
+   "page_id": "3a424f9e-ca09-818d-857b-dcd59c7b1867"
+  },
+  {
+   "shortcode": "Da2aWtBBvXS",
+   "title": "Comment PDF to get this 197 startup analysis.",
+   "note": " \n\n⚠️ no audio track in source video — summarized from caption only, no transcript",
+   "gate_keyword": "PDF",
+   "topics": [
+    "startups",
+    "startup-analysis",
+    "business-analysis",
+    "pdf-reports"
+   ],
+   "created_at": "2026-07-21T06:03:00.000Z",
+   "page_id": "3a424f9e-ca09-81a7-a953-cff3968a5345"
+  },
+  {
+   "shortcode": "DbBMtWGtjO_",
+   "title": "I made $61,000 a month with a product that hadn’t officially launched.\n\nBy doing the exact opposite ",
+   "note": " ",
+   "gate_keyword": "kleo",
+   "topics": [
+    "product-launch",
+    "pre-launch",
+    "business-strategy",
+    "monetization"
+   ],
+   "created_at": "2026-07-21T06:02:00.000Z",
+   "page_id": "3a424f9e-ca09-813b-b7eb-d9215356d1e5"
+  },
+  {
+   "shortcode": "DbCqQEfNdAv",
+   "title": "How to get hired by Y Combinator startups using workatastartup.com and focusing on what founders act",
+   "note": " ",
+   "gate_keyword": "yc",
+   "topics": [
+    "yc",
+    "startups",
+    "job-hunting",
+    "interview-prep",
+    "career-advice"
+   ],
+   "created_at": "2026-07-21T06:01:00.000Z",
+   "page_id": "3a424f9e-ca09-8194-9460-dce491760b7e"
+  },
+  {
+   "shortcode": "DayA5cfinUp",
+   "title": "Solo content creators can run a full media production engine by staffing themselves with custom AI e",
+   "note": "",
+   "gate_keyword": "CODE",
+   "topics": [
+    "claude-ai",
+    "productivity-hacks",
+    "ai-agents",
+    "content-creation"
+   ],
+   "created_at": "2026-07-21T04:52:00.000Z",
+   "page_id": "3a424f9e-ca09-813c-9d1f-fc0091c96296"
+  },
+  {
+   "shortcode": "DXCEr18kmxb",
+   "title": "The cheapest way to cold call US businesses from India is by purchasing a US phone number via Twilio",
+   "note": "",
+   "gate_keyword": "Cold",
+   "topics": [
+    "cold-calling",
+    "developer-tools",
+    "productivity-hacks",
+    "lead-generation"
+   ],
+   "created_at": "2026-07-21T04:50:00.000Z",
+   "page_id": "3a424f9e-ca09-816d-a661-d66921e74302"
+  },
+  {
+   "shortcode": "DaZFc_kkttt",
+   "title": "The creator is offering to DM a complete 'Alex Hormozi x Claude' setup guide to anyone who comments ",
+   "note": "",
+   "gate_keyword": "GIFT",
+   "topics": [
+    "claude-ai",
+    "productivity-hacks",
+    "ai-workflows"
+   ],
+   "created_at": "2026-07-21T04:50:00.000Z",
+   "page_id": "3a424f9e-ca09-81a4-8aaa-ffc359322d2e"
+  },
+  {
+   "shortcode": "Da0vM9ZPVmz",
+   "title": "Build a 4-agent Claude AI council (Believer, Skeptic, Investor, Judge) with shared memory to stress-",
+   "note": "",
+   "gate_keyword": "ROAST",
+   "topics": [
+    "claude-ai",
+    "productivity-hacks",
+    "prompt-engineering",
+    "developer-tools"
+   ],
+   "created_at": "2026-07-21T04:49:00.000Z",
+   "page_id": "3a424f9e-ca09-8121-ad46-dd9e8c12ff7a"
+  },
+  {
+   "shortcode": "Da211Z2jc2P",
+   "title": "Exply is an AI-powered outreach tool that helps freelancers and business owners identify ideal clien",
+   "note": "",
+   "gate_keyword": "LINK",
+   "topics": [
+    "productivity-hacks",
+    "ai-tools",
+    "lead-generation",
+    "outreach-automation"
+   ],
+   "created_at": "2026-07-21T04:49:00.000Z",
+   "page_id": "3a424f9e-ca09-8106-94e9-e56d70d07486"
+  },
+  {
+   "shortcode": "DaTdViNjXMu",
+   "title": "Claude Fable 5 is a highly capable model that brands can use to build fully interactive experiences,",
+   "note": "",
+   "gate_keyword": "workflow",
+   "topics": [
+    "claude-ai",
+    "developer-tools",
+    "productivity-hacks"
+   ],
+   "created_at": "2026-07-21T04:48:00.000Z",
+   "page_id": "3a424f9e-ca09-81ea-b0ba-edb5e412decb"
+  },
+  {
+   "shortcode": "DavV2VPSPqR",
+   "title": "Transform Claude from a simple chatbot into a powerful workflow system by configuring projects, arti",
+   "note": "",
+   "gate_keyword": "AI",
+   "topics": [
+    "claude-ai",
+    "productivity-hacks",
+    "ai-agents",
+    "developer-tools"
+   ],
+   "created_at": "2026-07-21T04:48:00.000Z",
+   "page_id": "3a424f9e-ca09-81f8-b0ca-f3113f9078f9"
+  },
+  {
+   "shortcode": "Da36Q7_vQPK",
+   "title": "Five essential Claude MCP servers and skills that website designers should install to dramatically i",
+   "note": "",
+   "gate_keyword": "stack",
+   "topics": [
+    "claude-ai",
+    "developer-tools",
+    "ai-plugins",
+    "productivity-hacks",
+    "web-design"
+   ],
+   "created_at": "2026-07-21T04:48:00.000Z",
+   "page_id": "3a424f9e-ca09-8175-91ba-de51cc317448"
+  },
+  {
+   "shortcode": "DaWMXFvEryu",
+   "title": "The creator is offering a set of in-depth written prompts and guides to anyone who comments 'FABLE'.",
+   "note": "",
+   "gate_keyword": "FABLE",
+   "topics": [
+    "productivity-hacks",
+    "ai-prompts",
+    "prompt-engineering"
+   ],
+   "created_at": "2026-07-21T04:47:00.000Z",
+   "page_id": "3a424f9e-ca09-8161-8f30-ec9a7440bb8e"
+  },
+  {
+   "shortcode": "DaLGdlHuOKh",
+   "title": "Use the RE Walkthrough Pro skill to turn Zillow listings into professional real estate walkthrough v",
+   "note": "",
+   "gate_keyword": "real estate",
+   "topics": [
+    "claude-ai",
+    "developer-tools",
+    "productivity-hacks",
+    "ai-agents"
+   ],
+   "created_at": "2026-07-21T04:46:00.000Z",
+   "page_id": "3a424f9e-ca09-815a-85eb-f9482371592c"
+  },
+  {
+   "shortcode": "DbAKlYYNEGY",
+   "title": "Use Claude AI as a free personal stylist by uploading a selfie with a specific prompt to receive a c",
+   "note": "",
+   "gate_keyword": "face",
+   "topics": [
+    "claude-ai",
+    "looksmaxxing",
+    "productivity-hacks",
+    "style-ai"
+   ],
+   "created_at": "2026-07-21T04:46:00.000Z",
+   "page_id": "3a424f9e-ca09-8143-a8d3-f1ba88f3782f"
+  },
+  {
+   "shortcode": "Da30z51NQCq",
+   "title": "Comment “INTEL” & all details also below!👇 \n\nYour competitor’s worst reviews are public right now.\nA",
+   "note": " \n\n⚠️ no audio track in source video — summarized from caption only, no transcript",
+   "gate_keyword": "INTEL",
+   "topics": [],
+   "created_at": "2026-07-20T19:33:00.000Z",
+   "page_id": "3a324f9e-ca09-81f7-9d90-d749238a8cf9"
+  },
+  {
+   "shortcode": "Da-Skosv7Pq",
+   "title": "Having a product to sell is more powerful for changing your income than relying solely on views.",
+   "note": " \n\n⚠️ no audio track in source video — summarized from caption only, no transcript",
+   "gate_keyword": "GUIDE",
+   "topics": [
+    "digital-products",
+    "passive-income",
+    "creator-economy"
+   ],
+   "created_at": "2026-07-20T07:14:00.000Z",
+   "page_id": "3a324f9e-ca09-817b-b7d2-ec67c4898c65"
+  },
+  {
+   "shortcode": "DaS3SALCYAo",
+   "title": "comment “AGENTS” for the full build guide for all 8 agents. \n\nmost people use Claude for one task at",
+   "note": " ",
+   "gate_keyword": "AGENTS",
+   "topics": [
+    "claude-ai",
+    "developer-tools",
+    "productivity-hacks",
+    "ai-agents",
+    "build-guide"
+   ],
+   "created_at": "2026-07-20T07:08:00.000Z",
+   "page_id": "3a324f9e-ca09-81c7-8123-e4b50e2d60b8"
+  },
+  {
+   "shortcode": "Da-hQDCvHgU",
+   "title": "Instead of building a complex new app, use AI to build and sell a single-feature, cheaper version of",
+   "note": " ",
+   "gate_keyword": "TOOL",
+   "topics": [
+    "ai-tools",
+    "claude-ai",
+    "app-development",
+    "web-development"
+   ],
+   "created_at": "2026-07-20T06:39:00.000Z",
+   "page_id": "3a324f9e-ca09-814f-9c2e-ddbba9483eff"
+  },
+  {
+   "shortcode": "Da7iYBuiSEO",
+   "title": "comment “design” for the full install guide for all 6 skills 🎨\n\nThese are six completely free skills",
+   "note": " ",
+   "gate_keyword": "design",
+   "topics": [
+    "developer-tools",
+    "productivity-hacks",
+    "design",
+    "free-resources",
+    "installation-guide"
+   ],
+   "created_at": "2026-07-20T06:33:00.000Z",
+   "page_id": "3a324f9e-ca09-81ce-8f71-e32e11dc31e6"
+  },
+  {
+   "shortcode": "Danc08PA0kz",
+   "title": "You can design, build, and launch a complete iOS and Android mobile app to the App Store with zero c",
+   "note": " ",
+   "gate_keyword": "APP",
+   "topics": [
+    "claude-ai",
+    "ai-tools",
+    "mobile-development",
+    "app-development",
+    "react-native"
+   ],
+   "created_at": "2026-07-20T06:09:00.000Z",
+   "page_id": "3a324f9e-ca09-8174-a7c1-ea0ffb0c6156"
+  },
+  {
+   "shortcode": "Da-5k3PI8Ho",
+   "title": "Trying to outpace AI development is a losing battle; the real value lies in directing it by turning ",
+   "note": " ",
+   "gate_keyword": "prompt",
+   "topics": [
+    "web-design",
+    "claude-ai",
+    "ai-tools"
+   ],
+   "created_at": "2026-07-20T06:02:00.000Z",
+   "page_id": "3a324f9e-ca09-8136-bef2-e7401416c0ac"
+  },
+  {
+   "shortcode": "Da8ey0fscUF",
+   "title": "Scroll World is a new open-source Claude skill that lets anyone generate fully animated, 3D scrollin",
+   "note": " ",
+   "gate_keyword": "SCROLL",
+   "topics": [
+    "claude-ai",
+    "web-design",
+    "web-development",
+    "ai-tools",
+    "open-source"
+   ],
+   "created_at": "2026-07-20T05:58:00.000Z",
+   "page_id": "3a324f9e-ca09-817d-9d33-db4c385da1c1"
+  },
+  {
+   "shortcode": "Da8A4axznbT",
+   "title": "An app built with Higgsfield AI allows users to instantly apply various stylized and retro filters t",
+   "note": " ",
+   "gate_keyword": "effect",
+   "topics": [
+    "resource-sharing",
+    "ai-tools",
+    "image-generation"
+   ],
+   "created_at": "2026-07-19T17:52:00.000Z",
+   "page_id": "3a224f9e-ca09-817b-aa94-ea21a09539d1"
+  },
+  {
+   "shortcode": "DYPRivOTRWv",
+   "title": "The creator is offering to direct message a link to anyone who comments the word 'REPO' on the post.",
+   "note": " \n\n⚠️ no audio track in source video — summarized from caption only, no transcript",
+   "gate_keyword": "REPO",
+   "topics": [
+    "solopreneurship",
+    "resource-sharing",
+    "automation"
+   ],
+   "created_at": "2026-07-19T17:00:00.000Z",
+   "page_id": "3a224f9e-ca09-8138-9f15-e385b2d13dfe"
+  },
+  {
+   "shortcode": "Dak-1xRnPXL",
+   "title": "Comment “agent” to get my free Claude code guides & skills",
+   "note": "⚠️ photo/carousel post — caption recovered via local OG fetch; no video transcript exists",
+   "gate_keyword": "agent",
+   "topics": [
+    "claude-ai",
+    "developer-tools",
+    "productivity-hacks",
+    "ai-agents",
+    "coding-guides"
+   ],
+   "created_at": "2026-07-19T12:46:00.000Z",
+   "page_id": "3a224f9e-ca09-81c9-9fca-d21d9c662475"
+  },
+  {
+   "shortcode": "DXD-9A_Cace",
+   "title": "A 7-step sequence using Claude prompts to build a business from idea validation to launching and get",
+   "note": " \n\n⚠️ no audio track in source video — summarized from caption only, no transcript",
+   "gate_keyword": "PROMPTS",
+   "topics": [
+    "claude-ai",
+    "prompt-engineering",
+    "solopreneurship",
+    "business-launch"
+   ],
+   "created_at": "2026-07-19T12:22:00.000Z",
+   "page_id": "3a224f9e-ca09-81d5-81ad-ea862e2bf853"
+  },
+  {
+   "shortcode": "DZrQ7dMRx0m",
+   "title": "Comment “Startup” for the guide\n\n#startup #tech #us #engineer #money",
+   "note": " ",
+   "gate_keyword": "Startup",
+   "topics": [
+    "startup",
+    "tech",
+    "engineering",
+    "developer-tools",
+    "finance"
+   ],
+   "created_at": "2026-07-19T12:17:00.000Z",
+   "page_id": "3a224f9e-ca09-81a8-85cf-f8529b76c23b"
+  },
+  {
+   "shortcode": "DaQIJuYCMkv",
+   "title": "Comment SKILL and I'll send you the Board of Advisers skill to download.\n\nMost big decisions get mad",
+   "note": " ",
+   "gate_keyword": "SKILL",
+   "topics": [
+    "productivity-hacks",
+    "ai-plugins",
+    "claude-ai",
+    "decision-making",
+    "ai-skills"
+   ],
+   "created_at": "2026-07-19T08:09:00.000Z",
+   "page_id": "3a224f9e-ca09-8177-8972-f1d56d846391"
+  },
+  {
+   "shortcode": "Da8IIonEhGR",
+   "title": "A curated list of essential Model Context Protocol (MCP) servers across development, team productivi",
+   "note": "recovered by the placeholder worker from a home-IP fetch",
+   "gate_keyword": "MCP",
+   "topics": [
+    "claude-ai",
+    "ai-plugins",
+    "developer-tools",
+    "productivity-hacks"
+   ],
+   "created_at": "2026-07-19T08:06:00.000Z",
+   "page_id": "3a224f9e-ca09-815c-869d-fed7414c5e26"
+  },
+  {
+   "shortcode": "DaloTsYCBGo",
+   "title": "Comment GUIDE and I'll send you all five prompts ready to copy.\n\nFable 5 is the best model right now",
+   "note": " ",
+   "gate_keyword": "GUIDE",
+   "topics": [
+    "productivity-hacks",
+    "developer-tools",
+    "ai-prompts",
+    "ai-models",
+    "artificial-intelligence"
+   ],
+   "created_at": "2026-07-19T06:25:00.000Z",
+   "page_id": "3a224f9e-ca09-8198-9f5f-c8b804ac2312"
+  },
+  {
+   "shortcode": "DaYwajdCPOX",
+   "title": "Comment LINKS, and I'll send you every link, plus the 100+ resources behind all 42 skills.\n\nMost peo",
+   "note": " ",
+   "gate_keyword": "LINKS",
+   "topics": [],
+   "created_at": "2026-07-18T21:16:00.000Z",
+   "page_id": "3a124f9e-ca09-8137-86cf-efce27d51a92"
+  },
+  {
+   "shortcode": "DamEcWuPvX0",
+   "title": "How to build an autonomous, self-correcting Agentic OS using Fable 5 that runs daily on cron jobs, e",
+   "note": " ",
+   "gate_keyword": "agent",
+   "topics": [
+    "ai-agents",
+    "agentic-os",
+    "automation",
+    "software-engineering",
+    "fable-5"
+   ],
+   "created_at": "2026-07-18T21:12:00.000Z",
+   "page_id": "3a124f9e-ca09-8148-b83e-ce325285cff9"
+  },
+  {
+   "shortcode": "DZKfop6R30d",
+   "title": "Just comment ‘Design’ and I’ll share you the link to the website.",
+   "note": " ",
+   "gate_keyword": "Design",
+   "topics": [],
+   "created_at": "2026-07-18T07:22:00.000Z",
+   "page_id": "3a124f9e-ca09-81f2-99e2-cf7cce7d04ad"
+  },
+  {
+   "shortcode": "DXGQ6-2t11w",
+   "title": "A showcase of five powerful plugins, skills, and CLI tools designed to extend the capabilities of An",
+   "note": " ",
+   "gate_keyword": "agent",
+   "topics": [
+    "developer-tools",
+    "emergent-ai",
+    "open-source"
+   ],
+   "created_at": "2026-07-17T22:47:00.000Z",
+   "page_id": "3a024f9e-ca09-8117-a276-e6a83431f5cf"
+  },
+  {
+   "shortcode": "DaQIJHnP6zn",
+   "title": "9Router is a free tool that automatically routes your AI coding tools to backup free providers when ",
+   "note": " ",
+   "gate_keyword": "CODING",
+   "topics": [
+    "ai-coding",
+    "claude-code",
+    "developer-tools",
+    "free-tier",
+    "open-source"
+   ],
+   "created_at": "2026-07-17T22:46:00.000Z",
+   "page_id": "3a024f9e-ca09-819e-967a-e13ebc80234c"
+  },
+  {
+   "shortcode": "DaVWwzxp6n8",
+   "title": "An open-source GitHub repository built by Y Combinator's Gary Tan turns Claude Dev into a fully auto",
+   "note": " ",
+   "gate_keyword": "GITHUB",
+   "topics": [
+    "emergent-ai",
+    "developer-tools",
+    "open-source"
+   ],
+   "created_at": "2026-07-17T22:44:00.000Z",
+   "page_id": "3a024f9e-ca09-81e8-b66a-fce6ba299bd5"
+  },
+  {
+   "shortcode": "DZpySOnOCxI",
+   "title": "The 'Everything Claude' GitHub repository turns Claude Code into a full-blown dev team with speciali",
+   "note": " ",
+   "gate_keyword": "FREE",
+   "topics": [
+    "artificial-intelligence",
+    "automation",
+    "software-development"
+   ],
+   "created_at": "2026-07-17T22:40:00.000Z",
+   "page_id": "3a024f9e-ca09-81d1-bfc1-f45426300cc0"
+  },
+  {
+   "shortcode": "Da4qstEJhCp",
+   "title": "Build a no-code automated lead generation tool on Emergent using a single prompt, then sell it to lo",
+   "note": " ",
+   "gate_keyword": "LEADS",
+   "topics": [
+    "no-code",
+    "lead-generation",
+    "artificial-intelligence",
+    "saas-builder",
+    "side-hustle"
+   ],
+   "created_at": "2026-07-17T22:39:00.000Z",
+   "page_id": "3a024f9e-ca09-8194-ba1f-c5f6fab24c8d"
+  },
+  {
+   "shortcode": "DZVsGZGt8dd",
+   "title": "Comment “SEO” - the guide; full details 👇 \n\nLet me tell you what this needs-\n\n1. Pro Claude subscrip",
+   "note": " ",
+   "gate_keyword": "SEO",
+   "topics": [],
+   "created_at": "2026-07-17T22:38:00.000Z",
+   "page_id": "3a024f9e-ca09-815d-9a30-d88a52bf16b6"
+  },
+  {
+   "shortcode": "DaRbl6qJxRM",
+   "title": "Follow & Comment “RESUME” for the links + 20 more\n\nMost students have no idea these exist:\n\n• Google",
+   "note": " ",
+   "gate_keyword": "RESUME",
+   "topics": [],
+   "created_at": "2026-07-17T22:25:00.000Z",
+   "page_id": "3a024f9e-ca09-814e-8c10-fd59b3026f0e"
+  },
+  {
+   "shortcode": "DaVgyuCJav3",
+   "title": "Easily create viral paper AI animations under 60 seconds by connecting Claude to Arcads using MCP co",
+   "note": " ",
+   "gate_keyword": "paper",
+   "topics": [
+    "ai-animation",
+    "claude-mcp",
+    "arcads-ai",
+    "motion-graphics",
+    "ai-tutorials"
+   ],
+   "created_at": "2026-07-17T22:18:00.000Z",
+   "page_id": "3a024f9e-ca09-817c-97aa-deb3c9f1c263"
+  },
+  {
+   "shortcode": "Dap3IoNo4Kt",
+   "title": "🚀Top 10 claude skills for Designers\nDrop your fv emoji to grab all in ur dms 👾\n\n#webdesign #website ",
+   "note": " ",
+   "gate_keyword": "",
+   "topics": [],
+   "created_at": "2026-07-17T22:09:00.000Z",
+   "page_id": "3a024f9e-ca09-81fe-bb2e-ffc3ccdca3d5"
+  },
+  {
+   "shortcode": "DZSFkNppVW_",
+   "title": "You can run your entire Meta ads workflow inside Claude using five custom skills to automate spy res",
+   "note": " ",
+   "gate_keyword": "ads",
+   "topics": [
+    "claude-ai",
+    "meta-ads",
+    "ai-marketing",
+    "digital-advertising"
+   ],
+   "created_at": "2026-07-17T22:09:00.000Z",
+   "page_id": "3a024f9e-ca09-8106-bdb9-e9b2688cc14f"
+  },
+  {
+   "shortcode": "DavPc6tNMRR",
+   "title": "A simple browser extension and tool allows users to quickly remove Gemini video watermarks.",
+   "note": " ",
+   "gate_keyword": "watermark",
+   "topics": [
+    "ai-tools",
+    "video-editing",
+    "gemini-ai",
+    "content-creation",
+    "life-hacks"
+   ],
+   "created_at": "2026-07-17T22:06:00.000Z",
+   "page_id": "3a024f9e-ca09-810e-896a-d5d0e51166fc"
+  },
+  {
+   "shortcode": "DasLm6opzIO",
+   "title": "How to build high-quality, scroll-linked product animations similar to Apple's website in four steps",
+   "note": " ",
+   "gate_keyword": "scroll",
+   "topics": [
+    "scroll-animation",
+    "no-code",
+    "midjourney",
+    "luma-dream-machine",
+    "web-design",
+    "ai-coding"
+   ],
+   "created_at": "2026-07-17T21:45:00.000Z",
+   "page_id": "3a024f9e-ca09-8187-ae50-f366fde728a7"
+  },
+  {
+   "shortcode": "DaVOYOUBu3x",
+   "title": "A breakdown of the seven essential AI tools used to scale a business to $1.5 million a month, coveri",
+   "note": " ",
+   "gate_keyword": "GAME",
+   "topics": [
+    "agency-growth",
+    "client-acquisition",
+    "lead-generation",
+    "ai-tools"
+   ],
+   "created_at": "2026-07-17T12:48:00.000Z",
+   "page_id": "3a024f9e-ca09-8161-819d-dbec6de16be6"
+  },
+  {
+   "shortcode": "DazUc-EJCBk",
+   "title": "Instead of waiting for a next-gen AI model, you can build a smarter system around Claude today using",
+   "note": " ",
+   "gate_keyword": "BALL",
+   "topics": [
+    "claude-ai",
+    "ai-agents",
+    "mcp-servers",
+    "developer-tools"
+   ],
+   "created_at": "2026-07-17T12:15:00.000Z",
+   "page_id": "3a024f9e-ca09-8125-a37e-d3059c75bec9"
+  },
+  {
+   "shortcode": "DaxA0CdxSkW",
+   "title": "Comment “TOOLS” to get the link (must be following)",
+   "note": " ",
+   "gate_keyword": "TOOLS",
+   "topics": [],
+   "created_at": "2026-07-17T11:06:00.000Z",
+   "page_id": "3a024f9e-ca09-8143-a662-d06958f9324e"
+  },
+  {
+   "shortcode": "DZcueWRhTGf",
+   "title": "Highlighting Claude Fabel's impressive 3D motion design and generative AI workflow.",
+   "note": "testnote ",
+   "gate_keyword": "CLAUDE",
+   "topics": [
+    "3d-motion-design",
+    "ai-animation",
+    "generative-ai",
+    "ai-workflow"
+   ],
+   "created_at": "2026-07-17T07:43:00.000Z",
+   "page_id": "3a024f9e-ca09-81b2-8a3a-fe16501db8bd"
+  },
+  {
+   "shortcode": "DajFASZODlj",
+   "title": "(FREE) Claude + Apify = International Clients💰💰💰\n\nComment \"International\" for free Guide.\n\nReachout ",
+   "note": "testnote ",
+   "gate_keyword": "International",
+   "topics": [],
+   "created_at": "2026-07-17T05:45:00.000Z",
+   "page_id": "3a024f9e-ca09-81e1-a2ef-fc3fa5471435"
+  },
+  {
+   "shortcode": "DavJiHqPz95",
+   "title": "Claude's integration with tools like Chrome DevTools, Firecrawl, Figma, Blender, and ElevenLabs allo",
+   "note": "smoke-test",
+   "gate_keyword": "PLUGINS",
+   "topics": [
+    "claude-ai",
+    "ai-plugins",
+    "productivity-hacks",
+    "developer-tools"
+   ],
+   "created_at": "2026-07-15T06:58:00.000Z",
+   "page_id": "39e24f9e-ca09-81a5-8553-d7cbb95c2fe9"
+  }
+ ],
+ "pairs": [
+  {
+   "shortcode": "DbJl-7UyIhq",
+   "url": "https://cfong-guides.netlify.app/content-pipeline/?mcp_token=eyJwaWQiOjEyOTY1OTcsInNpZCI6MTgwMTU1MTQwNSwiYXgiOiIxZGFiMmIzODVjM2E0YWUyYWZiZjZkODBmNDVkM2RlOCIsInRzIjoxNzg1MDAyNTkyLCJleHAiOjE3ODc0MjE3OTJ9.sOOHcOvUOCoXGrHuVAqG7tU-El5FY2eCIbTRq-couU0&fbclid=PARlRTSATR2cRwZG9mAmV4dG4DYWVtAjEwAHNydGMGYXBwX2lkDzEyNDAyNDU3NDI4NzQxNAABp1fMSko21N1zhUH3lebcgZ-RSYnZ0UsfM4d_93a6hnT_s1N3iYc8J0ZJpv00_aem_CK9bW3e55n8JUypUEBmNAQ",
+   "kind": "web_article",
+   "title": "Give Your Claude My Content Pipeline Skill | CFong",
+   "full_text": "Give Your Claude My Content Pipeline Skill | CFong 01 01 / Overview What This Skill Does The whole install · paste this to your Claude Install this Claude skill from https://github.com/cfongai/higgsfield-content-pipeline (clone it and run its install.sh), get the Higgsfield CLI and ffmpeg ready, then help me make my first video. Copy That is the whole install. Paste it into Claude Code and your Claude does the rest. Then tap Get Higgsfield Free below to make your account. This is a skill pack for Claude. Once you install it, you stop prompting for video and start asking for it . You say \"make me a three scene cinematic reel\" and Claude writes the prompts, renders every clip on Higgsfield, and assembles the final cut. Nineteen skills, one conversation. There is no timeline to learn and no editor to fight. You train your look once, then describe the video you want in plain English. Claude picks the models, generates the shots, checks them, and hands you a finished file. The same pipeline makes personal-brand reels, e-commerce ads, and product videos. Two things get your Claude making content today: install the skill (three commands below) and sign up for Higgsfield free with the button. For the next 24 hours every top model is unlimited, including Seedance 2.0, so your first videos cost nothing. Get Higgsfield Free → 1 TRAIN Your look, once 2 ASK The video, in one sentence 3 WRITE Claude writes the prompts 4 RENDER Higgsfield builds the clips 5 ASSEMBLE ffmpeg cuts the final 6 POST Finished file, ready 19 Skills Inside Auto-loaded into Claude $0 To Install Open on GitHub, free 5 Min Setup Three commands 24 Hours Free Higgsfield, every top model 02 02 / Architecture How It All Connects Three pieces, one direction. Your ask goes in at the top, Claude and the skill do everything in the middle, and a finished video comes out the bottom. Claude reads the skill files, the skill knows how to drive Higgsfield, and ffmpeg stitches the clips into one cut. You never touch a render setting. Source Your Ask \"make me a 3-scene cinematic reel about ___\" Engine Claude Code + The Skill WRITE → RENDER → CHECK → ASSEMBLE Delivery Your Finished Video 19 skills auto-loaded Higgsfield CLI renders every clip ffmpeg assembles the final cut You ask. Claude builds. Higgsfield renders. The whole loop is one conversation. Because Claude drives the whole chain, a weak clip is never a dead end. Say what is off (\"more cinematic\", \"slower push-in\", \"warmer light\") and the next render lands in the same chat. Today the retries are free, which is exactly why this is the day to install it. 03 03 / The Install The Easiest Install You do not set this up. Your Claude does. Copy the one line below, paste it into Claude Code, and it clones the skill, installs all 19, and gets you ready to make videos. Prefer the terminal yourself? The manual commands are right after. The Easy Way Tell Claude To Install It One paste. Open Claude Code and give it this. Claude does the clone, the install, and the setup, then offers to make your first reel. You never touch a command. Paste This To Claude install-with-claude.txt 📋 Copy Install this Claude skill from https://github.com/cfongai/higgsfield-content-pipeline (clone it and run its install.sh), get the Higgsfield CLI and ffmpeg ready, then help me make my first video. Then When Claude asks you to log into Higgsfield, use the free account from the button below. That is the only click it needs from you. Get"
+  },
+  {
+   "shortcode": "DbJtLyLAJ2D",
+   "url": "https://github.com/kiryano/Scout?sdm_click=sdc.eyJ2IjoxLCJjbGlja0lkIjoiY21zMG80bW1yMTh0eG53Mm1scWx0MTBycyIsIndvcmtzcGFjZUlkIjoiY21yYWV5aG5tMDAwOGpmMGE0cnBmajVuNiIsImlhdCI6MTc4NTAwMjA0MjI0OX0.zNDp8fHWw1cf1ZBZQRwDA47VH_k_hd82h7icYSWFREM&fbclid=PARlRTSATR15FwZG9mAmV4dG4DYWVtAjEwAHNydGMGYXBwX2lkDzEyNDAyNDU3NDI4NzQxNAABpxns5ejUMR5l62I9jYoT36DZia4iPKNGZRBqG5bT1j0tVws6dy4IO0E6gfel_aem_htoPF63diQHA-aGHju_qgg",
+   "kind": "github_repo",
+   "title": "[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)",
+   "full_text": "# Scout [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/) [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT) [![Discord](https://img.shields.io/discord/1467620600267931713?color=7289da&label=Discord&logo=discord&logoColor=white)](https://discord.gg/eneDNUbzcc) > **Early access** — Scout is a CLI tool right now. A full web app with dashboard, CRM, and team features is in development. Looking for testers and feedback. Join the [Discord](https://discord.gg/eneDNUbzcc) or open an issue. Lead generation tool for appointment setters. Scrapes profiles from 8 platforms, enriches them with verified emails using SMTP verification and company domain detection, and exports to CSV. ![Scout CLI](screenshot.png) ## Install ```bash git clone https://github.com/kiryano/Scout.git cd Scout pip install -r requirements.txt cp .env.example .env ``` ## Usage ```bash python scout.py python scout.py --verbose # enable debug logging python scout.py --version python scout.py --help ``` Interactive CLI for scraping profiles, enriching leads with contact info, and exporting to CSV. ## Supported Platforms | Platform | Auth Required | What It Scrapes | |----------|--------------|-----------------| | Instagram | None | profile, bio, followers, email, phone, links | | TikTok | None | profile, bio, followers, likes, email | | LinkedIn | Session cookie | profile, headline, bio, email | | GitHub | None | profile, bio, repos, email, website | | YouTube | None | channel name, description, subscribers, email, links | | Twitch | None | profile, bio, followers, partner/affiliate status, social links | | Pinterest | None | profile, bio, followers, pins, website | | Linktree | None | all link-in-bio platforms (Linktree, Stan, Linkr, Bio.link) | ## Features - 8 platform scrapers with consistent output format - Email enrichment with SMTP verification (no paid API needed) - Company domain detection from headline/bio - Email pattern detection (first.last@company.com patterns) - Lead scoring (0-100) - Website deep scraping for contact info - Bio link scraping (Linktree, WhatsApp, tel: links) - CSV export with enriched data - Bulk scraping from username lists (CSV/TXT) - Proxy rotation and user-agent rotation - Configurable scrape delay and proxy settings - Automatic update checker with version enforcement - Debug logging with `--verbose` flag ## LinkedIn Setup 1. Log into LinkedIn in Chrome 2. Open DevTools (F12) > Application > Cookies > linkedin.com 3. Copy the value of `li_at` 4. Add to `.env`: ``` LINKEDIN_COOKIE=your_li_at_cookie_value ``` ## Proxy Setup ``` # Single proxy SCOUT_PROXY=http://user:pass@host:port # Rotating proxies from file (one per line) SCOUT_PROXY_FILE=proxies.txt # Free anonymous proxies (no config needed) SCOUT_FREE_PROXY=true ``` Proxies are optional. All scrapers work without them. Twitch automatically falls back to a direct connection if the proxy fails. ## How Enrichment Works After scraping, Scout enriches leads with verified email addresses: 1. Extracts email/phone from bio text 2. Scrapes the lead's website, /contact, and /about pages 3. Detects the company from their headline (e.g. \"CEO at CompanyX\") 4. Finds the company domain via DNS MX lookup 5. Detects the email pattern from existing emails on the site 6. Generates email candidates (first.last@, first@, etc.) 7. Verifies each candidate against the mail server via SMTP 8. Scores confidence 0-100% based on source and verification No paid API required. Optional Hunter.io support for additional coverage. ## Limitations - Instagram may require retries depending on region/IP - TikTok may serve CAPTCHAs depending on region or IP - LinkedIn cookies expire periodically - GitHub API is limited to 60 requests/hour without a token - SMTP verification may be blocked by some mail servers - Free proxies are unreliable ## Community [Discord](https://discord.gg/eneDNUbzcc) ## License MIT"
+  },
+  {
+   "shortcode": "DbLpxfKPKoN",
+   "url": "https://youmind.com/prompts/video?fbclid=PARlRTSATR0zVwZG9mAmV4dG4DYWVtAjEwAHNydGMGYXBwX2lkDzEyNDAyNDU3NDI4NzQxNAABp2lvs_gPMcRyeoHeU0IPfJLPEWMPva-ASC-tyNDp63TAvgjWMtmKp2Q6skiN_aem_ujp25I4kkpzWCt8L-TjLrw",
+   "kind": "web_article",
+   "title": "Free AI Video Prompts Library - New Prompts Daily - YouMind",
+   "full_text": "Free AI Video Prompts Library - New Prompts Daily - YouMind YouMind Overview Use cases Skills Prompts Pricing Download Blog Updates Menu Sign in Overview Use cases Skills Prompts Pricing Download Blog Updates Page outline VIDEO PROMPTS · UPDATED DAILY · 100% FREE VIDEO PROMPTS Free curated video prompts for Seedance 2.0 and Grok Imagine. New prompts every day. Animated Jungle Expedition Multi-Shot Weekly Featured Use Cases Styles Subjects Cinematic Scene Showcase Vlog / Social Lifestyle Short Film Music Video Brand / Product Commercial UGC / Talking Head Ad Explainer / Tutorial Channel Intro / Brand Asset Game Cinematic / PV 01 Use Cases Cinematic Scene Showcase Vlog / Social Lifestyle Short Film Music Video Brand / Product Commercial UGC / Talking Head Ad Explainer / Tutorial Channel Intro / Brand Asset Game Cinematic / PV 02 Styles Cinematic Realistic Fantasy / Magical Cyberpunk / Sci-Fi Anime Vintage / Retro Film Surreal / Dreamlike Documentary 3D Cartoon 2D Animation Chinese Ink Stop Motion 03 Subjects Person / Character Sports / Action Nature / Landscape Architecture / Interior Abstract / VFX Cityscape / Urban Animal / Pet Vehicle Text / Logo Crowd / Group Food / Drink Product 8-bit Fantasy Pixel Art Loop @paranoidream ♡︎ Grok Imagine K-POP MV Motion Transfer @John Seedance 2.0 Handheld Smartphone Beach Video @Saul Goodman Seedance 2.0 Korean Fantasy Romance Drama @Julia Clark Seedance 2.0 Noodle Shop Comedy Skit iPhone POV @John Seedance 2.0 Cinematic Alpine Dragon Encounter @Sharon Riley Seedance 2.0 First-Person Beach Family Travel Vlog @Yashal Ai Seedance 2.0 Cinematic Golden Hour Badminton Commercial @Sophia Seedance 2.0 K-POP MV Motion Transfer @John Handheld Smartphone Beach Video @Saul Goodman Korean Fantasy Romance Drama @Julia Clark Noodle Shop Comedy Skit iPhone POV @John Cinematic Alpine Dragon Encounter @Sharon Riley First-Person Beach Family Travel Vlog @Yashal Ai 8-bit Fantasy Pixel Art Loop @paranoidream ♡︎ Hyper-realistic Woman in Coral Dress @Carolina Delgado Gothic Queen Cradling Baby @Myluna Ethereal Angel in Pastel Clouds @Stella 𝕏 Coffee Shop Interaction Dialogue @Matt Wilson Nordic 8-Bit Pixel Art Style @Kiki 🇺🇸 Free AI video prompts, updated daily This part of YouMind's AI prompt library collects free video prompts for models like Seedance 2.0 and Grok Imagine. Each entry shows the full prompt behind the clip, so it also works as a video to prompt reference: pick a clip close to what you want, read the exact prompt that made it, and adapt the motion, subject, or style to your own scene. New video prompts are added every day. More in the library AI prompt library home Image prompts Webpage prompts More Prompt Features AI Library AI prompt search Let AI search through tens of thousands of prompts. Filter by model, time range, keywords, and sort by engagement — views, bookmarks, reposts and more. Try free /imagine prompt: cinematic, cyberpunk sunset, neon colors, 8k --v 6.0 Vision Tools Image to Prompt Turn any photo into a detailed AI image prompt. The free image to prompt converter analyzes composition, style, and lighting so you can recreate any look in seconds. Convert Image to Prompt Other Prompt Features Browse by Model GPT Image 2 Prompts Nano Banana Pro Prompts Seedream 4.5 Prompts GPT Image 1.5 Prompts Seedance 2.0 Prompts Grok Imagine Prompts Gemini 3 Pro Prompts Browse by Media Image Prompts Video Prompts Webpage Prompts AI Tools Image to Prompt Photo Prompts GPT Image 2 Slides Built for creators. Free forever. YouMind is the AI creative copilot trusted by millions of creators worldwide. Every prompt here is curated to help you create better, faster. Start creating with YouMind Explore more prompts © 2026 MIND MOTOR"
+  },
+  {
+   "shortcode": "DbJc-RQNN1C",
+   "url": "https://www.greta.sh/ebooks/make-vibe-coded-app-look-professional?fbclid=PARlRTSATR1iZwZG9mAmV4dG4DYWVtAjEwAHNydGMGYXBwX2lkDzEyNDAyNDU3NDI4NzQxNAABp_xVnzblfjB7umlN4uqUkPrCmNu5fw9QM9oCI9MJ2CUWR1ahOgg15JYRWDMN_aem_c4Xg9bNilv-uOp6TMjPErg",
+   "kind": "web_article",
+   "title": "5 Ways to Make Your Vibe-Coded App Look Professional | Greta Ebooks",
+   "full_text": "5 Ways to Make Your Vibe-Coded App Look Professional | Greta Ebooks All Guides Guide Building July 20, 2026 5 Ways to Make Your Vibe-Coded App Look Professional Take this guide with you. Drop your email and we'll send the 5 Ways to Make Your Vibe-Coded App Look Professional straight to your inbox. Send to my inbox Build Your App with Greta No spam. Just the guide. Unsubscribe anytime. A no-fluff polish checklist for vibe-coded apps: skeleton loaders, data caching, optimistic rendering, and tooltips on icon buttons — plus the drop-in libraries that handle each one. What's inside Skeleton loaders that make the wait feel shorter than it is Caching that kills the dial-up feeling on every repeat visit Optimistic rendering: update the UI now, confirm after Tooltips that turn mystery icon buttons into obvious ones The drop-in libraries for each: TanStack Query, Radix UI, and more It Works. That's the Bare Minimum. Shipping something that works is hackathon territory. Looking professional is a different dimension — and it comes down to five changes that separate a toy from a product. The Five Upgrades Skeleton loaders that show the layout before the data arrives, so the wait feels shorter. Caching that turns repeat visits into instant renders instead of another loading screen. Optimistic rendering that updates the UI the moment someone clicks and only rolls back on the rare failure. Tooltips that turn mystery icon buttons into obvious ones. And the real trick: stacking all four, because the combination is what reads as \"real product.\" What's in the Guide Each upgrade explained with the pattern behind it, plus the drop-in libraries that do the heavy lifting — react-loading-skeleton, TanStack Query, React's useOptimistic, and Radix UI Tooltip. The full checklist is in the PDF. Get the Guide Drop your email below and we'll send it straight to your inbox. Explore other guides Guide Building Are you into games? Games aren't just for playing — they're one of the best frameworks for building things people actually keep coming back to. This guide is for builders who want to apply game mechanics to their products. Read guide Guide Building I'm building interesting stuff Stop waiting for the perfect idea. This is a breakdown of what's actually worth building right now — the tools making it fast, the side projects getting traction, and the experiments worth running yourself. Read guide Guide Building 4 Free Tools That Teach You How Software Actually Ships Personal projects never show you Docker, Kubernetes, or CI/CD. Four free resources close the gap between 'it runs on my machine' and how real teams build, test, and deploy. Read guide Don't leave without it. Drop your email and get the 5 Ways to Make Your Vibe-Coded App Look Professional in your inbox. Send to my inbox Build Your App with Greta No spam. Just the guide. Unsubscribe anytime. Build Something Real If you can describe it, you can build it. Build Now"
+  },
+  {
+   "shortcode": "DbAYF_bDc_0",
+   "url": "https://heyzine.com/flip-book/b63c045825.html?utm_source=sp_auto_dm&fbclid=PARlRTSATQRGVwZG9mAmV4dG4DYWVtAjEwAHNydGMGYXBwX2lkDzEyNDAyNDU3NDI4NzQxNAABp7TvUG8XJSloQoP4x_13Yu9T4c4Br2ZZx065msh5QR6uccH_3VxSjQJx8mgR_aem_ZvCvctS1IBXks1gS9lhpWQ",
+   "kind": "web_article",
+   "title": "Online Flipbook",
+   "full_text": "Online Flipbook Facebook X (formerly Twitter) LinkedIn Pinterest Email WhatsApp Facebook Messenger Telegram Facebook X (formerly Twitter) LinkedIn Pinterest Email WhatsApp Facebook Messenger Telegram Facebook X (formerly Twitter) LinkedIn Pinterest Email WhatsApp Facebook Messenger Telegram Facebook X (Formerly Twitter) LinkedIn Pinterest Email WhatsApp Facebook Messenger Telegram Facebook X (formerly Twitter) LinkedIn Pinterest Email WhatsApp Facebook Messenger Telegram Facebook X (formerly Twitter) LinkedIn Pinterest Email WhatsApp Facebook Messenger Telegram Facebook X (formerly Twitter) LinkedIn Pinterest Email WhatsApp Facebook Messenger Telegram Page number Copy"
+  },
+  {
+   "shortcode": "DYf-n9PguD5",
+   "url": "https://www.vanity.llc/labs?fbclid=PARlRTSATQU_twZG9mAmV4dG4DYWVtAjEwAHNydGMGYXBwX2lkDzEyNDAyNDU3NDI4NzQxNAABp80iRcG1bc9-sMR_yD_v3xIXQcq20O6yjbNZ_kp06SWeOOwAC1ANrmimx9Z7_aem_rah_AUwztxLP9sG-dn57sA",
+   "kind": "web_article",
+   "title": "Roger Regueira",
+   "full_text": "Lab Roger Regueira Website design and developer, based in Miami, Florida vanity.llc Message Collections WebGL Three.js GSAP Interactions Ecommerce Assets : 128 items Last Updated : 10 hours ago July 2, 2026 WebGL July 2, 2026 July 2, 2026 Ecommerce July 2, 2026 July 2, 2026 GSAP July 2, 2026 GSAP July 2, 2026 July 2, 2026 July 2, 2026 Three.js July 2, 2026 Interactions July 2, 2026 July 2, 2026 July 2, 2026 About the Lab Free Webflow code. No friction. Built in Miami. /lab is an open archive of production-ready Webflow code — interactions, animations, and UI components we build at vanity, a small design studio in Miami, extracted and published here for anyone to use. Every entry ships with a live preview and a copyable code block. No login. No paywall. Copy it, adapt it, ship it. Each component solves a specific problem we hit on a real project. The filter above shows what's available — new drops land when something is worth publishing. Webflow Custom Code GSAP Scroll Animations Glass Morphism UI Lenis Smooth Scroll CMS Filter Interactions Custom Cursor Effects Lazy Video Loaders Webflow Page Transitions GSAP Timeline Loaders IntersectionObserver Webflow CMS Animations Scramble Text Effects Accordion Interactions Webflow E-commerce Miami Web Design 01 — Browse Filter, click, preview. Use the filter bar to narrow by category — interactions, UI components, performance. Each card shows a live preview you can interact with directly. Hover to see it in motion, click to open the full detail and code block. 02 — Use It Copy the code. Paste. Ship. Every component comes with a self-contained code block ready to drop into a Webflow embed. No npm, no build step, no dependencies beyond a CDN link. The instructions field in each entry covers exactly where it goes and what to connect it to. 03 — Go Deeper If you like this, you'll love Dev Access . The free library is the surface. Dev Access gets you the full Webflow cloneable files, annotated source, new drops before they're public, and a direct line to ask implementation questions. Built for developers who live in Webflow. The Archive Built in production. Published here. About the studio Nothing in /lab is written as a tutorial. Every component started as a solution to a real constraint on a real project — a client who needed a CMS filter that didn't kill page load, a scroll experience that had to work on iOS Safari, a video grid that couldn't block the main thread. The code here is what shipped, cleaned up and documented. The scope covers the full range of what Webflow custom code can do: GSAP scroll-triggered animations, glass morphism UI with live cursor glow, lazy video loading with LRU eviction, scramble text effects, native CSS snap carousels, and orbit spinners built on parametric circle math. Each one comes with a live preview you can interact with before copying a single line. The free tier is everything in the grid — no account, no gate. Dev Access goes deeper: full Webflow cloneable files, annotated source, and early access to new drops before they're published. It's built for developers who'd rather spend their time building than reverse-engineering. Common Questions Can I use these Webflow code snippets in client projects? Yes. Everything in /lab is free to use in personal and commercial projects without attribution. The code is extracted from production builds and written to be dropped directly into a Webflow custom code embed — no npm, no build tooling, no dependencies beyond the CDN links noted in each snippet. If you use it in"
+  },
+  {
+   "shortcode": "Da0jSm-tDsI",
+   "url": "https://github.com/multica-ai/andrej-karpathy-skills",
+   "kind": "github_repo",
+   "title": "Karpathy-Inspired Claude Code Guidelines",
+   "full_text": "# Karpathy-Inspired Claude Code Guidelines > Check out my new project [Multica](https://github.com/multica-ai/multica) — an open-source platform for running and managing coding agents with reusable skills. > > Follow me on X: [https://x.com/jiayuan_jy](https://x.com/jiayuan_jy) A single `CLAUDE.md` file to improve Claude Code behavior, derived from [Andrej Karpathy's observations](https://x.com/karpathy/status/2015883857489522876) on LLM coding pitfalls. English | [简体中文](./README.zh.md) ## The Problems From Andrej's post: > \"The models make wrong assumptions on your behalf and just run along with them without checking. They don't manage their confusion, don't seek clarifications, don't surface inconsistencies, don't present tradeoffs, don't push back when they should.\" > \"They really like to overcomplicate code and APIs, bloat abstractions, don't clean up dead code... implement a bloated construction over 1000 lines when 100 would do.\" > \"They still sometimes change/remove comments and code they don't sufficiently understand as side effects, even if orthogonal to the task.\" ## The Solution Four principles in one file that directly address these issues: | Principle | Addresses | |-----------|-----------| | **Think Before Coding** | Wrong assumptions, hidden confusion, missing tradeoffs | | **Simplicity First** | Overcomplication, bloated abstractions | | **Surgical Changes** | Orthogonal edits, touching code you shouldn't | | **Goal-Driven Execution** | Leverage through tests-first, verifiable success criteria | ## The Four Principles in Detail ### 1. Think Before Coding **Don't assume. Don't hide confusion. Surface tradeoffs.** LLMs often pick an interpretation silently and run with it. This principle forces explicit reasoning: - **State assumptions explicitly** — If uncertain, ask rather than guess - **Present multiple interpretations** — Don't pick silently when ambiguity exists - **Push back when warranted** — If a simpler approach exists, say so - **Stop when confused** — Name what's unclear and ask for clarification ### 2. Simplicity First **Minimum code that solves the problem. Nothing speculative.** Combat the tendency toward overengineering: - No features beyond what was asked - No abstractions for single-use code - No \"flexibility\" or \"configurability\" that wasn't requested - No error handling for impossible scenarios - If 200 lines could be 50, rewrite it **The test:** Would a senior engineer say this is overcomplicated? If yes, simplify. ### 3. Surgical Changes **Touch only what you must. Clean up only your own mess.** When editing existing code: - Don't \"improve\" adjacent code, comments, or formatting - Don't refactor things that aren't broken - Match existing style, even if you'd do it differently - If you notice unrelated dead code, mention it — don't delete it When your changes create orphans: - Remove imports/variables/functions that YOUR changes made unused - Don't remove pre-existing dead code unless asked **The test:** Every changed line should trace directly to the user's request. ### 4. Goal-Driven Execution **Define success criteria. Loop until verified.** Transform imperative tasks into verifiable goals: | Instead of... | Transform to... | |--------------|-----------------| | \"Add validation\" | \"Write tests for invalid inputs, then make them pass\" | | \"Fix the bug\" | \"Write a test that reproduces it, then make it pass\" | | \"Refactor X\" | \"Ensure tests pass before and after\" | For multi-step tasks, state a brief plan: ``` 1. [Step] → verify: [check] 2. [Step] → verify: [check] 3. [Step] → verify: [check] ``` Strong success criteria let the LLM loop independently. Weak criteria (\"make it work\") require constant clarification. ## Install **Option A: Claude Code Plugin (recommended)** From within Claude Code, first add the marketplace: ``` /plugin marketplace add forrestchang/andrej-karpathy-skills ``` Then install the plugin: ``` /plugin install andrej-karpathy-skills@karpathy-skills ``` This installs the guidelines as a Claude Code plugin, making the skill available across all your projects. **Option B: CLAUDE.md (per-project)** New"
+  },
+  {
+   "shortcode": "DaWMXFvEryu",
+   "url": "https://docs.google.com/document/d/1ICH-MGeNQR403Gu2XEDkt4KfJKRcOfKK/mobilebasic",
+   "kind": "google_doc",
+   "title": "BLUEPRINT - The Blueprint Vault.docx",
+   "full_text": "BLUEPRINT - The Blueprint Vault.docx THE BLUEPRINT VAULT The Blueprint Vault Spend your last free Fable 5 night mining your whole backlog into build-ready blueprints, so cheaper models build them for months. The exact prompt, the template, and the overnight loop are below. The idea in one line. Fable 5 is Anthropic's planning and hard-problems model, so its real edge is not typing your work, it is turning a vague backlog into specs so exact that a cheap model (Sonnet or Haiku) can build them later without a single judgment call. You plan once tonight with the expensive brain, then cheap models cash the checks for a long time. Three pieces do it: the mining prompt, the blueprint template, and the batch loop. How to run it in 60 seconds Open Claude Code in your real project folder (best), or a plain claude.ai chat with Fable 5 selected. Paste the MINING PROMPT, then paste the TEMPLATE right after it, answer the questions it asks, then paste the BATCH LOOP. Go to sleep. Wake up to a vault of blueprints. Repost th e video and win a FREE month of Claude Max ($200) Share or repost the video to your story or feed and you are entered in my weekly draw. Every week I pick one person who shared it and cover a full month of Claude Max for them, on me. Tag me in the repost so I can find you. STEP 1 The mining prompt Paste this first. It stops Fable from writing code, forces it to read your real files, and makes it interview you before it plans anything. Watch for the line QUESTIONS FIRST , that is how you know it gated itself instead of guessing. MINING PROMPT , PASTE INTO FABLE 5 FIRST You are my planning model for this session. Anthropic positions you (Claude Fable 5) as their model for planning and hard, long-horizon problems, so I am spending you on exactly that: turning my whole backlog into build-ready blueprints. You will NOT write any product code, copy, or deliverables tonight. Your only job is to produce one blueprint per backlog item, each one exact enough that a CHEAPER model (Claude Sonnet or Haiku) can build it later, alone, without making a judgment call or asking a follow-up. THE HANDOFF RULE (this is the whole game, read it twice): The builder model cannot guess what I meant, cannot see me, and cannot ask me anything. So every blueprint must be exact enough that a mediocre model builds the thing correctly by following it literally, and no more verbose than that. If a sentence does not change what gets built, cut it. If a step still needs taste or a decision, the blueprint is not finished: make the decision yourself and write it down. STEP 1 - GROUND YOURSELF BEFORE YOU PLAN. IF I am running you inside a real project folder (Claude Code): first read this repo so every blueprint is grounded in what actually exists, not what you assume. Look at the folder structure, the package/dependency files, the README, the config, the existing naming conventions, and 3 to 5 representative source files. Then read my backlog file (path at the bottom). Do not invent files, libraries, endpoints, or features that are not in this repo or my backlog. If something genuinely is not in the repo yet, say so in the blueprint instead of guessing. IF there is no repo (plain claude.ai chat): I will paste my backlog as a list. You have no files to read, so you must ask MORE clarifying questions"
+  },
+  {
+   "shortcode": "Da30z51NQCq",
+   "url": "https://vibha-ramprakash.github.io/competitor-intel-dashboard-guide/?utm_source=sp_auto_dm&fbclid=PARlRTSATLV2ZwZG9mAmV4dG4DYWVtAjEwAHNydGMGYXBwX2lkDzEyNDAyNDU3NDI4NzQxNAABpzGeDCsf73lmd6uotVXP5Gts76IZlxgQ9FZXqgyvrsb_pYPzkukp602KAOD0_aem_ZFxKAaUWjmRmacAnvvxbEg",
+   "kind": "web_article",
+   "title": "Competitor Radar · Setup Guide",
+   "full_text": "Competitor Radar · Setup Guide ▶ View the demo dashboard Setup Guide Skip to the one-paste prompt Setup Guide · runs inside Claude Competitor Radar Four skills that watch your competitors for you: their websites , their gaps , their content and their reviews . One board that opens with a brief: only what changed, and what to do about it. This guide sets it up from zero, no coding, in about 30 minutes. Read this first. The demo dashboard uses a fictional brand (FLORE) with illustrative numbers; your radar fills with your real competitors. Two honesty rules baked into every prompt below: Claude must never invent a number (anything it cannot verify gets marked \"verify\"), and every finding must carry a link to its source . Scheduled tasks only run while your computer is awake with Claude open, so pick a time you are usually online. 1 · The Profiler their websites, diffed → 2 · The Gap Finder their offer vs yours → 3 · The Shadow everything they post → 4 · The Eavesdropper every review, themed → The Radar brief + your moves, weekly What it costs Mostly free. One small paid piece. Free Firecrawl free tier: enough monthly credits to crawl a handful of competitor sites weekly Claude web search : the fallback when a scraper is not connected Marketing skills from GitHub (open source, MIT) Scheduled Tasks : built into Claude Paid, but small Apify : the review + Instagram comment scrapers. Starts with free monthly credit; a weekly pull on 3 competitors typically costs a few dollars a month Skip it at the start: the Eavesdropper prompt has a web-search fallback that reads public review pages directly Step 1 · 10 minutes 1 Create the project and connect the tools Open claude.ai → Projects → New project → name it \"Competitor Radar\" . Connect Firecrawl (site crawling): create a free account at firecrawl.dev and copy your API key. Then in Claude: Settings → Connectors → Add custom connector → follow the hosted-server instructions on the firecrawl-mcp-server GitHub page (linked in the toolkit below), pasting in your key. Connect Apify (reviews + Instagram comments, optional at the start): sign up at apify.com, then add mcp.apify.com the same way: Settings → Connectors → Add custom connector → paste the Apify MCP URL and sign in when prompted. Add the skills : open the marketingskills repo (toolkit below), download these four skill folders and add their files to your project's knowledge: competitor-profiling , competitors , social , customer-research . Then tell Claude in your first message: \"Follow the skill files in this project.\" What is an MCP connector? A plug that lets Claude use an outside tool itself. Firecrawl gives Claude a web crawler; Apify gives it ready-made scrapers for Instagram, Trustpilot, Amazon and more. What is a skill? A folder of instructions that teaches Claude a professional playbook, like how a strategist profiles a competitor. You add it once; Claude applies it every run. Step 2 · the first scan 2 Run the baseline: assume you have never done this before The first run is not a diff, it is the foundation. Claude profiles each competitor from scratch: what they do, what they sell, what they do not offer, and where you can win. Every later run compares against this file. Paste this first · the baseline scan You are my competitor intelligence unit. Follow the competitor-profiling skill in this project. MY BUSINESS: {your brand name, website, what you sell, your prices} COMPETITORS I KNOW: {2 to 4 competitor URLs} Also find 2 to 4"
+  },
+  {
+   "shortcode": "Da8ey0fscUF",
+   "url": "https://github.com/oso95/scroll-world",
+   "kind": "github_repo",
+   "title": "scroll-world",
+   "full_text": "# scroll-world https://github.com/user-attachments/assets/b08e641e-985b-4bd4-83ff-6750272d0c37 An agent skill — for Claude Code, Codex, and any `SKILL.md`-compatible agent — that builds an immersive, **scroll-scrubbed \"fly through the world\" landing page** for any industry or brand — the kind where, as you scroll, a camera flies from *outside* each scene *into* its interior, then flows on to the next scene with **no cuts**. One continuous connected flight through a little generated world (think the Emons logistics site, applied to whatever you want). ## Install ### Claude Code — as a plugin (recommended) ``` /plugin marketplace add oso95/scroll-world /plugin install scroll-world@scroll-world ``` Then just ask for a scroll-through world landing page, or invoke `/scroll-world`. ### Codex & other agents — via the skills CLI Using [Vercel's skills CLI](https://github.com/vercel-labs/skills), which installs into Codex, Claude Code, Cursor, and 20+ other agents: ```bash npx skills add oso95/scroll-world # pick your agent(s) when prompted npx skills add oso95/scroll-world -a codex # or target Codex directly ``` In Codex, invoke it with `$scroll-world` (or `/skills` to browse), or just ask for a scroll-through world landing page. ### Manually (drop-in skill) Copy the skill folder into your agent's skills directory: ```bash git clone https://github.com/oso95/scroll-world cp -R scroll-world/skills/scroll-world ~/.claude/skills/ # Claude Code cp -R scroll-world/skills/scroll-world ~/.codex/skills/ # Codex ``` ## Requirements - The [Higgsfield CLI](https://higgsfield.ai), authenticated (`higgsfield auth login`), with credits. - `ffmpeg` / `ffprobe` for frame extraction and encoding. - Python 3 with Pillow (for the mobile portrait canvases; also the optional transparent-scene knockout). - The [Codex CLI](https://github.com/openai/codex) (optional) — if present, the scene stills can be generated through Codex's built-in `image_gen` (the same GPT Image model), billed to a ChatGPT subscription instead of Higgsfield credits. ## What it does It leans on [Higgsfield](https://higgsfield.ai) for the art: cohesive isometric diorama scenes (GPT Image 2 — via Higgsfield, or the Codex CLI on a ChatGPT subscription) and the camera flights themselves (Seedance or Kling image-to-video — only models that can frame-lock a seam), scrubbed by scroll position — the same technique behind Apple's scroll-through product pages. The camera genuinely moves; scroll only drives time. It's **framework-agnostic**: you get the Higgsfield pipeline, the prompt templates, and a portable vanilla-JS scrub engine that drops into plain HTML, Next.js, Vue, or a Python-served page — nothing assumes a stack. When invoked, the skill: 1. **Interviews you** — the subject/industry + pitch, a brand kit (import from a URL, hand it over, or have it proposed), art direction, the ordered scenes the camera visits, whether you want the **mobile version** (a second chain rendered natively in 9:16 portrait — composed for phones, not a crop of the landscape film), and the **budget** — render tiers and stills source shown with estimated credit costs, approved before anything generates. 2. **Generates the assets** — one still per scene, one \"dive-in\" camera clip per scene, and the **connector** clips that join consecutive scenes, generated from the actual rendered frames of their neighbours so every seam is frame-identical. Mobile opt-in renders a parallel portrait chain the same way, frame-locked against its own 9:16 renders. 3. **Wires it up** — a config-driven scroll engine that plays the whole chain as one flight, serving the portrait clips and posters automatically on phones. ## What's in the skill ``` skills/scroll-world/ ├── SKILL.md the procedure + the seam rule + gotchas └── references/ ├── prompts.md intake checklist + every Higgsfield prompt template ├── pipeline.md copy-paste batch scripts (generate → frames → connectors → encode) ├── scrub-engine.js portable, config-driven scrub engine (blob-seek, lazy load, seam crossfade) ├── index-template.html a minimal standalone page that mounts the engine └── knockout.py background knockout for floating scenes ``` ##"
+  },
+  {
+   "shortcode": "Dak-1xRnPXL",
+   "url": "https://www.skool.com/chase-ai-community/about?rdref=https%3A%2F%2Finstagram.com%2F&fbclid=PARlRTSATLVchwZG9mAmV4dG4DYWVtAjEwAHNydGMGYXBwX2lkDzEyNDAyNDU3NDI4NzQxNAABp8vrJI5vDPvQO437tS23Lw08MDSvAH244J8NkCIEVKFNvmsRKlZoaydt2uL2_aem_fzUNwL1ML9ovmoLKpi9uiw",
+   "kind": "web_article",
+   "title": "Chase AI Community",
+   "full_text": "Chase AI Community Chase AI Community Log In Chase AI Community Private 73.3k members Free By Chase Hannegan 💎 🚀 Master AI. Zero Code. What's inside: ☑️ Claude Code guides — command the most powerful AI tool ever ✅ 100+ n8n AI agent templates — copy, paste, and start saving hours immediately ✅ AI image & video prompt library — create professional content without any design skills Built for people with zero technical background. No coding, no jargon, no fluff — just practical AI skills you can use today. Privacy and terms Chase AI Community skool.com/chase-ai-community Go from learning to earning. Join Chase AI+👇 73.3k Members 238 Online 3 Admins JOIN GROUP Powered by"
+  },
+  {
+   "shortcode": "DXD-9A_Cace",
+   "url": "https://whop.com/joined/prmpt-digital/?fbclid=PARlRTSATLVuVwZG9mAmV4dG4DYWVtAjEwAHNydGMGYXBwX2lkDzEyNDAyNDU3NDI4NzQxNAABpwKACWGIltM7xXqb6JFgExz84pcobXsmyVtpVxAN63A4l5w5-_DEyZAXW3da_aem_l3h89BTKl43Nye5KCqIHlw",
+   "kind": "web_article",
+   "title": "prmpt.digital | Whop",
+   "full_text": "prmpt.digital | Whop Home Search Discover Start a business Resources Affiliates Help Blog About P prmpt.digital 0 online Home Contact support P prmpt.digital 5.0 ( 1 Review ) Join Premium prompts and templates for studio-grade AI websites Location hidden • • Created by DI Dmitriy inin 1,130 joined Home Chats Apps Products About"
+  }
+ ]
+}

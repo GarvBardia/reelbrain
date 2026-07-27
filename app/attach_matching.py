@@ -33,6 +33,13 @@ MIN_SCORE_THRESHOLD = 1  # at least one genuinely shared meaningful word
 # lose to an even-more-specific multi-word overlap on a different candidate.
 GATE_KEYWORD_MATCH_WEIGHT = 5
 
+# A reel's named_entities are the exact tools/products it called out by name.
+# Finding one verbatim in a resource is nearly as deliberate a signal as the
+# creator's own gate keyword, so it scores just below it. Capped so a reel with
+# many entities can't win on volume alone.
+NAMED_ENTITY_MATCH_WEIGHT = 4
+MAX_NAMED_ENTITY_HITS = 2
+
 # Platform/site chrome that ends up in a fetched page's own <title> tag —
 # never a real content signal, just as much noise as if we searched the
 # reel's own database name. Deliberately narrow (known, common hosts this
@@ -87,13 +94,74 @@ def _gate_keyword_matches(gate_keyword: str, resource_text: str) -> bool:
     return re.search(r"\b" + re.escape(keyword) + r"\b", resource_text.lower()) is not None
 
 
-def score_candidate(resource_title: str, resource_description: str, candidate: dict) -> int:
-    """candidate: {"title", "note", "topics" (list[str]), "gate_keyword"}.
+# A word shared with the resource is only evidence to the extent that it is
+# RARE across the candidate pool. "claude" appears in half these reels and says
+# nothing; "firecrawl" appears in one and says everything. Without this, scoring
+# a resource's FULL text (hundreds of words, not just a meta description) simply
+# rewards whichever candidate is most verbose -- measured at 33% top-1 on the
+# real 12-pair/92-row fixture before this change.
+RARE_WORD_MAX_POOL_FRACTION = 0.15   # in <=15% of candidates == distinctive
+RARE_WORD_WEIGHT = 5
+COMMON_WORD_WEIGHT = 1
+# Overlap is deliberately NOT capped. Capping it was tried and measurably
+# HURT: it compressed scores into large ties (top-1 fell 33% -> 8% on the real
+# fixture), and ties are exactly where ranking stops carrying information.
+# Rarity weighting is what keeps long documents from winning on volume --
+# a cap is the wrong tool for that job.
+MAX_WORD_OVERLAP_SCORE = 10_000
 
-    Score = GATE_KEYWORD_MATCH_WEIGHT (if the candidate's own gate_keyword
-    appears verbatim in the resource's fetched text) + count of distinct
-    meaningful, non-generic words shared between the resource's
-    title+description and the candidate's own title/note/topics."""
+# Recency tiebreaker: when two candidates land within this many points, prefer
+# the more recently created gate. You normally attach a DM'd resource within
+# days of commenting, so the newer open gate is the better bet -- but this is
+# deliberately a TIEBREAK, never able to overturn a real scoring lead.
+RECENCY_TIEBREAK_MAX_GAP = 1
+
+
+def _document_frequencies(candidates: list[dict]) -> dict[str, int]:
+    """How many candidates each meaningful word appears in."""
+    frequencies: dict[str, int] = {}
+    for candidate in candidates:
+        for word in _candidate_words(candidate):
+            frequencies[word] = frequencies.get(word, 0) + 1
+    return frequencies
+
+
+def _candidate_words(candidate: dict) -> set[str]:
+    """Every meaningful word describing a candidate. named_entities is included
+    when present -- it's the most specific signal a reel carries (exact tool
+    names) -- but it is NOT persisted as a Notion property today, so in the live
+    /attach path this is usually just title+note+topics. See PROGRESS.md."""
+    text = " ".join([
+        candidate.get("title") or "",
+        candidate.get("note") or "",
+        " ".join(candidate.get("topics") or []),
+        " ".join(candidate.get("named_entities") or []),
+        " ".join(candidate.get("supporting_points") or []),
+    ])
+    return _words(text) - GENERIC_STOPWORDS
+
+
+def score_candidate(
+    resource_title: str,
+    resource_description: str,
+    candidate: dict,
+    doc_frequencies: dict[str, int] | None = None,
+    pool_size: int = 1,
+) -> int:
+    """candidate: {"title", "note", "topics", "gate_keyword", and optionally
+    "named_entities"/"supporting_points"}.
+
+    Score =
+      GATE_KEYWORD_MATCH_WEIGHT   if the candidate's own gate_keyword appears
+                                  verbatim in the resource text, PLUS
+      NAMED_ENTITY_MATCH_WEIGHT   per named_entity of the reel appearing
+                                  verbatim in the resource (capped), PLUS
+      a rarity-weighted word overlap, itself capped at MAX_WORD_OVERLAP_SCORE
+      so sheer document length can never out-vote a deliberate keyword.
+
+    doc_frequencies/pool_size come from rank_candidates; scoring a candidate in
+    isolation (no pool context) falls back to flat weighting.
+    """
     clean_title = _strip_platform_noise(resource_title)
     resource_text = f"{clean_title} {resource_description or ''}"
 
@@ -101,17 +169,55 @@ def score_candidate(resource_title: str, resource_description: str, candidate: d
     if _gate_keyword_matches(candidate.get("gate_keyword") or "", resource_text):
         score += GATE_KEYWORD_MATCH_WEIGHT
 
+    # A named entity is a tool the reel SPECIFICALLY named; finding it verbatim
+    # in the resource is nearly as strong as the creator's own gate keyword.
+    entity_hits = sum(
+        1 for entity in (candidate.get("named_entities") or [])
+        if _gate_keyword_matches(entity, resource_text)
+    )
+    score += min(entity_hits, MAX_NAMED_ENTITY_HITS) * NAMED_ENTITY_MATCH_WEIGHT
+
     resource_words = _words(resource_text) - GENERIC_STOPWORDS
     if resource_words:
-        candidate_text = " ".join([
-            candidate.get("title") or "",
-            candidate.get("note") or "",
-            " ".join(candidate.get("topics") or []),
-        ])
-        candidate_words = _words(candidate_text) - GENERIC_STOPWORDS
-        score += len(resource_words & candidate_words)
+        shared = resource_words & _candidate_words(candidate)
+        if doc_frequencies:
+            rare_cutoff = max(1, int(pool_size * RARE_WORD_MAX_POOL_FRACTION))
+            overlap = sum(
+                RARE_WORD_WEIGHT if doc_frequencies.get(word, 0) <= rare_cutoff
+                else COMMON_WORD_WEIGHT
+                for word in shared
+            )
+        else:
+            overlap = len(shared)
+        score += min(overlap, MAX_WORD_OVERLAP_SCORE)
 
     return score
+
+
+# Confidence is derived from the GAP between #1 and #2, not from the raw
+# score: a top score of 6 means very different things when the runner-up is 1
+# versus 5. A clear gap is what actually says "this is the right row".
+HIGH_CONFIDENCE_GAP = 4   # >= GATE_KEYWORD_MATCH_WEIGHT - 1: a keyword-level lead
+MEDIUM_CONFIDENCE_GAP = 2
+
+
+def confidence_for(ranked: list[dict]) -> str:
+    """"high" | "medium" | "low" for a ranked candidate list.
+
+    A lone candidate is judged on its own score instead of a gap: with nothing
+    to compare against, only a genuine gate_keyword hit earns "high".
+    """
+    if not ranked:
+        return "low"
+    top = ranked[0]["match_score"]
+    if len(ranked) == 1:
+        return "high" if top >= GATE_KEYWORD_MATCH_WEIGHT else "medium" if top >= MEDIUM_CONFIDENCE_GAP else "low"
+    gap = top - ranked[1]["match_score"]
+    if gap >= HIGH_CONFIDENCE_GAP:
+        return "high"
+    if gap >= MEDIUM_CONFIDENCE_GAP:
+        return "medium"
+    return "low"
 
 
 def rank_candidates(resource_title: str, resource_description: str, candidates: list[dict]) -> list[dict]:
@@ -120,10 +226,34 @@ def rank_candidates(resource_title: str, resource_description: str, candidates: 
     ties broken by most-recently-created first. Returns [] when nothing
     clears the threshold; callers must treat that as "unresolved", never
     silently falling back to picking one anyway."""
+    doc_frequencies = _document_frequencies(candidates)
+    pool_size = len(candidates)
+
     scored = []
     for candidate in candidates:
-        score = score_candidate(resource_title, resource_description, candidate)
+        score = score_candidate(
+            resource_title, resource_description, candidate,
+            doc_frequencies=doc_frequencies, pool_size=pool_size,
+        )
         if score >= MIN_SCORE_THRESHOLD:
             scored.append({**candidate, "match_score": score})
+
+    # Primary sort: score. Recency is applied only as a TIEBREAK below, so it
+    # can reorder near-ties without ever overturning a real scoring lead.
     scored.sort(key=lambda c: (c["match_score"], c.get("created_at") or ""), reverse=True)
+    scored = _apply_recency_tiebreak(scored)
     return scored[:TOP_N_CANDIDATES]
+
+
+def _apply_recency_tiebreak(scored: list[dict]) -> list[dict]:
+    """Within RECENCY_TIEBREAK_MAX_GAP points of each other, prefer the more
+    recently created gate — you normally attach a DM'd resource within days of
+    commenting. Applied to the leading cluster only, so it decides close calls
+    and nothing else."""
+    if len(scored) < 2:
+        return scored
+    top_score = scored[0]["match_score"]
+    cluster = [c for c in scored if top_score - c["match_score"] <= RECENCY_TIEBREAK_MAX_GAP]
+    rest = scored[len(cluster):]
+    cluster.sort(key=lambda c: c.get("created_at") or "", reverse=True)
+    return cluster + rest

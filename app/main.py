@@ -377,6 +377,27 @@ def retry(shortcode: str, request: Request, background_tasks: BackgroundTasks) -
 
 MENU_ITEM_MAIN_POINT_MAX_LEN = 80  # keep each native "Choose from List" row short and scannable
 
+# AUTO-ATTACH (agent E1). Deliberately conservative: auto-committing is the
+# same class of action that caused the original cross-attachment incident
+# (see PROGRESS.md), so only a "high" confidence -- a score gap of at least
+# HIGH_CONFIDENCE_GAP over the runner-up, AND a score that clears the full
+# gate_keyword weight -- ever commits without asking. Everything else still
+# returns a MENU. Set AUTO_ATTACH_ENABLED=0 to turn the whole behaviour off
+# without a code change.
+AUTO_ATTACH_CONFIDENCE_THRESHOLD = "high"
+# DEFAULT OFF, on measured evidence. tests/test_attach_accuracy.py scores 12
+# real resource->reel pairs (whose correct answer is known, because that reel
+# already has the URL attached) against the real 92-row candidate pool. With
+# auto-attach enabled, 3 of those 12 would be committed to the WRONG reel at
+# "high" confidence -- a 25% wrong-write rate on the single action that caused
+# the original cross-attachment incident (see PROGRESS.md).
+#
+# The machinery is built, tested, and ready; it is gated because the matching
+# is not yet accurate enough to be trusted unattended. Flip
+# AUTO_ATTACH_ENABLED=1 once test_auto_attach_never_fires_on_a_wrong_row
+# passes -- that test is the gate, and it currently fails by design.
+AUTO_ATTACH_ENABLED = os.environ.get("AUTO_ATTACH_ENABLED", "0").strip() not in ("0", "false", "False")
+
 
 def _menu_item(candidate: dict) -> str:
     """One /attach candidate, pre-formatted server-side as a single string
@@ -405,8 +426,13 @@ def _notify(message: str) -> dict:
     return {"action": "NOTIFY", "message": message, "menu_items": []}
 
 
-def _menu(message: str, menu_items: list[str]) -> dict:
-    return {"action": "MENU", "message": message, "menu_items": menu_items}
+def _menu(message: str, menu_items: list[str], confidence: str = "low") -> dict:
+    """The MENU shape gains a "confidence" field (E1): how clearly the top
+    candidate beat the runner-up, so the picker can show it and the user
+    knows when to look twice. Still exactly one field to branch on
+    ("action") -- confidence is display-only."""
+    return {"action": "MENU", "message": message, "menu_items": menu_items,
+            "confidence": confidence}
 
 
 def _row_display_text(row) -> str:
@@ -526,13 +552,48 @@ def attach(req: AttachRequest, request: Request) -> JSONResponse:
             "⚠️ No match found — nothing scored a confident match. Attach manually in Notion."
         ))
 
+    confidence = attach_matching.confidence_for(ranked)
+
+    # AUTO-ATTACH (agent E1): when the top candidate wins by a clear,
+    # keyword-level margin there is nothing for a human to decide, so commit
+    # it instead of returning a one-item menu. Deliberately conservative --
+    # this is the same class of action that caused the original
+    # cross-attachment incident, so it requires BOTH a "high" confidence
+    # (score gap >= HIGH_CONFIDENCE_GAP, see attach_matching.confidence_for)
+    # AND a genuine gate_keyword-weight score. Anything less still asks.
+    top = ranked[0]
+    if (
+        AUTO_ATTACH_ENABLED
+        and confidence == AUTO_ATTACH_CONFIDENCE_THRESHOLD
+        and top["match_score"] >= attach_matching.GATE_KEYWORD_MATCH_WEIGHT
+    ):
+        row = store.resolve_attachable_by_shortcode(top["shortcode"])
+        if row is not None and _commit_attach(row, req.resource_url):
+            attach_audit.record(
+                req.shortcode_or_note, req.resource_url, "auto_attached",
+                shortcode=top["shortcode"],
+                detail=f"confidence={confidence} score={top['match_score']} "
+                       f"runner_up={ranked[1]['match_score'] if len(ranked) > 1 else 'none'}",
+            )
+            logger.info("attach resolved: auto_attached (confidence=%s score=%s)",
+                        confidence, top["match_score"])
+            return JSONResponse(status_code=200, content=_notify(
+                f"✅ Auto-attached to {row['shortcode']}: {_row_display_text(row)}"
+            ))
+        # Fall through to the menu: a failed write or a no-longer-open row
+        # must never look like success.
+        logger.warning("auto-attach declined for %s (row gone or write failed) — falling back to MENU",
+                       top["shortcode"])
+
     menu_items = [_menu_item(c) for c in ranked]
     attach_audit.record(
         req.shortcode_or_note, req.resource_url, "needs_confirmation",
         candidates=[c["shortcode"] for c in ranked],
+        detail=f"confidence={confidence}",
     )
-    logger.info("attach resolved: needs_confirmation")
-    return JSONResponse(status_code=200, content=_menu("Which reel does this belong to?", menu_items))
+    logger.info("attach resolved: needs_confirmation (confidence=%s)", confidence)
+    return JSONResponse(status_code=200, content=_menu(
+        "Which reel does this belong to?", menu_items, confidence=confidence))
 
 
 @app.post("/attach/confirm")
