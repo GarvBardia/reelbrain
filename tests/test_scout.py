@@ -2,6 +2,7 @@
 Scout-pick line. All mocked, no vault or network."""
 from pathlib import Path
 
+from app.vault_paths import INSTALLED_FILENAME
 from scripts import scout
 
 
@@ -28,7 +29,7 @@ def test_gathers_only_high_priority_reels_plus_all_resources(tmp_path):
 
     sections = scout.gather_sections(vault)
     headings = [h for h, _ in sections]
-    assert headings[0] == "INSTALLED.md"                       # always first
+    assert headings[0] == INSTALLED_FILENAME                       # always first
     assert "reels/2026-07-22-CCC.md" in headings               # newest High first
     assert headings.index("reels/2026-07-22-CCC.md") < headings.index("reels/2026-07-20-AAA.md")
     assert "reels/2026-07-21-BBB.md" not in headings           # Low excluded
@@ -38,13 +39,13 @@ def test_gathers_only_high_priority_reels_plus_all_resources(tmp_path):
 def test_missing_installed_md_treated_as_empty(tmp_path):
     vault = _make_vault(tmp_path)
     sections = scout.gather_sections(vault)
-    assert sections[0][0] == "INSTALLED.md"
+    assert sections[0][0] == INSTALLED_FILENAME
     assert "does not exist yet" in sections[0][1]
 
 
 def test_installed_md_content_included_when_present(tmp_path):
     vault = _make_vault(tmp_path)
-    (vault / "INSTALLED.md").write_text("## MCP servers\n- notion-mcp", encoding="utf-8")
+    (vault / INSTALLED_FILENAME).write_text("## MCP servers\n- notion-mcp", encoding="utf-8")
     sections = scout.gather_sections(vault)
     assert "notion-mcp" in sections[0][1]
 
@@ -52,11 +53,11 @@ def test_installed_md_content_included_when_present(tmp_path):
 # --- cap ------------------------------------------------------------------------
 
 def test_cap_drops_tail_sections_and_says_so():
-    sections = [("INSTALLED.md", "small")] + [
+    sections = [(INSTALLED_FILENAME, "small")] + [
         (f"reels/r{i}.md", "x" * 400) for i in range(10)
     ]
     text = scout.build_input(sections, max_chars=1500)
-    assert "INSTALLED.md" in text
+    assert INSTALLED_FILENAME in text
     assert "reels/r0.md" in text                # earliest (highest-priority) kept
     assert "reels/r9.md" not in text            # tail dropped
     assert "omitted to stay under" in text      # truncation is explicit
@@ -64,7 +65,7 @@ def test_cap_drops_tail_sections_and_says_so():
 
 
 def test_no_truncation_note_when_everything_fits():
-    text = scout.build_input([("INSTALLED.md", "small"), ("reels/a.md", "tiny")])
+    text = scout.build_input([(INSTALLED_FILENAME, "small"), ("reels/a.md", "tiny")])
     assert "omitted" not in text
 
 

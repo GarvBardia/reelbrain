@@ -5,10 +5,10 @@ One markdown note per save at {VAULT_PATH}/reels/{date}-{shortcode}.md with YAML
 frontmatter and [[wikilinks]]; topic/creator notes carrying a real, auto-regenerated
 index of their reels (not just a bare stub relying on Obsidian's Backlinks panel); a
 "## Related" section built from the sqlite-vec embeddings computed at capture time
-(NOT recomputed); and a vault-root _index.md with real per-topic previews. Idempotent —
+(NOT recomputed); and a vault-root ReelBrain-Index.md with real per-topic previews. Idempotent —
 existing notes are matched by the shortcode in their frontmatter and rewritten in place.
 
-Topic/creator notes and _index.md carry an AUTO-GENERATED block (see upsert_auto_block)
+Topic/creator notes and the index carry an AUTO-GENERATED block (see upsert_auto_block)
 so a user's own notes above it survive every re-sync untouched.
 """
 from __future__ import annotations
@@ -21,6 +21,7 @@ from typing import Optional
 
 from app import notion_writer, store
 from app.topic_descriptions import TOPIC_DESCRIPTIONS
+from app.vault_paths import INDEX_FILENAME
 
 logger = logging.getLogger("reelbrain.obsidian")
 
@@ -287,7 +288,7 @@ def build_note(fields: dict, creator: Optional[str], body_markdown: str,
 
 def upsert_auto_block(path: Path, default_header: str, generated_lines: list[str]) -> None:
     """Rewrite ONLY the content between AUTO_START/AUTO_END, leaving everything
-    else in the file untouched. This is how topic/creator stubs and _index.md
+    else in the file untouched. This is how topic/creator stubs and the index
     survive re-syncs: a user's own "## Notes" section (or any preamble) written
     above the markers is never touched, and anything they happen to add below
     the block is preserved too. If the file doesn't exist yet, or exists without
@@ -363,7 +364,7 @@ PRIORITY_ORDER = ["High", "Medium", "Low"]
 
 
 def write_topics_index(vault: Path, topic_entries: dict[str, list[dict]]) -> None:
-    """_index.md: grouped by Priority FIRST (## High Priority, ## Medium
+    """ReelBrain-Index.md: grouped by Priority FIRST (## High Priority, ## Medium
     Priority, ## Low Priority), each section listing every topic that has at
     least one reel at that tier with a count — so opening the vault
     immediately shows what needs attention, not just a topic dump sorted by
@@ -390,7 +391,7 @@ def write_topics_index(vault: Path, topic_entries: dict[str, list[dict]]) -> Non
         lines.append("")
     if not topic_entries:
         lines = ["(no topics yet — run a few captures first)"]
-    upsert_auto_block(vault / "_index.md", "# Topics Index\n", lines)
+    upsert_auto_block(vault / INDEX_FILENAME, "# ReelBrain Index\n", lines)
 
 
 # --- vault filesystem ---------------------------------------------------------

@@ -8,7 +8,7 @@ graph, readable by any tool (including a Claude project — see VAULT_CLAUDE_SET
 
 ```
 C:\Users\garvb\ReelBrainVault\          (or wherever VAULT_PATH points)
-  _index.md                 ← start here: grouped by Priority (High/Medium/Low first)
+  ReelBrain-Index.md                 ← start here: grouped by Priority (High/Medium/Low first)
   reels/
     2026-07-01-AAA111.md    ← one note per save: {posted-date}-{shortcode}.md
   topics/
@@ -33,7 +33,7 @@ sorted by value score descending, then date descending. This is the actual reaso
 in Obsidian instead of Notion: you get a real page per topic, not just Obsidian's
 Backlinks panel (which works, but isn't a page you can read top to bottom).
 
-**`_index.md` is grouped by Priority first** — `## High Priority`, `## Medium Priority`,
+**`ReelBrain-Index.md` is grouped by Priority first** — `## High Priority`, `## Medium Priority`,
 `## Low Priority` — each section listing every topic that has at least one reel at that
 tier, with a count (`[[topics/mcp|mcp]] — 3 saves`). Opening the vault immediately shows
 what needs attention instead of an alphabetical/by-volume topic dump. Reels saved before
@@ -43,7 +43,7 @@ vanishing — see PROGRESS.md re: whether a backfill script is worth building.
 The generated part of every one of these files is wrapped between
 `<!-- AUTO-GENERATED, DO NOT EDIT BELOW -->` / `<!-- END AUTO-GENERATED -->` markers —
 anything you write above (or below) those markers, in any of these notes including
-`_index.md`, survives every re-sync untouched.
+`ReelBrain-Index.md`, survives every re-sync untouched.
 
 ## Running the sync
 
@@ -89,4 +89,4 @@ it's stale. To make it fully hands-off, schedule it daily:
    similarity connections between reels. Local graph (on a single note) is often more
    useful than the global one — it shows just that note's neighborhood.
 
-Start at `_index.md`, click a topic, read its backlinks. That's the whole workflow.
+Start at `ReelBrain-Index.md`, click a topic, read its backlinks. That's the whole workflow.

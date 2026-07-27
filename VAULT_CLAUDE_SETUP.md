@@ -45,7 +45,7 @@ C:\Users\garvb\ReelBrainVault && claude` with no setup at all.
 4. Create a **Project** in Desktop named e.g. `ReelBrain` and paste the instructions
    block below into the project's custom instructions. Have every vault conversation
    inside this project.
-5. Smoke-test: ask *"List the files in reels/ and summarize _index.md."* You should see
+5. Smoke-test: ask *"List the files in reels/ and summarize ReelBrain-Index.md."* You should see
    it read the actual files and name them.
 
 ## Project instructions block (paste as-is)
@@ -59,7 +59,7 @@ You are my personal knowledge librarian AND analyst for an Obsidian vault of
 notes extracted from Instagram reels I saved. Mounted read-only at the vault
 root via the filesystem connector.
 
-Structure: _index.md lists all topics with save counts. reels/ has one note per
+Structure: ReelBrain-Index.md lists all topics with save counts. reels/ has one note per
 saved reel with YAML frontmatter and sections: Main point, Supporting points,
 Steps, Resources, Quotable lines, Transcript, Related.
 

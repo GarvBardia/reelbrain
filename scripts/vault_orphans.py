@@ -56,7 +56,9 @@ load_dotenv()
 logger = logging.getLogger("reelbrain.vault_orphans")
 
 # Entry points / generated inputs -- "nothing links here" is correct for these.
-ROOT_ENTRY_POINTS = {"_index", "INSTALLED", "IMPLEMENTATION_QUEUE", "scout_input"}
+from app.vault_paths import ROOT_ENTRY_POINT_STEMS
+
+ROOT_ENTRY_POINTS = ROOT_ENTRY_POINT_STEMS
 MIN_REELS_TO_REBUILD = 2
 
 # Must match scripts/notion_deep_clean.PLACEHOLDER_TITLE -- rows still showing

@@ -46,8 +46,11 @@ load_dotenv()
 DEFAULT_VAULT = r"C:\Users\garvb\ReelBrainVault"
 MAX_INPUT_CHARS = 150_000
 SCOUT_PICK_PAGE_TITLE = "🔭 Scout Pick"
-QUEUE_FILENAME = "IMPLEMENTATION_QUEUE.md"
-INPUT_FILENAME = "scout_input.md"
+from app.vault_paths import (  # noqa: E402  (after sys.path bootstrap)
+    INSTALLED_FILENAME, QUEUE_FILENAME, SCOUT_INPUT_FILENAME,
+)
+
+INPUT_FILENAME = SCOUT_INPUT_FILENAME
 
 _PRIORITY_RE = re.compile(r"^priority:\s*High\s*$", re.MULTILINE)
 
@@ -68,9 +71,9 @@ def gather_sections(vault: Path) -> list[tuple[str, str]]:
     newest-first, then resources newest-first."""
     sections: list[tuple[str, str]] = []
 
-    installed = vault / "INSTALLED.md"
-    installed_text = installed.read_text(encoding="utf-8") if installed.exists() else "(INSTALLED.md does not exist yet — treat as empty)"
-    sections.append(("INSTALLED.md", installed_text))
+    installed = vault / INSTALLED_FILENAME
+    installed_text = installed.read_text(encoding="utf-8") if installed.exists() else f"({INSTALLED_FILENAME} does not exist yet — treat as empty)"
+    sections.append((INSTALLED_FILENAME, installed_text))
 
     reels_dir = vault / "reels"
     if reels_dir.exists():

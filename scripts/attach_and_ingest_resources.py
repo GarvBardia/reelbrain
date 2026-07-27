@@ -74,6 +74,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from app import attach_matching
+from app.vault_paths import INDEX_FILENAME
 
 logger = logging.getLogger("reelbrain.attach_and_ingest")
 
@@ -618,10 +619,10 @@ def main() -> None:
         if args.attach_only:
             # Part 2 never ran -> unlinked_index is empty; don't blow away
             # whatever a prior full run already wrote there.
-            print(f"\nwrote {UNMATCHED_REPORT} (attach-only: _index.md left untouched, "
+            print(f"\nwrote {UNMATCHED_REPORT} (attach-only: index left untouched, "
                   "re-run without --attach-only to ingest + update it)")
         else:
-            update_index_unlinked(vault / "_index.md", result["unlinked_index"])
+            update_index_unlinked(vault / INDEX_FILENAME, result["unlinked_index"])
             print(f"\nwrote {UNMATCHED_REPORT} and updated {vault / '_index.md'} (Unlinked resources block)")
         print("NEXT: run `python scripts/sync_to_obsidian.py` to render the reel-side "
               "'## Attached Resource' links for the newly-attached rows.")
