@@ -320,6 +320,23 @@ def test_run_ingest_dry_run_never_writes_files(tmp_path):
     assert not (tmp_path / "progress.json").exists()  # dry-run never persists progress either
 
 
+def test_run_ingest_dry_run_makes_no_fetch_or_gemini_call(tmp_path):
+    """A dry run must be genuinely free -- safe to run anytime during a
+    quota-constrained countdown, not just cheaper. It reports what WOULD be
+    attempted without any network fetch or Gemini call."""
+    fetch_calls = []
+    extract_calls = []
+    result = ir.run_ingest(
+        [_entry()], tmp_path, tmp_path / "progress.json", dry_run=True,
+        fetch_fn=lambda url, kind: (fetch_calls.append(1) or ("x", None)),
+        extract_fn=lambda *a, **k: (extract_calls.append(1) or None),
+        sleep_fn=lambda s: None, print_fn=lambda *a, **k: None,
+    )
+    assert fetch_calls == []
+    assert extract_calls == []
+    assert result["written"] == ["SC1"]
+
+
 def test_run_ingest_skips_already_written(tmp_path):
     progress_file = tmp_path / "progress.json"
     progress_file.write_text(json.dumps({"SC1": {"status": "written"}}), encoding="utf-8")

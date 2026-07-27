@@ -260,6 +260,40 @@ def format_log_paragraph(summary: dict, named_entities_remaining: Optional[int])
     return " ".join(parts)
 
 
+def format_dry_run_plan(summary: dict) -> str:
+    """A dry run's real job: show what WOULD be attempted and its estimated
+    quota cost, WITHOUT spending any. Reports per-step pending row counts and
+    estimated call cost, mirroring how run_day would slice the budget.
+
+    Estimation only — the 429, not this arithmetic, is the real limit (a
+    recovery row can cost several calls). Free steps are shown at 0 cost."""
+    budget = summary["budget"]
+    remaining = budget
+    lines = [f"DRY-RUN plan (estimates only; no Gemini calls, no writes) — "
+             f"budget {budget} calls:"]
+    for step in summary["steps"]:
+        pending = step.pending_before
+        if step.free:
+            lines.append(f"  • {step.name}: {pending} pending, FREE "
+                         f"(0 calls — runs regardless of budget)")
+            continue
+        if pending == 0:
+            lines.append(f"  • {step.name}: nothing pending")
+            continue
+        if remaining <= 0:
+            lines.append(f"  • {step.name}: {pending} pending, ~{pending * step.cost_per_row} "
+                         f"calls to clear — SKIPPED (budget already spent above)")
+            continue
+        affordable = min(pending, max(1, remaining // step.cost_per_row))
+        est = affordable * step.cost_per_row
+        remaining -= est
+        tail = "" if affordable == pending else f" (of {pending} pending; rest waits for tomorrow)"
+        lines.append(f"  • {step.name}: would attempt {affordable} row(s) "
+                     f"@ ~{step.cost_per_row} call(s) each = ~{est} calls{tail}")
+    lines.append(f"  → estimated ~{budget - remaining}/{budget} calls would be spent this pass.")
+    return "\n".join(lines)
+
+
 def append_log(line: str, path: str = LOG_FILE) -> None:
     with open(path, "a", encoding="utf-8") as f:
         f.write(line + "\n")
@@ -366,6 +400,9 @@ def main() -> None:
     paragraph = format_log_paragraph(summary, count_named_entities_remaining())
 
     print("\n" + "=" * 70)
+    if args.dry_run:
+        print(format_dry_run_plan(summary))
+        print()
     print(paragraph)
     if not args.dry_run:
         append_log(paragraph, args.log_file)

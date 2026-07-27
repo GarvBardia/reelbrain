@@ -354,6 +354,15 @@ def run_ingest(
             continue
 
         kind = classify_resource_url(entry["resource_url"])
+
+        if dry_run:
+            # Genuinely free: no network fetch, no Gemini call. Report only
+            # what WOULD be attempted -- a real dry-run must be safe to run
+            # anytime during a quota-constrained countdown, not just cheaper.
+            print_fn(f"[dry-run] would fetch + summarize: {entry['resource_url']} (kind={kind})")
+            written.append(shortcode)
+            continue
+
         content, error = fetch_fn(entry["resource_url"], kind)
         sleep_fn(FETCH_SPACING_SECONDS)
 
@@ -361,28 +370,15 @@ def run_ingest(
             print_fn(f"UNREADABLE — manual review needed: {entry['resource_url']} ({shortcode}) — {error}")
             unreadable.append(shortcode)
             progress[shortcode] = {"status": "unreadable", "url": entry["resource_url"], "error": error}
-            if not dry_run:
-                _save_progress(progress_file, progress)
+            _save_progress(progress_file, progress)
             continue
-
-        if dry_run:
-            print_fn(f"[dry-run] fetched {len(content)} chars from {entry['resource_url']} (kind={kind})")
 
         extraction = extract_fn(content, kind, entry["reel_title"], taxonomy)
         if extraction is None:
             print_fn(f"DEGRADED (Gemini) — will retry later: {entry['resource_url']} ({shortcode})")
             degraded.append(shortcode)
             progress[shortcode] = {"status": "degraded", "url": entry["resource_url"]}
-            if not dry_run:
-                _save_progress(progress_file, progress)
-            continue
-
-        if dry_run:
-            print_fn(f"[dry-run] would write resources/{shortcode}-*.md")
-            print_fn(f"  resource_kind: {extraction.resource_kind}")
-            print_fn(f"  summary: {extraction.summary[:200]}")
-            print_fn(f"  topics: {extraction.topic_tags}")
-            written.append(shortcode)
+            _save_progress(progress_file, progress)
             continue
 
         note_path = resource_note_path(vault, shortcode, entry["reel_title"])

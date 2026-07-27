@@ -251,3 +251,37 @@ def test_log_paragraph_survives_list_shaped_results():
     step.result = {"written": ["a", "b"], "unreadable": ["c"]}
     line = dr.format_log_paragraph(_summary([step]), named_entities_remaining=5)
     assert "ingest_resources (2/3)" in line
+
+
+# --- the dry-run cost plan (row counts + estimated cost per step, zero spend) --------
+
+def test_dry_run_plan_reports_pending_and_estimated_cost_per_step():
+    ne, _ = _step("named_entities", pending=5, cost=1)
+    rec, _ = _step("recover_placeholders", pending=10, cost=3)
+    summary = dr.run_day([ne, rec], budget=20, dry_run=True, print_fn=lambda m: None)
+    plan = dr.format_dry_run_plan(summary)
+    assert "named_entities: would attempt 5 row(s) @ ~1 call(s) each = ~5 calls" in plan
+    # 15 budget left after ne, recover costs 3/row -> 5 rows affordable = ~15 calls
+    assert "recover_placeholders: would attempt 5 row(s) @ ~3 call(s) each = ~15 calls" in plan
+    assert "~20/20 calls would be spent" in plan
+
+
+def test_dry_run_plan_shows_free_step_at_zero_cost():
+    free, _ = _step("enforce_topics", pending=30, free=True)
+    summary = dr.run_day([free], budget=20, dry_run=True, print_fn=lambda m: None)
+    plan = dr.format_dry_run_plan(summary)
+    assert "enforce_topics: 30 pending, FREE" in plan
+
+
+def test_dry_run_plan_marks_steps_skipped_when_budget_would_be_gone():
+    big, _ = _step("named_entities", pending=100, cost=1)
+    later, _ = _step("plain_summary", pending=5, cost=1)
+    summary = dr.run_day([big, later], budget=20, dry_run=True, print_fn=lambda m: None)
+    plan = dr.format_dry_run_plan(summary)
+    assert "plain_summary: 5 pending" in plan and "SKIPPED" in plan
+
+
+def test_dry_run_plan_spends_no_budget():
+    step, _ = _step("named_entities", pending=5, result={"written": 5})
+    summary = dr.run_day([step], budget=20, dry_run=True, print_fn=lambda m: None)
+    assert summary["used"] == 0
