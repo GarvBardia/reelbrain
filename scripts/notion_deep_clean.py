@@ -62,6 +62,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from app.topic_guarantee import UNCATEGORIZED_TAG  # noqa: E402 (after sys.path bootstrap)
+
 logger = logging.getLogger("reelbrain.notion_deep_clean")
 
 PLACEHOLDER_TITLE = "No caption or transcript available."
@@ -384,7 +386,13 @@ def find_topicless_rows(pages: list[dict]) -> list[dict]:
         if title_is_bare_permalink(fields["title"], fields["shortcode"]):
             continue
         digest = notion_writer.extract_digest_fields(page)
-        if digest["topics"]:
+        # A row whose ONLY topic is the Phase-H "uncategorized" placeholder
+        # still needs real topics. Without this, enforce_topics' fallback would
+        # permanently hide those rows from this pass -- the sweep that makes
+        # them non-orphans would also be the thing that stops them ever being
+        # properly tagged.
+        meaningful = [t for t in digest["topics"] if t != UNCATEGORIZED_TAG]
+        if meaningful:
             continue
         if not fields["title"]:
             continue
