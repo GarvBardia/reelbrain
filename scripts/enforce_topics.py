@@ -31,13 +31,22 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from app.topic_guarantee import derive_fallback_tags
+from app.topic_guarantee import UNCATEGORIZED_TAG, derive_fallback_tags
 
 logger = logging.getLogger("reelbrain.enforce_topics")
 
 
-def find_topicless_rows(pages: list[dict]) -> list[dict]:
-    """Every row with zero Topics, with the raw material the fallback needs."""
+def find_topicless_rows(pages: list[dict], include_upgradable: bool = False) -> list[dict]:
+    """Every row with zero Topics, with the raw material the fallback needs.
+
+    include_upgradable also returns rows already tagged ONLY "uncategorized"
+    that now have named_entities. Those rows reached "uncategorized" because
+    their entities hadn't been backfilled yet; now that they have, the same
+    free fallback derives real tags. Without this they are stranded forever --
+    the sweep's normal selector is "empty Topics", and "uncategorized" is not
+    empty. Rows that would still resolve to "uncategorized" are deliberately
+    NOT included, so this can never churn a daily no-op write.
+    """
     from app import notion_writer
 
     rows = []
@@ -47,7 +56,13 @@ def find_topicless_rows(pages: list[dict]) -> list[dict]:
             continue
         digest = notion_writer.extract_digest_fields(page)
         if digest["topics"]:
-            continue
+            upgradable = (
+                include_upgradable
+                and list(digest["topics"]) == [UNCATEGORIZED_TAG]
+                and bool(digest.get("named_entities"))
+            )
+            if not upgradable:
+                continue
         props = page.get("properties", {})
         rows.append({
             "shortcode": fields["shortcode"],

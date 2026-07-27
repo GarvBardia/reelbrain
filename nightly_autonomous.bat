@@ -1,0 +1,10 @@
+@echo off
+REM Nightly autonomous pass — launched by Windows Task Scheduler.
+REM Spends the day's Gemini quota across the pending backlog in priority
+REM order, then stops cleanly and resumes tomorrow. See WORKER_SETUP.md.
+REM
+REM Currently runs daily_runner only. health_watchdog joins this file once
+REM it exists (it is not built yet).
+cd /d "%~dp0"
+call venv\Scripts\activate.bat
+python scripts\daily_runner.py >> nightly_autonomous.log 2>&1

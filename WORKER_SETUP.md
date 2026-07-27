@@ -68,3 +68,116 @@ never deployed to Render.
   and are skipped forever — clear their entry from the JSON to retry them.
 - A Gemini quota (429) mid-run stops the run cleanly without burning any row's
   attempt count; the next scheduled run resumes where it left off.
+
+---
+
+# Nightly autonomous pass (`daily_runner.py`)
+
+The recovery worker above handles ONE job. `scripts/daily_runner.py` handles
+the whole backlog: it spends each day's Gemini quota across six pending-work
+scripts in priority order, stops cleanly when the quota is gone, and resumes
+tomorrow exactly where it left off. `nightly_autonomous.bat` is its launcher.
+
+## Why it exists
+
+Every remaining backlog item is quota-bound (the Gemini free tier is ~20
+requests/day/model) and, until now, needed a human to run a script and remember
+which one stopped where. This replaces that with one scheduled pass.
+
+## Priority order
+
+| # | Step | Cost/row | Why here |
+|---|------|----------|----------|
+| 1 | `backfill_named_entities` | 1 | **Highest.** Both the taxonomy work and the `/attach` accuracy remeasurement are blocked on it. |
+| 2 | `recover_placeholders` | ~3 | Recovers content that exists nowhere else yet. Costs more because each row runs an extraction *plus* a research call per entity. |
+| 3 | `enforce_topics` | **0 (free)** | Zero Gemini calls — runs **every day regardless of quota**, including after a 429. |
+| 4 | `backfill_suggested_action` | 1 | |
+| 5 | `backfill_plain_summary` | 1 | |
+| 6 | `ingest_resources` | 1 | Last — the resources are already attached and readable; this only enriches the vault copy. |
+
+Step 3 sits *after* step 1 deliberately: its fallback derives tags **from**
+`named_entities`, so running it later in the order produces better tags. It
+also only revisits rows stranded on `uncategorized` once they actually have
+entities, so it can never churn a daily no-op write.
+
+## Budget model
+
+Two independent mechanisms, both needed:
+
+- **The budget** (`DAILY_GEMINI_BUDGET`, default 20) is a *planning* device. It
+  decides how work is spread across steps. Without it, step 1 would eat the
+  entire day every day and steps 2–6 would never run.
+- **The 429 is the hard stop.** The budget is only an estimate, so the real
+  limit is whatever Google enforces. A watcher on the `reelbrain.gemini` logger
+  catches it uniformly for every step — including `ingest_resources`, which
+  (unlike the other five) does not self-report a quota stop.
+
+## Run it by hand first
+
+```
+venv\Scripts\python.exe scripts\daily_runner.py --dry-run
+```
+
+Note: `--dry-run` skips all *writes*, but `ingest_resources` still fetches and
+summarizes to show you a preview, so a dry run **does** consume some quota.
+
+Then the real thing:
+
+```
+venv\Scripts\python.exe scripts\daily_runner.py
+```
+
+## Task Scheduler steps (exact)
+
+1. Start → **Task Scheduler** → **Create Task…** (not "Basic Task").
+2. **General tab:**
+   - Name: `ReelBrain nightly autonomous`
+   - Select **"Run only when user is logged on"**. This is required, not a
+     preference: the scripts need your residential IP and your logged-on
+     session — Instagram blocks datacenter IPs, which is why this runs at home
+     instead of on Render.
+   - Leave "Run with highest privileges" UNCHECKED.
+3. **Triggers tab → New…:**
+   - Begin the task: **On a schedule** → **Daily** → Recur every `1` days.
+   - Start time: pick something you're reliably logged on for and not using the
+     machine — **10:00 PM** is a good default.
+   - CHECK "Enabled". Leave "Stop task if it runs longer than" at 3 days.
+4. **Actions tab → New…:**
+   - Action: **Start a program**
+   - Program/script: `C:\Users\garvb\reelbrain\nightly_autonomous.bat`
+   - Start in: `C:\Users\garvb\reelbrain`
+     (Set this. Without it the relative venv path in the .bat won't resolve.)
+5. **Conditions tab:**
+   - UNCHECK "Start the task only if the computer is on AC power".
+   - CHECK "Start only if the following network connection is available: Any
+     connection".
+   - UNCHECK "Wake the computer to run this task" — "run only when logged on"
+     means a wake would fail anyway.
+6. **Settings tab:**
+   - CHECK "Allow task to be run on demand".
+   - CHECK "Run task as soon as possible after a scheduled start is missed"
+     — the whole point is that a skipped day is a lost day of quota.
+   - "If the task is already running": **Do not start a new instance.**
+   - Do NOT check "If the task fails, restart every…". A quota stop is a
+     *normal* outcome here, and retrying it just burns nothing usefully.
+7. OK to save. Right-click the task → **Run** once to verify.
+
+## Reading the log
+
+Each run appends ONE paragraph to `daily_runner.log` (gitignored). It states
+what ran, how much quota was spent, what's still pending, and — the number to
+watch — how many rows remain until the `named_entities` backfill is complete,
+with an ETA in days at the current rate:
+
+```
+[2026-07-27 12:52 UTC] Ran: named_entities (20/122), enforce_topics (0/0),
+ingest_resources (4/27). Quota: 20/20 calls used, STOPPED on a 429. Still
+pending — plain_summary: 125 pending. named_entities countdown: 102 rows left
+(~6 more day(s) at 20 calls/day).
+```
+
+When that countdown reaches 0 the log says so explicitly, and the taxonomy
+work and `/attach` remeasurement are unblocked.
+
+`nightly_autonomous.log` (also gitignored) captures raw stdout/stderr from the
+.bat for when you need to debug a run rather than read its summary.
