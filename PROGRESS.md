@@ -2622,3 +2622,105 @@ daily false alarm. Live dry-run: all six green.
 174 rows, all with topics; taxonomy merged and drift-free; vault and Notion in sync with
 zero dangling links; test suite green (840/1 xfail); named_entities backfill on track to
 clear in ~7 days of nightly runs, which will then unblock a real accuracy remeasurement.
+
+---
+
+# Session 2026-07-31 — the pipeline was not throttled, it was unfunded
+
+Six phases. Final suite: **889 passed, 1 xfailed** (auto-attach safety gate, still
+deliberately red — auto-attach remains OFF).
+
+## The headline finding
+
+Every Gemini call has been failing with a 429 whose message nobody had read:
+
+> `Your prepayment credits are depleted. Please go to AI Studio... manage your
+> project and billing.`
+
+Reproduced identically on `gemini-2.5-flash`, `gemini-flash-latest` and
+`gemini-2.5-flash-lite` — **account-wide, not per-model, and not a rate limit.**
+The previous session's model-fragmentation fix was a real bug and worth doing,
+but it was never the reason work stopped. A billing 429 and a rate-limit 429
+share a status code and mean opposite things: one clears itself at the next
+reset, the other never clears without a human. Nothing in the codebase drew that
+distinction, so **days of total failure looked like ordinary throttling**.
+
+Corollary worth remembering: the "20 requests/day free tier" framing that shaped
+months of design (daily_runner's budget, the quota tracker, the countdown) does
+not apply to this key at all. It is a prepaid account at zero balance.
+
+## Phase 1 — agent verification (`439e099`)
+- `daily_runner`: **firing** nightly (Task `ReelBrain Nightly Runner`, 18:00 IST)
+  but accomplishing nothing — 429 on call one.
+- `health_watchdog`: **running and correct**, detecting a real drift — but
+  `NTFY_TOPIC` was never set, so every run logged `Pushed failure alert: False`.
+  A monitor that cannot reach you manufactures confidence. It is now a FAILING
+  check in its own right.
+- `vault_librarian`: **never scheduled.** No monthly Task Scheduler entry exists.
+  This is why the vault had not been re-synced since Jul 27.
+- `GITHUB_TOKEN`: present, workflow check live and green.
+- Also centralized `QUOTA_MARKERS`, which existed as **7 copy-pasted copies** —
+  precisely why the billing case hid, since 4 backfill scripts build their own
+  genai client and never route through `gemini_pipe`'s logger.
+
+## Phases 2+3 — `uncategorized` was asserting something untrue (`5855bde`)
+47 rows tagged only `uncategorized`, split three ways:
+- **A: 19** — a real caption (25–295 words) whose extraction degraded.
+- **B: 23** — true `No caption or transcript available.` placeholders.
+- **C: 5** — Failed-retry rows with a bare permalink title.
+All 28 B/C rows verified already in `recover_placeholders`' queue; zero gaps.
+
+**Root cause:** a degraded extraction yields `named_entities=[]` and
+`content_type="unknown"`, and `derive_fallback_tags` mapped exactly that to
+`uncategorized` — a tag meaning "we looked and there is nothing here". For these
+rows nothing had looked yet. A transient failure was recorded as a permanent
+verdict, and "needs another attempt" was a state the system could not express.
+
+I first suspected these rows were orphaned from every queue; checking the live
+queues **disproved that** — all 19 sit in `backfill_named_entities`. The defect
+was semantic, not routing.
+
+**Fix:** `PENDING_EXTRACTION_TAG`. `derive_fallback_tags` now takes `has_content`
+(from the caption, using the same ≥10-word floor CHEAP_MODEL_GUIDE.md sets for
+attempting extraction), so `uncategorized` means only what it says. 19 rows
+relabelled live, free, zero errors.
+
+## Phase 4 — backlog measured, not drained (`2ed2746`)
+`scripts/backlog_status.py` reports all backlogs at once:
+
+| Backlog | Pending | Est. calls |
+|---|---|---|
+| named_entities | 129 | 129 |
+| recover_placeholders | 57 | 171 |
+| suggested_action | 119 | 119 |
+| plain_summary | 132 | 132 |
+| ingest_resources | 28 | 28 |
+| **total** | | **~579** |
+
+Reports **calls, not days**, as the headline — days depend on account tier, the
+variable this project keeps getting wrong. At `gemini-2.5-flash` list price
+($0.30/1M in, $2.50/1M out) the entire backlog is a **sub-$5 job** on a paid
+tier; it is not a 29-day grind unless deliberately run on a free tier.
+
+## Phase 5 — drift + accuracy
+- Drift unchanged and still accurate: `mcp-server`~`mcp-servers`,
+  `startup`~`startups`, `email-marketing`~`ai-marketing`, `animation`~`ai-animation`.
+- **named_entities: only 10 of 191 rows actually carry entities** (129 still
+  pending; the remaining ~52 are placeholder/bare-URL rows correctly excluded —
+  they need recovery, not entity extraction). The previously-cited "51/174" was
+  rows-not-in-queue, which conflated "has entities" with "excluded as placeholder".
+- **Attach accuracy unchanged: top-1 42% / top-3 58%.** Only 1 of the 92 pool
+  candidates has live entities, so the named_entities lever remains inert.
+  **Auto-attach stays OFF** regardless.
+
+## Phase 6 — reconciliation
+Full re-sync: **Notion 191 == vault 191**, **zero dangling wikilinks**,
+`topics/pending-extraction.md` lists exactly the 19 bucket-A rows. Scout input
+regenerated (102 sections).
+
+## Still needs manual action
+1. **Top up Gemini prepay credits** — the single unblock for all ~579 calls.
+2. **Set `NTFY_TOPIC`** in `.env`, or the watchdog keeps finding problems silently.
+3. **Create the monthly `vault_librarian` Task Scheduler entry** (WORKER_SETUP.md)
+   — without it nothing re-syncs the vault, which is how +17 rows drifted.
+4. Run the Scout pick (`claude -p "$(cat SCOUT_PROMPT.md)"`) — queue is from Jul 27.
