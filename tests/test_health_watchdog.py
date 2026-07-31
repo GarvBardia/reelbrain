@@ -141,3 +141,42 @@ def test_failure_message_lists_every_failure():
     assert "2 check(s) FAILED" in msg
     assert "health: cookie_health='degraded'" in msg
     assert "counts: Notion 5 vs vault 4" in msg
+
+
+# --- 7. alert channel (a monitor nobody hears is worse than none) --------------------
+
+def test_alert_channel_ok_when_topic_set():
+    assert hw.check_alert_channel("my-secret-topic").ok
+
+
+def test_unset_ntfy_topic_is_itself_a_failure():
+    """REGRESSION (2026-07-31): NTFY_TOPIC was never set, so the watchdog spent
+    days detecting a real drift and telling nobody, while every run still looked
+    like 'silence == healthy'."""
+    c = hw.check_alert_channel("")
+    assert not c.ok and "NTFY_TOPIC" in c.detail
+
+
+def test_whitespace_only_topic_counts_as_unset():
+    assert not hw.check_alert_channel("   ").ok
+
+
+# --- 8. billing vs rate limit (same 429, opposite meanings) --------------------------
+
+def test_billing_check_flags_depleted_prepay_credits():
+    err = ("429 RESOURCE_EXHAUSTED. {'error': {'message': 'Your prepayment credits "
+           "are depleted. Please go to AI Studio...'}}")
+    c = hw.check_gemini_billing(err)
+    assert not c.ok
+    assert "DEPLETED" in c.detail and "not a rate limit" in c.detail.lower()
+
+
+def test_billing_check_ignores_an_ordinary_rate_limit():
+    """A plain quota 429 self-clears and is normal operation — only the billing
+    case is a standing failure."""
+    assert hw.check_gemini_billing(
+        "429 RESOURCE_EXHAUSTED generate_content_free_tier_requests").ok
+
+
+def test_billing_check_ok_when_no_error_recorded():
+    assert hw.check_gemini_billing(None).ok

@@ -92,3 +92,33 @@ def test_corrupt_quota_file_is_treated_as_empty(tmp_path):
     path = tmp_path / "q.json"
     path.write_text("not json{", encoding="utf-8")
     assert q.calls_today("gemini-2.5-flash", path=path, now=_utc(2026, 7, 28)) == 0
+
+
+# --- the billing watcher (durable marker for a non-self-clearing 429) ----------------
+
+def test_billing_watcher_persists_marker_on_prepay_error(monkeypatch):
+    import logging as _logging
+
+    from app import gemini_pipe
+
+    saved = {}
+    monkeypatch.setattr("app.store.set_state", lambda k, v: saved.__setitem__(k, v))
+    gemini_pipe.logger.handlers  # ensure module imported/handler attached
+    rec = _logging.LogRecord("reelbrain.gemini", _logging.ERROR, __file__, 1,
+                             "call failed: Your prepayment credits are depleted.",
+                             None, None)
+    gemini_pipe._BillingWatcher().emit(rec)
+    assert "prepayment credits" in saved[gemini_pipe._GEMINI_LAST_ERROR_STATE_KEY]
+
+
+def test_billing_watcher_ignores_ordinary_rate_limit(monkeypatch):
+    import logging as _logging
+
+    from app import gemini_pipe
+
+    saved = {}
+    monkeypatch.setattr("app.store.set_state", lambda k, v: saved.__setitem__(k, v))
+    rec = _logging.LogRecord("reelbrain.gemini", _logging.ERROR, __file__, 1,
+                             "call failed: 429 free_tier_requests", None, None)
+    gemini_pipe._BillingWatcher().emit(rec)
+    assert saved == {}

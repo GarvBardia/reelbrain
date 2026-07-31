@@ -37,7 +37,9 @@ load_dotenv()
 PLACEHOLDER_TITLE = "No caption or transcript available."
 PHOTO_MANUAL_LABEL = "📷 Photo — manual"
 DEFAULT_PROGRESS_FILE = "backfill_suggested_action_progress.json"
-QUOTA_MARKERS = ("429", "RESOURCE_EXHAUSTED")
+# Single source of truth lives in app.gemini_pipe -- these were 7 copies that
+# each had their own idea of "quota error", which is how a billing 429 hid.
+from app.gemini_pipe import QUOTA_MARKERS  # noqa: E402  (re-exported)
 
 _PROMPT = """A personal knowledge base entry was saved from an Instagram reel. \
 Based on its title and caption below, write ONE imperative line stating the single \
@@ -110,6 +112,7 @@ def suggest_action(title: str, caption: str) -> str:
             contents=[_PROMPT.format(title=title, caption=caption or "(none)")],
         )
     except Exception as exc:  # noqa: BLE001
+        gemini_pipe.note_gemini_failure(exc)
         if any(m in str(exc) for m in QUOTA_MARKERS):
             raise QuotaExhausted(str(exc)) from exc
         raise

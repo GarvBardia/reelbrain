@@ -75,7 +75,9 @@ PLACEHOLDER_TITLE = "No caption or transcript available."
 RECOVERABLE_STATUSES = {PHOTO_MANUAL_LABEL, FAILED_RETRY_LABEL}
 MAX_ATTEMPTS = 3
 DEFAULT_PROGRESS_FILE = "recover_placeholders_progress.json"
-QUOTA_MARKERS = ("429", "RESOURCE_EXHAUSTED")
+# Single source of truth lives in app.gemini_pipe -- these were 7 copies that
+# each had their own idea of "quota error", which is how a billing 429 hid.
+from app.gemini_pipe import QUOTA_MARKERS  # noqa: E402  (re-exported)
 RECOVERED_NOTE_SUFFIX = "recovered by the placeholder worker from a home-IP fetch"
 
 
@@ -95,6 +97,8 @@ class _QuotaWatcher(logging.Handler):
         text = record.getMessage()
         if record.exc_info and record.exc_info[1] is not None:
             text += " " + str(record.exc_info[1])
+        from app import gemini_pipe as _gp
+        _gp.note_gemini_failure(text)
         if any(marker in text for marker in QUOTA_MARKERS):
             self.quota_hit = True
 

@@ -133,6 +133,37 @@ def check_no_empty_topics(empty_topic_shortcodes: list[str]) -> Check:
                  else f"{len(empty_topic_shortcodes)} row(s) with empty Topics: {preview}")
 
 
+def check_alert_channel(ntfy_topic: str) -> Check:
+    """Is there anywhere for a failure to GO?
+
+    INCIDENT (2026-07-31): NTFY_TOPIC was never set, so every run ended with
+    `Pushed failure alert: False` — the watchdog spent days correctly detecting a
+    growing count drift and telling nobody. A monitor that cannot reach you is
+    worse than no monitor, because it manufactures confidence. So the channel
+    being unconfigured is now itself a FAILING check: it shows up in the report
+    and in the exit code, where it can't be mistaken for silence-means-healthy."""
+    ok = bool(ntfy_topic.strip())
+    return Check("alert_channel", ok,
+                 "ntfy topic configured" if ok
+                 else "NTFY_TOPIC is UNSET — failures cannot reach you; set it in .env")
+
+
+def check_gemini_billing(probe_error: Optional[str]) -> Check:
+    """Distinguish 'out of credits' from 'hit today's rate limit'.
+
+    Both surface as HTTP 429/RESOURCE_EXHAUSTED, but they mean opposite things:
+    a rate limit clears by itself at the next reset, while depleted prepay
+    credits NEVER clear without a human topping up the account. Conflating them
+    is what let the pipeline sit dead for days looking like ordinary throttling
+    (see PROGRESS.md, 2026-07-31). Only the billing case is reported here — a
+    plain rate limit is normal operation and handled by the quota check."""
+    if probe_error and "prepayment credits" in probe_error:
+        return Check("gemini_billing", False,
+                     "Gemini prepay credits DEPLETED — all models 429 until you top up "
+                     "at ai.studio/projects. Not a rate limit; will not self-clear.")
+    return Check("gemini_billing", True, "no billing block detected")
+
+
 def summarize(checks: list[Check]) -> dict:
     failures = [c for c in checks if not c.ok]
     return {"healthy": not failures, "checks": checks, "failures": failures}
@@ -214,6 +245,19 @@ def _empty_topic_shortcodes() -> list[str]:
     return empty
 
 
+def _gemini_billing_probe() -> Optional[str]:
+    """Read the most recent Gemini failure WITHOUT spending a call: the daily
+    runner already logs its stop reason, and gemini_pipe logs the raw error. We
+    look at the persisted billing marker set by gemini_pipe when it sees the
+    prepay message, so this check costs nothing and works even at zero credits."""
+    from app import store
+
+    try:
+        return store.get_state("gemini_last_error")
+    except Exception:  # noqa: BLE001 - a missing marker just means "nothing seen"
+        return None
+
+
 def run(dry_run: bool = False, print_fn: Callable[[str], None] = print) -> dict:
     import os
 
@@ -222,6 +266,7 @@ def run(dry_run: bool = False, print_fn: Callable[[str], None] = print) -> dict:
     base_url = os.environ.get("REELBRAIN_URL", "https://reelbrain.onrender.com")
     repo = os.environ.get("GITHUB_REPO", "GarvBardia/reelbrain")
     gh_token = os.environ.get("GITHUB_TOKEN", "").strip()
+    ntfy_topic = os.environ.get("NTFY_TOPIC", "")
     now = datetime.now(timezone.utc)
 
     pages = notion_writer.find_saves_pages_since("1970-01-01T00:00:00")
@@ -238,6 +283,8 @@ def run(dry_run: bool = False, print_fn: Callable[[str], None] = print) -> dict:
         check_workflows(_workflow_conclusions(repo, gh_token)),
         check_quota_not_stuck(log_lines),
         check_no_empty_topics(_empty_topic_shortcodes()),
+        check_alert_channel(ntfy_topic),
+        check_gemini_billing(_gemini_billing_probe()),
     ]
     result = summarize(checks)
 
@@ -250,6 +297,11 @@ def run(dry_run: bool = False, print_fn: Callable[[str], None] = print) -> dict:
         sent = alerts.send_push(build_failure_message(result["failures"]),
                                 title="ReelBrain health check", tags="rotating_light")
         print_fn(f"Pushed failure alert: {sent}")
+        if not sent:
+            # Never let a failed delivery pass as a quiet log line — that is the
+            # exact shape of the incident this check exists for.
+            print_fn("!! ALERT DELIVERY FAILED — the failures above reached NOBODY. "
+                     "Set NTFY_TOPIC in .env.")
 
     return result
 

@@ -81,7 +81,9 @@ logger = logging.getLogger("reelbrain.attach_and_ingest")
 DEFAULT_PROGRESS_FILE = "resource_attach_progress.json"
 UNMATCHED_REPORT = "UNMATCHED_RESOURCES.md"
 FETCH_SPACING_SECONDS = 1.0
-QUOTA_MARKERS = ("429", "RESOURCE_EXHAUSTED")
+# Single source of truth lives in app.gemini_pipe -- these were 7 copies that
+# each had their own idea of "quota error", which is how a billing 429 hid.
+from app.gemini_pipe import QUOTA_MARKERS  # noqa: E402  (re-exported)
 
 # A confident AUTO-attach requires the candidate's own gate_keyword to appear
 # verbatim in the resource (attach_matching scores that at GATE_KEYWORD_MATCH_WEIGHT)
@@ -196,6 +198,8 @@ class _QuotaWatcher(logging.Handler):
         text = record.getMessage()
         if record.exc_info and record.exc_info[1] is not None:
             text += " " + str(record.exc_info[1])
+        from app import gemini_pipe as _gp
+        _gp.note_gemini_failure(text)
         if any(m in text for m in QUOTA_MARKERS):
             self.quota_hit = True
 

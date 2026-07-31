@@ -79,6 +79,72 @@ MIN_GEMINI_CALL_SPACING_SECONDS = float(os.environ.get("MIN_GEMINI_CALL_SPACING_
 _LAST_GEMINI_CALL_STATE_KEY = "last_gemini_call_at"
 
 
+# The SINGLE definition of what a Gemini failure means. These were previously
+# copy-pasted into 7 different modules, which is exactly why the billing 429 went
+# undiagnosed for days: each call site had its own idea of "quota error" and none
+# of them distinguished a self-clearing rate limit from a dead account.
+QUOTA_MARKERS = ("429", "RESOURCE_EXHAUSTED")
+BILLING_MARKER = "prepayment credits"
+_BILLING_MARKER = BILLING_MARKER  # back-compat alias
+_GEMINI_LAST_ERROR_STATE_KEY = "gemini_last_error"
+
+
+def is_quota_error(exc: BaseException | str) -> bool:
+    """Any 429/RESOURCE_EXHAUSTED — rate limit OR billing."""
+    return any(m in str(exc) for m in QUOTA_MARKERS)
+
+
+def is_billing_error(exc: BaseException | str) -> bool:
+    """Specifically 'prepay credits depleted' — does NOT self-clear at the next
+    reset, unlike a rate limit. Needs a human to top up the account."""
+    return BILLING_MARKER in str(exc)
+
+
+def note_gemini_failure(exc: BaseException | str) -> None:
+    """Persist a durable marker for a BILLING failure so the health watchdog can
+    report 'you are out of credits' instead of the pipeline looking throttled.
+
+    Call this from any except block that handles a Gemini error. Scripts build
+    their own genai clients and never route through this module's logger, so a
+    logger-only watcher silently misses them (found live: the marker stayed
+    empty while every backfill was failing)."""
+    try:
+        if not is_billing_error(exc):
+            return
+        from app import store
+
+        store.set_state(_GEMINI_LAST_ERROR_STATE_KEY, str(exc)[:500])
+    except Exception:  # noqa: BLE001 - diagnostics must never break the pipeline
+        pass
+
+
+class _BillingWatcher(logging.Handler):
+    """Persists a durable marker when Gemini reports depleted PREPAY CREDITS.
+
+    A rate-limit 429 and a billing 429 are the same status code but opposite
+    situations: the first clears itself at the next reset, the second never
+    clears without a human topping up the account. Conflating them let the
+    pipeline sit dead for days looking like ordinary throttling. Every call site
+    reports failures through this one logger, so watching it here catches them
+    all — including any added later — without touching each handler."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            text = record.getMessage()
+            if record.exc_info and record.exc_info[1] is not None:
+                text += " " + str(record.exc_info[1])
+            if _BILLING_MARKER not in text:
+                return
+            from app import store
+
+            store.set_state(_GEMINI_LAST_ERROR_STATE_KEY, text[:500])
+        except Exception:  # noqa: BLE001 - diagnostics must never break the pipeline
+            pass
+
+
+logger.addHandler(_BillingWatcher())
+
+
 def _enforce_gemini_call_spacing() -> None:
     """Sleeps until at least MIN_GEMINI_CALL_SPACING_SECONDS have passed since
     the last Gemini call THIS PROCESS made (extraction or research) — mirrors

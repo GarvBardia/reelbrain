@@ -40,7 +40,9 @@ load_dotenv()
 from scripts.notion_deep_clean import PLACEHOLDER_TITLE, title_is_bare_permalink
 
 DEFAULT_PROGRESS_FILE = "backfill_plain_summary_progress.json"
-QUOTA_MARKERS = ("429", "RESOURCE_EXHAUSTED")
+# Single source of truth lives in app.gemini_pipe -- these were 7 copies that
+# each had their own idea of "quota error", which is how a billing 429 hid.
+from app.gemini_pipe import QUOTA_MARKERS  # noqa: E402  (re-exported)
 
 _PROMPT = """Rewrite this saved item's summary so a curious 12-year-old could follow it, \
 assuming they have never heard of ANY tool or service named in it.
@@ -95,6 +97,7 @@ def summarize_plainly(title: str, topics: list[str]) -> str:
             contents=[_PROMPT.format(title=title, topics=", ".join(topics) or "(none)")],
         )
     except Exception as exc:  # noqa: BLE001
+        gemini_pipe.note_gemini_failure(exc)
         if any(m in str(exc) for m in QUOTA_MARKERS):
             raise QuotaExhausted(str(exc)) from exc
         raise

@@ -87,7 +87,9 @@ PENDING_WORK_STATUSES = {"⚠️ Failed — retry", PHOTO_MANUAL_LABEL, "process
 
 _EMPTY_TRANSCRIPT_MARKERS = {"(no speech detected)", "(unavailable)", ""}
 
-QUOTA_MARKERS = ("429", "RESOURCE_EXHAUSTED")
+# Single source of truth lives in app.gemini_pipe -- these were 7 copies that
+# each had their own idea of "quota error", which is how a billing 429 hid.
+from app.gemini_pipe import QUOTA_MARKERS  # noqa: E402  (re-exported)
 
 
 def _created_days_ago(page: dict) -> float:
@@ -330,6 +332,7 @@ class _QuotaWatcher(logging.Handler):
         text = record.getMessage()
         if record.exc_info and record.exc_info[1] is not None:
             text += " " + str(record.exc_info[1])
+        gemini_pipe.note_gemini_failure(text)
         if any(m in text for m in QUOTA_MARKERS):
             self.quota_hit = True
 
