@@ -31,7 +31,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from app.topic_guarantee import UNCATEGORIZED_TAG, derive_fallback_tags
+from app.topic_guarantee import (
+    PENDING_EXTRACTION_TAG,
+    UNCATEGORIZED_TAG,
+    derive_fallback_tags,
+    has_real_content,
+)
 
 logger = logging.getLogger("reelbrain.enforce_topics")
 
@@ -39,13 +44,14 @@ logger = logging.getLogger("reelbrain.enforce_topics")
 def find_topicless_rows(pages: list[dict], include_upgradable: bool = False) -> list[dict]:
     """Every row with zero Topics, with the raw material the fallback needs.
 
-    include_upgradable also returns rows already tagged ONLY "uncategorized"
-    that now have named_entities. Those rows reached "uncategorized" because
-    their entities hadn't been backfilled yet; now that they have, the same
-    free fallback derives real tags. Without this they are stranded forever --
-    the sweep's normal selector is "empty Topics", and "uncategorized" is not
-    empty. Rows that would still resolve to "uncategorized" are deliberately
-    NOT included, so this can never churn a daily no-op write.
+    include_upgradable also returns rows already tagged ONLY with a fallback
+    marker ("uncategorized" or "pending-extraction") that now have
+    named_entities. Those rows got the marker because their entities hadn't
+    been backfilled yet; now that they have, the same free fallback derives
+    real tags. Without this they are stranded forever -- the sweep's normal
+    selector is "empty Topics", and a marker tag is not empty. Rows that would
+    still resolve to a marker are deliberately NOT included, so this can never
+    churn a daily no-op write.
     """
     from app import notion_writer
 
@@ -58,7 +64,7 @@ def find_topicless_rows(pages: list[dict], include_upgradable: bool = False) -> 
         if digest["topics"]:
             upgradable = (
                 include_upgradable
-                and list(digest["topics"]) == [UNCATEGORIZED_TAG]
+                and list(digest["topics"]) in ([UNCATEGORIZED_TAG], [PENDING_EXTRACTION_TAG])
                 and bool(digest.get("named_entities"))
             )
             if not upgradable:
@@ -92,7 +98,10 @@ def run_enforce(
     fixed = errors = 0
     uncategorized = 0
     for i, row in enumerate(rows):
-        topics = derive_fallback_tags(row["named_entities"], row["content_type"])
+        topics = derive_fallback_tags(
+            row["named_entities"], row["content_type"],
+            has_content=has_real_content(row.get("title", "")),
+        )
         if dry_run:
             print_fn(f"[dry-run] {row['shortcode']} -> {topics}")
             continue

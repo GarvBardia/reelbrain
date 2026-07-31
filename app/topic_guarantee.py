@@ -36,6 +36,15 @@ MAX_TOPICS = 6
 # empty list: it keeps the row linkable in the vault and makes the gap
 # queryable instead of invisible.
 UNCATEGORIZED_TAG = "uncategorized"
+# A row that HAS real content but whose extraction never succeeded. Distinct
+# from UNCATEGORIZED_TAG on purpose — see the note below on why conflating them
+# lost 19 rows' worth of already-fetched content.
+PENDING_EXTRACTION_TAG = "pending-extraction"
+# Words of caption/main_point below which a row genuinely has nothing to
+# categorize. Matches CHEAP_MODEL_GUIDE.md's "don't attempt extraction under
+# ~10 words" floor, so the two ends of the pipeline agree on what "empty" means.
+MIN_CONTENT_WORDS = 10
+PLACEHOLDER_MAIN_POINT = "No caption or transcript available."
 
 # content_type -> a defensible topic tag. Not a subject guess: it describes the
 # SHAPE of the content, which we do know.
@@ -54,9 +63,32 @@ def _slugify_tag(text: str) -> str:
     return slug[:40]
 
 
-def derive_fallback_tags(named_entities: list[str], content_type: str) -> list[str]:
+def has_real_content(main_point: str) -> bool:
+    """Does this row actually carry something extractable?
+
+    The distinction that matters: an empty named_entities list can mean either
+    "we looked and there was nothing" or "extraction never ran". The caption
+    itself is what tells them apart."""
+    text = (main_point or "").strip()
+    if not text or text == PLACEHOLDER_MAIN_POINT:
+        return False
+    return len(text.split()) >= MIN_CONTENT_WORDS
+
+
+def derive_fallback_tags(named_entities: list[str], content_type: str,
+                         has_content: bool = False) -> list[str]:
     """Tags from what the row genuinely carries. Entity-derived tags first
-    (most specific), then the content-type tag, then the honest marker."""
+    (most specific), then the content-type tag, then the honest marker.
+
+    INCIDENT (2026-07-31): `uncategorized` used to be the answer for BOTH
+    "nothing to categorize" and "extraction failed, so we have no entities
+    yet" — a transient failure recorded as a permanent verdict. 19 rows with
+    real captions (up to 295 words) sat labelled `uncategorized`, which reads as
+    "we looked and found nothing" and left the actual state — extraction never
+    succeeded — recorded nowhere and unqueryable. With has_content=True those
+    rows now get PENDING_EXTRACTION_TAG instead, so `uncategorized` means only
+    what it says, and "needs another extraction attempt" is a state you can
+    query for."""
     tags: list[str] = []
     for entity in named_entities or []:
         slug = _slugify_tag(entity)
@@ -72,7 +104,9 @@ def derive_fallback_tags(named_entities: list[str], content_type: str) -> list[s
         tags.append(content_tag)
 
     if not tags:
-        tags = [UNCATEGORIZED_TAG]
+        # Content present but nothing derivable => extraction hasn't succeeded
+        # yet, which is a RETRYABLE state, not a verdict about the content.
+        tags = [PENDING_EXTRACTION_TAG if has_content else UNCATEGORIZED_TAG]
     return tags[:MAX_TOPICS]
 
 
@@ -84,6 +118,7 @@ def ensure_topics(extraction) -> list[str]:
     fallback = derive_fallback_tags(
         getattr(extraction, "named_entities", []) or [],
         getattr(extraction, "content_type", "") or "",
+        has_content=has_real_content(getattr(extraction, "main_point", "") or ""),
     )
     logger.warning(
         "topic guarantee: extraction had ZERO topic_tags — applying fallback %s "

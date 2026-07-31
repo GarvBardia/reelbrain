@@ -111,7 +111,11 @@ PARENTS: dict[str, list[str]] = {
 }
 
 # The automation tag that is explicitly NOT a topic (proposal preamble).
-NON_TOPIC_TAGS: frozenset[str] = frozenset({"near-duplicate"})
+# Pipeline-state markers, not subjects: they describe our processing status,
+# so drift detection and parent grouping must both ignore them.
+NON_TOPIC_TAGS: frozenset[str] = frozenset({
+    "near-duplicate", "uncategorized", "pending-extraction",
+})
 
 # Intentionally-loose one-offs kept as their own tags (proposal §1): too
 # specific to force under a parent, but still canonical — NOT drift.

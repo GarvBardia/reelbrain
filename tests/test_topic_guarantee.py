@@ -1,5 +1,7 @@
 """Phase H: no reel may exist without topics. All mocked."""
 from app import gemini_pipe, notion_writer, topic_guarantee
+
+tg = topic_guarantee  # short alias used by the newer cases below
 from app.models import Extraction, ReelData
 from scripts import enforce_topics
 
@@ -163,3 +165,48 @@ def test_sweep_continues_past_a_failing_row():
             {"shortcode": "G1", "page_id": "ok", "title": "T", "named_entities": ["GSAP"], "content_type": ""}]
     summary = enforce_topics.run_enforce(rows, write_fn=flaky, print_fn=lambda m: None)
     assert summary == {"fixed": 1, "errors": 1, "uncategorized": 0, "total_rows": 2}
+
+
+# --- degraded extraction is NOT "nothing to categorize" ------------------------------
+
+def test_row_with_real_content_but_no_entities_is_pending_not_uncategorized():
+    """REGRESSION (2026-07-31): a degraded extraction yields no entities and
+    content_type='unknown', which used to resolve to 'uncategorized' — recording
+    a transient failure as a permanent verdict. 19 rows with captions up to 295
+    words were mislabelled this way."""
+    tags = tg.derive_fallback_tags([], "unknown", has_content=True)
+    assert tags == [tg.PENDING_EXTRACTION_TAG]
+
+
+def test_row_with_genuinely_nothing_stays_uncategorized():
+    assert tg.derive_fallback_tags([], "unknown", has_content=False) == [tg.UNCATEGORIZED_TAG]
+
+
+def test_has_real_content_rejects_the_placeholder():
+    assert not tg.has_real_content(tg.PLACEHOLDER_MAIN_POINT)
+
+
+def test_has_real_content_rejects_a_too_thin_caption():
+    assert not tg.has_real_content("short one")
+
+
+def test_has_real_content_accepts_a_substantial_caption():
+    assert tg.has_real_content(" ".join(["word"] * 12))
+
+
+def test_entities_still_win_over_any_marker():
+    tags = tg.derive_fallback_tags(["LangGraph"], "tutorial", has_content=True)
+    assert tg.PENDING_EXTRACTION_TAG not in tags and tg.UNCATEGORIZED_TAG not in tags
+
+
+def test_ensure_topics_marks_a_degraded_extraction_as_pending():
+    from app.models import degraded_extraction
+
+    extraction = degraded_extraction(" ".join(["real"] * 30))
+    assert tg.ensure_topics(extraction) == [tg.PENDING_EXTRACTION_TAG]
+
+
+def test_ensure_topics_marks_an_empty_degraded_extraction_uncategorized():
+    from app.models import degraded_extraction
+
+    assert tg.ensure_topics(degraded_extraction("")) == [tg.UNCATEGORIZED_TAG]
