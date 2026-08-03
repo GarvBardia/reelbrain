@@ -19,16 +19,26 @@ logger = logging.getLogger("reelbrain.gemini")
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 # MUST be a CONCRETE, PINNED model id — never a rolling alias like
-# `gemini-flash-latest` or `gemini-flash`. INCIDENT (2026-07-28): the default was
-# `gemini-flash-latest`, which Google silently resolves to whatever the newest
-# Flash is at call time. Over a 28-day window that alias moved across 2.5 / 3.5 /
-# 3.6 Flash, and the free tier's ~20 req/day cap is PER CONCRETE MODEL — so calls
-# scattered across three independent quotas, the newer two got exhausted by other
-# usage, and daily_runner 429'd on call one while 2.5-flash sat at 1/20 unused.
-# Pinning to one real version makes the per-model quota trackable (see
-# app/gemini_quota.py). `gemini-2.5-flash` is a current, valid, non-aliased id
-# (confirmed against ai.google.dev/gemini-api/docs/models) with fresh quota here.
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
+# `gemini-flash-latest` or `gemini-flash`. INCIDENT #1 (2026-07-28): the default
+# was `gemini-flash-latest`, which Google silently resolves to whatever the
+# newest Flash is at call time; over a 28-day window that alias moved across
+# 2.5 / 3.5 / 3.6 Flash, fragmenting quota across three independent per-model
+# caps. INCIDENT #2 (2026-08-03): on a FRESH project (new key, deliberately
+# non-billing-linked to restore genuine free-tier access), `gemini-2.5-flash`
+# itself returned `404 "This model ... is no longer available to new users"` —
+# confirmed live, not assumed. Google's ListModels endpoint still lists it (that
+# API reports global model metadata, not per-project availability), so the only
+# reliable check is an actual generate_content call on THIS key.
+#
+# Verified live against this project on 2026-08-03: gemini-2.5-flash and
+# gemini-2.5-flash-lite both 404 "no longer available to new users";
+# gemini-2.0-flash/-001 both 429 with the free-tier quota explicitly at
+# `limit: 0` for this model. gemini-3.5-flash, gemini-3.6-flash,
+# gemini-3-flash-preview, and the *-latest aliases all succeeded, including
+# structured JSON output (response_schema=Extraction). gemini-3.6-flash is the
+# newest NON-preview (GA) Flash id that actually works on this key — pinned
+# concrete version, per the incident #1 lesson.
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash").strip()
 # text-embedding-004 was shut down by Google on Jan 14, 2026 — gemini-embedding-001
 # is the replacement. It defaults to 3072-dim output; we pin it to 768 via
 # output_dimensionality so it stays compatible with the existing sqlite-vec schema
@@ -150,7 +160,11 @@ def _enforce_gemini_call_spacing() -> None:
     the last Gemini call THIS PROCESS made (extraction or research) — mirrors
     fetcher._enforce_rate_discipline's shape but tracks its own timestamp
     (app_state key, not fetch_log), since fetch spacing and Gemini spacing are
-    governed by two completely different services' rate limits."""
+    governed by two completely different services' rate limits.
+
+    Pure spacing only — quota RECORDING happens in generate_content_tracked,
+    after the call, once the RESOLVED model is known (see that function's
+    docstring for why the distinction matters)."""
     from app import store
 
     last_raw = store.get_state(_LAST_GEMINI_CALL_STATE_KEY)
@@ -162,16 +176,44 @@ def _enforce_gemini_call_spacing() -> None:
         if elapsed < MIN_GEMINI_CALL_SPACING_SECONDS:
             time.sleep(MIN_GEMINI_CALL_SPACING_SECONDS - elapsed)
     store.set_state(_LAST_GEMINI_CALL_STATE_KEY, str(time.time()))
-    # Record the call against the configured model's daily quota. Every one of
-    # the six generate_content sites routes through here first (embeddings, a
-    # separate model + quota, do NOT), so this is the single choke point where
-    # the true per-model call count is known.
+
+
+def _record_gemini_call_attempt(resolved_model: str) -> None:
     try:
         from app import gemini_quota
 
-        gemini_quota.record_call(GEMINI_MODEL)
+        gemini_quota.record_call(resolved_model)
     except Exception:  # noqa: BLE001 - quota bookkeeping must never break a call
         logger.debug("gemini_quota.record_call failed", exc_info=True)
+
+
+def generate_content_tracked(client, model: str, contents, config=None):
+    """client.models.generate_content, spaced and quota-tracked in one place.
+
+    Records the call under the RESOLVED model version Google actually served
+    (response.model_version), not the requested model string. INCIDENT
+    (2026-07-28): a rolling alias (`gemini-flash-latest`) silently resolved to
+    different concrete Flash versions over time, fragmenting quota across
+    them. We now pin GEMINI_MODEL to a concrete version, which makes this a
+    non-issue in practice — but tracking the resolved version, not the
+    configured string, means the ledger stays correct even if a future default
+    reverts to an alias under time pressure, rather than repeating that bug.
+
+    On failure there is no response to resolve from, so the call is recorded
+    under the ATTEMPTED model — conservative, consistent with the prior choice
+    to count a rejected call rather than undercount quota usage."""
+    _enforce_gemini_call_spacing()
+    try:
+        with _GEMINI_SEMAPHORE:
+            kwargs = {"model": model, "contents": contents}
+            if config is not None:
+                kwargs["config"] = config
+            response = client.models.generate_content(**kwargs)
+    except Exception:
+        _record_gemini_call_attempt(model)
+        raise
+    _record_gemini_call_attempt(getattr(response, "model_version", None) or model)
+    return response
 
 
 def _has_audio_stream(video_path: str) -> Optional[bool]:
@@ -293,19 +335,16 @@ def _call_gemini_carousel(prompt: str, images: list[bytes]) -> str:
     from google.genai import types
 
     client = genai.Client(api_key=GEMINI_API_KEY)
-    _enforce_gemini_call_spacing()
     parts: list = [prompt]
     for image in images:
         parts.append(types.Part.from_bytes(data=image, mime_type="image/jpeg"))
-    with _GEMINI_SEMAPHORE:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=parts,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=Extraction,
-            ),
-        )
+    response = generate_content_tracked(
+        client, GEMINI_MODEL, contents=parts,
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=Extraction,
+        ),
+    )
     return response.text
 
 
@@ -356,17 +395,15 @@ def _call_gemini(audio_path: str, prompt: str) -> str:
     from google.genai import types
 
     client = genai.Client(api_key=GEMINI_API_KEY)
-    _enforce_gemini_call_spacing()
     with _GEMINI_SEMAPHORE:
         uploaded = client.files.upload(file=audio_path)
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=[prompt, uploaded],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=Extraction,
-            ),
-        )
+    response = generate_content_tracked(
+        client, GEMINI_MODEL, contents=[prompt, uploaded],
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=Extraction,
+        ),
+    )
     return response.text
 
 
@@ -377,16 +414,13 @@ def _call_gemini_text_only(prompt: str) -> str:
     from google.genai import types
 
     client = genai.Client(api_key=GEMINI_API_KEY)
-    _enforce_gemini_call_spacing()
-    with _GEMINI_SEMAPHORE:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=[prompt],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=Extraction,
-            ),
-        )
+    response = generate_content_tracked(
+        client, GEMINI_MODEL, contents=[prompt],
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=Extraction,
+        ),
+    )
     return response.text
 
 
@@ -666,16 +700,13 @@ def _call_gemini_resource(prompt: str):
     from app.models import ResourceExtraction
 
     client = genai.Client(api_key=GEMINI_API_KEY)
-    _enforce_gemini_call_spacing()
-    with _GEMINI_SEMAPHORE:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=[prompt],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=ResourceExtraction,
-            ),
-        )
+    response = generate_content_tracked(
+        client, GEMINI_MODEL, contents=[prompt],
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=ResourceExtraction,
+        ),
+    )
     return response.text
 
 
@@ -757,16 +788,12 @@ def _call_gemini_research(entity: str):
     from google.genai import types
 
     client = genai.Client(api_key=GEMINI_API_KEY)
-    _enforce_gemini_call_spacing()
-    with _GEMINI_SEMAPHORE:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=[_RESEARCH_PROMPT_TEMPLATE.format(entity=entity)],
-            config=types.GenerateContentConfig(
-                tools=[types.Tool(google_search=types.GoogleSearch())],
-            ),
-        )
-    return response
+    return generate_content_tracked(
+        client, GEMINI_MODEL, contents=[_RESEARCH_PROMPT_TEMPLATE.format(entity=entity)],
+        config=types.GenerateContentConfig(
+            tools=[types.Tool(google_search=types.GoogleSearch())],
+        ),
+    )
 
 
 _WEBFETCH_CONTEXT_PROMPT = """Using ONLY the material below (fetched live from {url}), \
@@ -789,12 +816,10 @@ def _call_gemini_webfetch_context(entity: str, material: str, url: str) -> str:
     from google import genai
 
     client = genai.Client(api_key=GEMINI_API_KEY)
-    _enforce_gemini_call_spacing()
-    with _GEMINI_SEMAPHORE:
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=[_WEBFETCH_CONTEXT_PROMPT.format(entity=entity, material=material, url=url)],
-        )
+    response = generate_content_tracked(
+        client, GEMINI_MODEL,
+        contents=[_WEBFETCH_CONTEXT_PROMPT.format(entity=entity, material=material, url=url)],
+    )
     return (response.text or "").strip()
 
 

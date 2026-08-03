@@ -39,6 +39,26 @@ def _never_construct_real_genai_client(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _never_write_real_gemini_quota(monkeypatch, tmp_path):
+    """Defense-in-depth: no test should persist an entry to the developer's real
+    gemini_quota.json. Recording lives inside gemini_pipe.generate_content_tracked
+    itself (not something every test explicitly mocks), so a test that patches
+    only the genai client -- not gemini_quota's file path -- would otherwise
+    still write a real entry to disk. Caught live: exactly this happened once
+    (2026-08-03) via a pre-existing test that only mocked spacing, back when
+    spacing and recording were the same function.
+
+    Redirects the FILE PATH rather than stubbing record_call itself, so
+    test_gemini_quota.py's own direct tests of record_call/calls_today/
+    remaining_today keep exercising the real function -- they always pass an
+    explicit path= to their own tmp_path, which still takes precedence over
+    this default."""
+    from app import gemini_quota
+
+    monkeypatch.setattr(gemini_quota, "QUOTA_FILE", tmp_path / "_autouse_gemini_quota.json")
+
+
+@pytest.fixture(autouse=True)
 def _never_construct_real_notion_client(monkeypatch):
     """Defense-in-depth: block real Notion client construction in every test.
     store.py's ephemeral-disk-recovery fallbacks (and, since the BUG 3 fix,

@@ -134,12 +134,16 @@ def _try_ai_prose_summary(saves: list[dict], period_label: str) -> Optional[str]
     try:
         from google import genai
 
+        from app import gemini_pipe
         from app.gemini_pipe import GEMINI_API_KEY, GEMINI_MODEL
 
         points = "\n".join(f"- {s['main_point']}" for s in saves[:50])
         client = genai.Client(api_key=GEMINI_API_KEY)
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
+        # gemini_pipe.generate_content_tracked, not client.models.generate_content
+        # directly: it records quota under the RESOLVED model version Google
+        # actually served, not the requested string (see its docstring).
+        response = gemini_pipe.generate_content_tracked(
+            client, GEMINI_MODEL,
             contents=(
                 f"Summarize {period_label}'s saved Instagram reel takeaways in 2-3 "
                 "sentences of plain prose, written as a reflective note to yourself "

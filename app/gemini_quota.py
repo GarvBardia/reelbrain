@@ -26,6 +26,7 @@ import os
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 
 DEFAULT_DAILY_LIMIT = int(os.environ.get("GEMINI_DAILY_LIMIT", "20"))
 QUOTA_FILE = Path(os.environ.get("GEMINI_QUOTA_FILE", "gemini_quota.json"))
@@ -84,18 +85,26 @@ def _prune(records: list[dict], now: datetime) -> list[dict]:
     return [r for r in records if r.get("ts", 0) >= cutoff]
 
 
-def record_call(model: str, path: Path = QUOTA_FILE, now: datetime | None = None) -> None:
+def record_call(model: str, path: Optional[Path] = None, now: datetime | None = None) -> None:
     """Append one call for `model`. Recorded at ATTEMPT time (before the request
     returns), so a 429'd attempt still counts — a deliberately CONSERVATIVE
     choice: the tracker may over-count by the handful of rejected calls, which
-    can only make us stop early, never blow past the real cap."""
+    can only make us stop early, never blow past the real cap.
+
+    `path` resolves against the CURRENT value of QUOTA_FILE at call time, not a
+    value bound once at import — a plain `path: Path = QUOTA_FILE` default is
+    evaluated exactly once, so redirecting the module attribute afterward
+    (tests/conftest.py's autouse safety net does this) would silently have no
+    effect on any caller that omits `path`."""
+    path = path if path is not None else QUOTA_FILE
     now = _now_utc(now)
     records = _prune(_load(path), now)
     records.append({"ts": now.timestamp(), "model": model, "day": pacific_quota_day(now)})
     _save(path, records)
 
 
-def calls_today(model: str, path: Path = QUOTA_FILE, now: datetime | None = None) -> int:
+def calls_today(model: str, path: Optional[Path] = None, now: datetime | None = None) -> int:
+    path = path if path is not None else QUOTA_FILE
     now = _now_utc(now)
     today = pacific_quota_day(now)
     return sum(1 for r in _load(path) if r.get("model") == model and r.get("day") == today)
@@ -104,9 +113,10 @@ def calls_today(model: str, path: Path = QUOTA_FILE, now: datetime | None = None
 def remaining_today(
     model: str,
     limit: int = DEFAULT_DAILY_LIMIT,
-    path: Path = QUOTA_FILE,
+    path: Optional[Path] = None,
     now: datetime | None = None,
 ) -> int:
     """True remaining budget for `model` today: limit minus calls already made,
     floored at 0."""
+    path = path if path is not None else QUOTA_FILE
     return max(0, limit - calls_today(model, path=path, now=now))

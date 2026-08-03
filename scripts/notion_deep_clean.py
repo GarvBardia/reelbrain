@@ -351,9 +351,12 @@ def suggest_tags(title: str, taxonomy: list[str]) -> list[str]:
     from app import gemini_pipe
 
     client = genai.Client(api_key=gemini_pipe.GEMINI_API_KEY)
-    gemini_pipe._enforce_gemini_call_spacing()
-    response = client.models.generate_content(
-        model=gemini_pipe.GEMINI_MODEL,
+    # gemini_pipe.generate_content_tracked, not client.models.generate_content
+    # directly: it records quota under the RESOLVED model version Google
+    # actually served, not the requested string (see its docstring). A raw
+    # generate_content call here would silently go untracked.
+    response = gemini_pipe.generate_content_tracked(
+        client, gemini_pipe.GEMINI_MODEL,
         contents=[_TAG_ONLY_PROMPT.format(title=title, taxonomy=", ".join(taxonomy) or "(none yet)")],
     )
     raw = (response.text or "").strip()

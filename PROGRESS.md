@@ -2724,3 +2724,80 @@ regenerated (102 sections).
 3. **Create the monthly `vault_librarian` Task Scheduler entry** (WORKER_SETUP.md)
    — without it nothing re-syncs the vault, which is how +17 rows drifted.
 4. Run the Scout pick (`claude -p "$(cat SCOUT_PROMPT.md)"`) — queue is from Jul 27.
+
+---
+
+# Session 2026-08-03 — new key, new deprecation: gemini-2.5-flash 404s for new projects
+
+A fresh, deliberately non-billing-linked Gemini API key was created to restore genuine
+free-tier access after the prior session's billing-block finding. Live testing surfaced a
+second, unrelated failure mode immediately.
+
+## Root cause (confirmed live, not assumed)
+
+`gemini-2.5-flash` — the model pinned last session specifically to fix quota fragmentation
+— now returns on THIS project:
+
+> `404 NOT_FOUND: This model models/gemini-2.5-flash is no longer available to new users.`
+
+Google's `ListModels` API still lists it as available (that endpoint reports global model
+metadata, not per-project entitlement), so the only reliable check is an actual
+`generate_content` call on the real key. Tested live against this project:
+
+| Model | Result |
+|---|---|
+| `gemini-2.5-flash`, `gemini-2.5-flash-lite` | 404 — no longer available to new users |
+| `gemini-2.0-flash`, `gemini-2.0-flash-001` | 429 — free-tier quota `limit: 0` for this model |
+| `gemini-flash-latest`, `gemini-flash-lite-latest` (aliases) | ✅ works |
+| `gemini-3.1-flash-lite`, `gemini-3.5-flash-lite` | ✅ works |
+| `gemini-3.5-flash`, `gemini-3.6-flash`, `gemini-3-flash-preview` | ✅ works, incl. structured JSON output |
+
+**Configured now: `gemini-3.6-flash`** — the newest non-preview (GA) Flash id confirmed
+working on this key. **Pinned, not an alias** — same lesson as the prior incident.
+
+## Quota tracker: now tracks the RESOLVED model, not the requested string
+
+The SDK response exposes `response.model_version` — confirmed live that requesting the
+alias `gemini-flash-latest` returns a response naming `gemini-3.6-flash` as what actually
+served it, and a pinned request (`gemini-3.6-flash`) resolves to itself. This is the
+correct mechanism to prevent the PRIOR incident (alias fragmentation) from recurring even
+if a future default ever reverts to an alias under time pressure: recording now happens
+AFTER the call, keyed on `response.model_version`, falling back to the requested model
+only when no response came back (a failed call, recorded conservatively under the
+attempted model).
+
+This required restructuring WHEN recording happens — it used to live inside
+`_enforce_gemini_call_spacing` (pre-call, so it never knew the resolved model). New
+`app/gemini_pipe.generate_content_tracked(client, model, contents, config=None)` is the
+single choke point: spaces, calls, records under the resolved version on success or the
+attempted model on failure, then re-raises. All 6 internal `gemini_pipe.py` call sites now
+route through it.
+
+**Found and fixed while wiring this up:** 5 OTHER call sites across the codebase build
+their own `genai.Client` and called `generate_content` directly, bypassing this entirely —
+`backfill_named_entities.py`, `backfill_plain_summary.py`, `backfill_suggested_action.py`,
+`notion_deep_clean.py`, and `app/digest.py`'s AI prose summary. Every one now calls the
+public `gemini_pipe.generate_content_tracked` instead. Without this, the quota tracker
+built last session would have kept silently missing the majority of real usage — exactly
+the kind of gap that let the billing incident hide.
+
+**A real test-isolation bug caught and fixed in the same pass:** a pre-existing test
+(`test_call_gemini_text_only_enforces_gemini_spacing`) assumed mocking
+`_enforce_gemini_call_spacing` alone suppressed recording — true before this session's
+restructure, not after, since the two are now separate steps. Running the full suite after
+the refactor left a real entry in the developer's own `gemini_quota.json` on disk. Fixed
+with an autouse fixture in `tests/conftest.py` (matching the project's existing
+defense-in-depth pattern for blocking real Gemini/Notion clients and HTTP calls), which
+redirects the quota file's path — not the function — so `test_gemini_quota.py`'s own
+direct tests of `record_call`/`calls_today`/`remaining_today` keep exercising real
+behavior against their own explicit `tmp_path`.
+
+## Verified live end-to-end
+
+Ran `daily_runner.py` for real: 6 named_entities rows written with genuine extracted
+entities, 5 topic-less rows fixed for free, one transient 503, then a clean 429 —
+`generate_content_free_tier_requests` exceeded, a REAL rate limit, not the billing 404/429
+from before. `gemini_quota.json` correctly shows 8 calls today all attributed to
+`gemini-3.6-flash`. The pipeline is making real progress again.
+
+**894 passed, 1 xfailed.**

@@ -90,10 +90,13 @@ def summarize_plainly(title: str, topics: list[str]) -> str:
     from app import gemini_pipe
 
     client = genai.Client(api_key=gemini_pipe.GEMINI_API_KEY)
-    gemini_pipe._enforce_gemini_call_spacing()
     try:
-        response = client.models.generate_content(
-            model=gemini_pipe.GEMINI_MODEL,
+        # gemini_pipe.generate_content_tracked, not client.models.generate_content
+        # directly: it records quota under the RESOLVED model version Google
+        # actually served, not the requested string (see its docstring). A raw
+        # generate_content call here would silently go untracked.
+        response = gemini_pipe.generate_content_tracked(
+            client, gemini_pipe.GEMINI_MODEL,
             contents=[_PROMPT.format(title=title, topics=", ".join(topics) or "(none)")],
         )
     except Exception as exc:  # noqa: BLE001

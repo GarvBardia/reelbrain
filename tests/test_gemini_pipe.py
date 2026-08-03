@@ -1002,3 +1002,113 @@ def test_ffprobe_streams_never_raises_when_ffprobe_missing(monkeypatch):
     monkeypatch.setattr(gemini_pipe.subprocess, "run", _boom)
     out = gemini_pipe._ffprobe_streams("/tmp/x.mp4")
     assert "ffprobe unavailable" in out
+
+
+# --- resolved-model quota tracking (2026-08-03 incident #2) ------------------------
+
+class _FakeResponseWithVersion:
+    """Mimics the real SDK: text() plus a model_version the SDK actually served,
+    which can differ from the requested model when the requested id is an alias."""
+    def __init__(self, text, model_version):
+        self.text = text
+        self.model_version = model_version
+        self.candidates = [_FakeCandidate(chunks=[])]
+
+
+def test_generate_content_tracked_records_the_resolved_model_not_the_alias(monkeypatch):
+    """The whole point: request an alias, get back a response naming the REAL
+    model Google served, and the quota ledger must reflect the real one."""
+    from app import gemini_quota
+
+    recorded = []
+    monkeypatch.setattr(gemini_quota, "record_call", lambda model, **k: recorded.append(model))
+    monkeypatch.setattr(gemini_pipe, "_enforce_gemini_call_spacing", lambda: None)
+
+    class _FakeModels:
+        def generate_content(self, **kwargs):
+            return _FakeResponseWithVersion("ok", model_version="gemini-3.6-flash")
+
+    class _FakeClient:
+        models = _FakeModels()
+
+    gemini_pipe.generate_content_tracked(_FakeClient(), "gemini-flash-latest", contents=["hi"])
+    assert recorded == ["gemini-3.6-flash"]
+
+
+def test_generate_content_tracked_falls_back_to_requested_model_without_version(monkeypatch):
+    """A pinned model (or a fake without model_version) has nothing to resolve
+    from — record under the requested model string."""
+    from app import gemini_quota
+
+    recorded = []
+    monkeypatch.setattr(gemini_quota, "record_call", lambda model, **k: recorded.append(model))
+    monkeypatch.setattr(gemini_pipe, "_enforce_gemini_call_spacing", lambda: None)
+
+    class _FakeModels:
+        def generate_content(self, **kwargs):
+            return _FakeGeminiResponse("ok", chunks=[])  # no model_version attr
+
+    class _FakeClient:
+        models = _FakeModels()
+
+    gemini_pipe.generate_content_tracked(_FakeClient(), "gemini-3.6-flash", contents=["hi"])
+    assert recorded == ["gemini-3.6-flash"]
+
+
+def test_generate_content_tracked_records_attempted_model_on_failure(monkeypatch):
+    """A failed call has no response to resolve a version from — still record
+    under the ATTEMPTED model (conservative: count a rejected call), then
+    re-raise so the caller's own error handling still runs."""
+    from app import gemini_quota
+
+    recorded = []
+    monkeypatch.setattr(gemini_quota, "record_call", lambda model, **k: recorded.append(model))
+    monkeypatch.setattr(gemini_pipe, "_enforce_gemini_call_spacing", lambda: None)
+
+    class _FakeModels:
+        def generate_content(self, **kwargs):
+            raise RuntimeError("429 RESOURCE_EXHAUSTED")
+
+    class _FakeClient:
+        models = _FakeModels()
+
+    raised = None
+    try:
+        gemini_pipe.generate_content_tracked(_FakeClient(), "gemini-3.6-flash", contents=["hi"])
+    except RuntimeError as exc:
+        raised = exc
+    assert raised is not None
+    assert recorded == ["gemini-3.6-flash"]
+
+
+def test_generate_content_tracked_enforces_spacing_before_the_call():
+    # conftest.py's autouse _never_write_real_gemini_quota fixture already
+    # redirects the quota file for this test — no explicit mock needed here.
+    calls = []
+
+    class _FakeModels:
+        def generate_content(self, **kwargs):
+            calls.append("called")
+            return _FakeGeminiResponse("ok", chunks=[])
+
+    class _FakeClient:
+        models = _FakeModels()
+
+    import app.gemini_pipe as gp
+    real_spacing = gp._enforce_gemini_call_spacing
+    order = []
+    gp._enforce_gemini_call_spacing = lambda: order.append("spaced")
+    try:
+        gp.generate_content_tracked(_FakeClient(), "gemini-3.6-flash", contents=["hi"])
+    finally:
+        gp._enforce_gemini_call_spacing = real_spacing
+    assert order == ["spaced"]
+    assert calls == ["called"]
+
+
+def test_configured_model_default_is_a_pinned_version_not_an_alias():
+    """REGRESSION guard: GEMINI_MODEL must never default back to a rolling
+    alias (gemini-flash-latest, gemini-flash, etc.) -- that is incident #1."""
+    assert "latest" not in gemini_pipe.GEMINI_MODEL
+    # A concrete version string names a specific numbered release.
+    assert any(c.isdigit() for c in gemini_pipe.GEMINI_MODEL)
