@@ -88,6 +88,19 @@ _GEMINI_SEMAPHORE = threading.Semaphore(2)
 MIN_GEMINI_CALL_SPACING_SECONDS = float(os.environ.get("MIN_GEMINI_CALL_SPACING_SECONDS", "4"))
 _LAST_GEMINI_CALL_STATE_KEY = "last_gemini_call_at"
 
+# INCIDENT (2026-08-08): gemini-3.6-flash is a reasoning model — it spends part
+# of its output budget on invisible "thinking" tokens before the visible answer
+# (confirmed live: a carousel extraction hit finish_reason=STOP with only 425
+# candidate tokens against 1307 thinking tokens, silently truncating the JSON
+# mid-string). gemini-2.5-flash never needed this because it didn't think by
+# default. Without an explicit cap the SDK's default max_output_tokens can be
+# too small for a schema-heavy Extraction response once thinking eats into the
+# same budget. Raising the cap costs nothing when unused — output tokens are
+# billed by what's actually generated, not by the ceiling — so one generous
+# constant, injected into every call via generate_content_tracked below, is
+# pure insurance with no downside.
+GEMINI_MAX_OUTPUT_TOKENS = int(os.environ.get("GEMINI_MAX_OUTPUT_TOKENS", "8192"))
+
 
 # The SINGLE definition of what a Gemini failure means. These were previously
 # copy-pasted into 7 different modules, which is exactly why the billing 429 went
@@ -201,14 +214,24 @@ def generate_content_tracked(client, model: str, contents, config=None):
 
     On failure there is no response to resolve from, so the call is recorded
     under the ATTEMPTED model — conservative, consistent with the prior choice
-    to count a rejected call rather than undercount quota usage."""
+    to count a rejected call rather than undercount quota usage.
+
+    Also guarantees max_output_tokens is set (see GEMINI_MAX_OUTPUT_TOKENS
+    above) — every call site gets the truncation safety net through this one
+    choke point rather than needing it set at each of the 10+ call sites
+    individually, and any config a caller DOES specify (response_schema,
+    tools, response_mime_type, ...) is preserved untouched."""
+    from google.genai import types
+
+    if config is None:
+        config = types.GenerateContentConfig(max_output_tokens=GEMINI_MAX_OUTPUT_TOKENS)
+    elif getattr(config, "max_output_tokens", None) is None:
+        config.max_output_tokens = GEMINI_MAX_OUTPUT_TOKENS
+
     _enforce_gemini_call_spacing()
     try:
         with _GEMINI_SEMAPHORE:
-            kwargs = {"model": model, "contents": contents}
-            if config is not None:
-                kwargs["config"] = config
-            response = client.models.generate_content(**kwargs)
+            response = client.models.generate_content(model=model, contents=contents, config=config)
     except Exception:
         _record_gemini_call_attempt(model)
         raise

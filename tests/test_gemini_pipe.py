@@ -1112,3 +1112,64 @@ def test_configured_model_default_is_a_pinned_version_not_an_alias():
     assert "latest" not in gemini_pipe.GEMINI_MODEL
     # A concrete version string names a specific numbered release.
     assert any(c.isdigit() for c in gemini_pipe.GEMINI_MODEL)
+
+
+# --- max_output_tokens safety net (2026-08-08 truncation incident) -----------------
+
+def test_generate_content_tracked_injects_max_output_tokens_when_config_is_none(monkeypatch):
+    from google.genai import types
+
+    captured = {}
+
+    class _FakeModels:
+        def generate_content(self, **kwargs):
+            captured.update(kwargs)
+            return _FakeGeminiResponse("ok", chunks=[])
+
+    class _FakeClient:
+        models = _FakeModels()
+
+    monkeypatch.setattr(gemini_pipe, "_enforce_gemini_call_spacing", lambda: None)
+    gemini_pipe.generate_content_tracked(_FakeClient(), "gemini-3.6-flash", contents=["hi"])
+    assert captured["config"].max_output_tokens == gemini_pipe.GEMINI_MAX_OUTPUT_TOKENS
+
+
+def test_generate_content_tracked_injects_into_an_existing_config_without_it(monkeypatch):
+    """A caller's response_schema/tools/response_mime_type must survive untouched
+    -- only the missing max_output_tokens gets filled in."""
+    from google.genai import types
+
+    captured = {}
+
+    class _FakeModels:
+        def generate_content(self, **kwargs):
+            captured.update(kwargs)
+            return _FakeGeminiResponse("ok", chunks=[])
+
+    class _FakeClient:
+        models = _FakeModels()
+
+    monkeypatch.setattr(gemini_pipe, "_enforce_gemini_call_spacing", lambda: None)
+    cfg = types.GenerateContentConfig(response_mime_type="application/json")
+    gemini_pipe.generate_content_tracked(_FakeClient(), "gemini-3.6-flash", contents=["hi"], config=cfg)
+    assert captured["config"].max_output_tokens == gemini_pipe.GEMINI_MAX_OUTPUT_TOKENS
+    assert captured["config"].response_mime_type == "application/json"
+
+
+def test_generate_content_tracked_respects_a_callers_explicit_max_output_tokens(monkeypatch):
+    from google.genai import types
+
+    captured = {}
+
+    class _FakeModels:
+        def generate_content(self, **kwargs):
+            captured.update(kwargs)
+            return _FakeGeminiResponse("ok", chunks=[])
+
+    class _FakeClient:
+        models = _FakeModels()
+
+    monkeypatch.setattr(gemini_pipe, "_enforce_gemini_call_spacing", lambda: None)
+    cfg = types.GenerateContentConfig(max_output_tokens=256)
+    gemini_pipe.generate_content_tracked(_FakeClient(), "gemini-3.6-flash", contents=["hi"], config=cfg)
+    assert captured["config"].max_output_tokens == 256
