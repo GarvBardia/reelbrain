@@ -2801,3 +2801,74 @@ from before. `gemini_quota.json` correctly shows 8 calls today all attributed to
 `gemini-3.6-flash`. The pipeline is making real progress again.
 
 **894 passed, 1 xfailed.**
+
+---
+
+# Session 2026-08-06 — five-day catch-up: real model bugs found, real backlog measured
+
+Six phases on `gemini-3.6-flash` after ~5 days offline (billing, then deprecation, both
+fixed prior session). Final suite: **910 passed, 1 xfailed**.
+
+## Phase 1 — baseline
+Notion grew **191 → 209** during the gap (18 new captures, all synced correctly — no
+drift). Backlogs: named_entities 127, recover_placeholders 65, suggested_action 129,
+plain_summary 142, ingest_resources 28 (~621 calls to fully drain). Re-classified the 38
+`uncategorized` rows: 31 already correctly bucketed as B/C (queued), only 2 new stragglers
+needed the A-bucket fix — the Phase 3 structural fix from last session held up correctly
+against 5 days of new, unattended captures.
+
+## Phase 2 — carousel slide-reading: found a real model regression (`379b82f`)
+`gemini-3.6-flash` is a reasoning model — it burns output-token budget on invisible
+"thinking" before the visible answer. A real carousel extraction hit
+`finish_reason=STOP` with only 425 candidate tokens against 1307 thinking tokens,
+silently truncating the JSON mid-string. `gemini-2.5-flash` never needed this because it
+didn't think by default, and no call site anywhere had ever set `max_output_tokens`.
+
+Fixed centrally in the new `generate_content_tracked` choke point (`GEMINI_MAX_OUTPUT_TOKENS`,
+initially 8192) — free insurance, since output tokens are billed by what's generated, not
+the ceiling. Verified on 2 real carousel rows: both now produce genuinely specific
+extractions (real step-by-step frameworks, creator handles as named_entities).
+
+## Phase 3 — video extraction: same bug, bigger blast radius (`6595cb4`)
+Full video's heavier schema (verbatim transcript + 4 more list fields) still truncated at
+8192 on a real row — raised to **16384**. Confirmed via an isolated diagnostic call that
+the MODEL's output quality is genuinely good (named `Papers with Code`, `DeepEval`,
+`ZenML`, `GitHub` — specific, not generic) — the defect was entirely the missing cap, not
+model judgment.
+
+**Stopped honestly on a real 429** at 17 calls (below the local tracker's 20/day
+estimate — the actual account cap for the day). Only 1 of 3 planned video tests got full
+live confirmation; verified zero partial/bad writes were left on any of the 3 candidate
+rows. Per instruction, did not force past the limit.
+
+## Phase 4 — Notion + Obsidian cleanup (no code changes)
+0 archive candidates (legitimate — the topic-guarantee means no row has genuinely empty
+topics to catch anymore). 0 rows eligible for the free topic-upgrade (today's successful
+extractions went straight to real topics, didn't touch marker-tagged rows). Re-sync:
+209==209, zero dangling links. Drift: same 4 findings, still accurate.
+
+## Phase 5 — `AWAITING_DM.md` (`d5add84`)
+New `scripts/awaiting_dm_report.py`: free, regenerable, gitignored worklist of every
+Awaiting-DM row, oldest first. Live: **59 rows waiting**, oldest from 2026-04-12.
+
+## Phase 6 — final verification + a second stale-state bug found and fixed
+- **Accuracy unchanged:** top-1 42% / top-3 58%. 24/209 rows now carry entities (up from
+  10/191), but only 1/92 fixture pool candidates has live entities — lever still inert.
+  Auto-attach stays OFF.
+- Scout input regenerated: 104 sections (up from 102).
+- **health_watchdog found ANOTHER real bug:** `gemini_billing` reported "credits DEPLETED"
+  using a marker from the PREVIOUS session's old, now-abandoned API key — `note_gemini_failure`
+  had no counterpart that ever cleared it, so a resolved incident kept reporting as current
+  forever. Added `clear_gemini_billing_error()`, called on every successful
+  `generate_content_tracked` call (a success is definitive proof the account isn't
+  billing-blocked right now). Cleared the stale marker directly. **All 8 watchdog checks
+  now green.**
+
+**910 passed, 1 xfailed.**
+
+## Still needs manual action
+1. Continue the recovery/backfill work tomorrow once quota resets — 2 of 3 Phase 3 test
+   rows (`DbM7N7kPo3V`, `DbJc-RQNN1C`) are untested and ready to pick up.
+2. Review `AWAITING_DM.md` — 59 rows waiting, oldest nearly 4 months.
+3. Run the Scout pick (`claude -p "$(cat SCOUT_PROMPT.md)"`).
+4. Monthly `vault_librarian` Task Scheduler entry still not created (carried over).

@@ -149,6 +149,26 @@ def note_gemini_failure(exc: BaseException | str) -> None:
         pass
 
 
+def clear_gemini_billing_error() -> None:
+    """Erase the durable billing marker on a SUCCESSFUL call.
+
+    INCIDENT (2026-08-06): note_gemini_failure has no counterpart that ever
+    clears it. After a billing incident was resolved by swapping to a fresh
+    API key, health_watchdog kept reporting "credits DEPLETED" days later —
+    the marker was from the OLD key's failure and nothing had ever told it the
+    new key works. A successful generate_content call is definitive proof the
+    account is not billing-blocked RIGHT NOW, which is the only claim this
+    marker makes, so success is exactly the right (and only reliable) signal
+    to retire it."""
+    try:
+        from app import store
+
+        if store.get_state(_GEMINI_LAST_ERROR_STATE_KEY):
+            store.set_state(_GEMINI_LAST_ERROR_STATE_KEY, "")
+    except Exception:  # noqa: BLE001 - diagnostics must never break the pipeline
+        pass
+
+
 class _BillingWatcher(logging.Handler):
     """Persists a durable marker when Gemini reports depleted PREPAY CREDITS.
 
@@ -244,6 +264,7 @@ def generate_content_tracked(client, model: str, contents, config=None):
         _record_gemini_call_attempt(model)
         raise
     _record_gemini_call_attempt(getattr(response, "model_version", None) or model)
+    clear_gemini_billing_error()
     return response
 
 

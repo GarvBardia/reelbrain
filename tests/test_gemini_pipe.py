@@ -1173,3 +1173,70 @@ def test_generate_content_tracked_respects_a_callers_explicit_max_output_tokens(
     cfg = types.GenerateContentConfig(max_output_tokens=256)
     gemini_pipe.generate_content_tracked(_FakeClient(), "gemini-3.6-flash", contents=["hi"], config=cfg)
     assert captured["config"].max_output_tokens == 256
+
+
+# --- clearing the billing marker on success (2026-08-06 stale-marker incident) -----
+
+def test_clear_gemini_billing_error_erases_a_set_marker(monkeypatch):
+    from app import store
+
+    saved = {"gemini_last_error": "429 ... prepayment credits are depleted ..."}
+    monkeypatch.setattr(store, "get_state", lambda k: saved.get(k))
+    monkeypatch.setattr(store, "set_state", lambda k, v: saved.__setitem__(k, v))
+
+    gemini_pipe.clear_gemini_billing_error()
+    assert saved["gemini_last_error"] == ""
+
+
+def test_clear_gemini_billing_error_is_a_noop_when_nothing_was_set(monkeypatch):
+    from app import store
+
+    calls = []
+    monkeypatch.setattr(store, "get_state", lambda k: None)
+    monkeypatch.setattr(store, "set_state", lambda k, v: calls.append((k, v)))
+
+    gemini_pipe.clear_gemini_billing_error()
+    assert calls == []  # no pointless write when there was nothing to clear
+
+
+def test_generate_content_tracked_clears_the_billing_marker_on_success(monkeypatch):
+    from app import store
+
+    saved = {"gemini_last_error": "429 ... prepayment credits are depleted ..."}
+    monkeypatch.setattr(store, "get_state", lambda k: saved.get(k))
+    monkeypatch.setattr(store, "set_state", lambda k, v: saved.__setitem__(k, v))
+    monkeypatch.setattr(gemini_pipe, "_enforce_gemini_call_spacing", lambda: None)
+
+    class _FakeModels:
+        def generate_content(self, **kwargs):
+            return _FakeGeminiResponse("ok", chunks=[])
+
+    class _FakeClient:
+        models = _FakeModels()
+
+    gemini_pipe.generate_content_tracked(_FakeClient(), "gemini-3.6-flash", contents=["hi"])
+    assert saved["gemini_last_error"] == ""
+
+
+def test_generate_content_tracked_does_not_touch_the_marker_on_failure(monkeypatch):
+    """A FAILED call proves nothing about billing health either way -- only a
+    genuine success should retire a stale marker."""
+    from app import store
+
+    saved = {"gemini_last_error": "429 ... prepayment credits are depleted ..."}
+    monkeypatch.setattr(store, "get_state", lambda k: saved.get(k))
+    monkeypatch.setattr(store, "set_state", lambda k, v: saved.__setitem__(k, v))
+    monkeypatch.setattr(gemini_pipe, "_enforce_gemini_call_spacing", lambda: None)
+
+    class _FakeModels:
+        def generate_content(self, **kwargs):
+            raise RuntimeError("503 UNAVAILABLE")
+
+    class _FakeClient:
+        models = _FakeModels()
+
+    try:
+        gemini_pipe.generate_content_tracked(_FakeClient(), "gemini-3.6-flash", contents=["hi"])
+    except RuntimeError:
+        pass
+    assert "depleted" in saved["gemini_last_error"]
