@@ -99,7 +99,15 @@ _LAST_GEMINI_CALL_STATE_KEY = "last_gemini_call_at"
 # billed by what's actually generated, not by the ceiling — so one generous
 # constant, injected into every call via generate_content_tracked below, is
 # pure insurance with no downside.
-GEMINI_MAX_OUTPUT_TOKENS = int(os.environ.get("GEMINI_MAX_OUTPUT_TOKENS", "8192"))
+#
+# Raised from an initial 8192 to 16384 the same day: full VIDEO extraction
+# (verbatim transcript + supporting_points + steps_or_framework + quotable_lines
+# + resources_mentioned, all in one schema) is a heavier payload than the
+# carousel case above, and thinking-token consumption is variable enough
+# (observed 1307-1323 on a lighter carousel prompt) that 8192 still truncated
+# on a real video row — confirmed live via two straight JSONDecodeError retries
+# on scripts/recover_placeholders.py's real extraction path.
+GEMINI_MAX_OUTPUT_TOKENS = int(os.environ.get("GEMINI_MAX_OUTPUT_TOKENS", "16384"))
 
 
 # The SINGLE definition of what a Gemini failure means. These were previously
