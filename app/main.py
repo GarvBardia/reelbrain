@@ -28,6 +28,7 @@ from app import (
     notion_writer,
     resource_lookup,
     store,
+    topic_guarantee,
 )
 from app.models import (
     AttachConfirmRequest,
@@ -264,8 +265,16 @@ def run_pipeline(
         else:
             extraction = gemini_pipe.run_extraction(reel, note, taxonomy)
         related_page_ids = _apply_embeddings_and_related(shortcode, extraction)
-        if extraction.topic_tags:
-            store.set_tags(shortcode, extraction.topic_tags)
+        # AUDIT FINDING (2026-08-08): this used to store the RAW extraction.topic_tags,
+        # which can be empty — while Notion always gets topic_guarantee.ensure_topics'
+        # non-empty fallback (real entity-derived tags, or the honest marker). The two
+        # mirrors would then disagree on a topic-less-extraction row. That gap matters
+        # because store._local_attach_candidates (the /attach fallback used when the
+        # Notion query itself fails) reads topics from THIS table — so exactly during
+        # the outage that fallback exists for, topic-based matching signal could go
+        # silently missing for these rows. Use the same guaranteed value Notion gets,
+        # so the local mirror can never disagree with the source of truth.
+        store.set_tags(shortcode, topic_guarantee.ensure_topics(extraction))
         store.update_save(
             shortcode,
             transcript=extraction.transcript,

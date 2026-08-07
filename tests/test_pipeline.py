@@ -104,6 +104,35 @@ def test_pipeline_tutorial_reel_creates_inbox_page(monkeypatch, tutorial_reel, t
     assert row["notion_page_id"]
 
 
+def test_pipeline_local_tags_mirror_matches_notions_guaranteed_topics(monkeypatch):
+    """AUDIT FINDING (2026-08-08): store.set_tags used to receive the RAW
+    extraction.topic_tags, which can be empty, while Notion always gets
+    topic_guarantee.ensure_topics' non-empty fallback -- the two mirrors could
+    disagree on a topic-less-extraction row. This matters because
+    store._local_attach_candidates (the /attach fallback used when the Notion
+    query itself fails) reads topics from this SAME local table, so exactly
+    during the outage that fallback exists for, topic-matching signal could go
+    silently missing. The local mirror must always match what Notion got."""
+    from app.models import ReelData
+
+    reel = ReelData(
+        shortcode="EMPTYTAGS1", permalink="https://www.instagram.com/reel/EMPTYTAGS1/",
+        video_path="/tmp/EMPTYTAGS1.mp4", caption="no gate here",
+    )
+    # No topic_tags and no named_entities -> ensure_topics can only fall back
+    # to the honest 'uncategorized' marker, never an empty list.
+    extraction = Extraction(main_point="x", topic_tags=[], named_entities=[], value_score=3)
+    _install_fake_notion(monkeypatch)
+    monkeypatch.setattr("app.main.fetcher.fetch_reel", lambda shortcode, permalink: reel)
+    monkeypatch.setattr("app.main.gemini_pipe.run_extraction", lambda r, note, taxonomy: extraction)
+
+    store.insert_processing(reel.shortcode, reel.permalink)
+    run_pipeline(reel.shortcode, reel.permalink, note=None)
+
+    local_tags = store.get_tags_for_shortcodes([reel.shortcode]).get(reel.shortcode, [])
+    assert local_tags == ["uncategorized"]  # never empty, matches what Notion received
+
+
 def test_pipeline_gated_reel_sets_awaiting_dm(monkeypatch, gated_reel, gated_extraction):
     fake = _install_fake_notion(monkeypatch)
     monkeypatch.setattr("app.main.fetcher.fetch_reel", lambda shortcode, permalink: gated_reel)
