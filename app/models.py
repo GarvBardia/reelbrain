@@ -195,6 +195,16 @@ class ResourceExtraction(BaseModel):
     suggested_action: str = ""
 
 
+class TopicRetag(BaseModel):
+    """Output of the taxonomy-repair re-tag pass (PROGRESS.md, 2026-08-09
+    taxonomy-collapse incident): re-picks topic_tags for an already-extracted
+    row from its stored summary, against the current canonical taxonomy. Does
+    not re-derive anything else about the row -- narrower on purpose than
+    Extraction, since this pass never re-fetches or re-reads the source reel."""
+
+    topic_tags: list[str] = Field(..., min_length=1, max_length=6)
+
+
 def degraded_extraction(caption: Optional[str]) -> Extraction:
     """BUILD_SPEC 1.4: fallback when Gemini extraction fails twice."""
     main_point = (caption or "")[:200] or "No caption or transcript available."

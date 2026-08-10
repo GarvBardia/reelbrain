@@ -391,6 +391,96 @@ def test_resource_extraction_retries_once_on_validation_failure_then_succeeds(mo
     assert result.summary == "Real summary."
 
 
+# --- run_topic_retag (2026-08-09 taxonomy-collapse repair pass, scripts/retag_singleton_rows.py) --
+
+def test_topic_retag_produces_canonicalized_tags(monkeypatch):
+    from app.models import TopicRetag
+
+    monkeypatch.setattr(
+        gemini_pipe, "_call_gemini_retag",
+        lambda prompt: TopicRetag(topic_tags=["startups", "developer-tools"]).model_dump_json(),
+    )
+
+    result = gemini_pipe.run_topic_retag(
+        "A guide to bootstrapping a SaaS.", [], [], "insight", taxonomy=["startups"],
+    )
+
+    assert result == ["startups", "developer-tools"]
+
+
+def test_topic_retag_applies_merges_and_plural_canonicalization(monkeypatch):
+    """The model can still answer with a drifted spelling (e.g. "claude" instead
+    of "claude-ai", or "startup" instead of "startups") -- this pass IS the
+    taxonomy repair, so its own output must not reintroduce that drift."""
+    from app.models import TopicRetag
+
+    monkeypatch.setattr(
+        gemini_pipe, "_call_gemini_retag",
+        lambda prompt: TopicRetag(topic_tags=["claude", "startup"]).model_dump_json(),
+    )
+
+    result = gemini_pipe.run_topic_retag("x", [], [], "insight", taxonomy=[])
+
+    assert result == ["claude-ai", "startups"]
+
+
+def test_topic_retag_returns_none_when_gemini_call_fails_non_quota(monkeypatch):
+    def _boom(prompt):
+        raise RuntimeError("gemini 500")
+
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_retag", _boom)
+
+    result = gemini_pipe.run_topic_retag("x", [], [], "insight", taxonomy=[])
+    assert result is None
+
+
+def test_topic_retag_reraises_on_quota_error_instead_of_returning_none(monkeypatch):
+    """A caller batching this over many rows needs to distinguish 'this one row
+    failed' from 'the account is out of quota, stop the whole batch' -- see
+    scripts/retag_singleton_rows.py's QuotaExhausted handling."""
+    import pytest
+
+    def _boom(prompt):
+        raise RuntimeError("429 RESOURCE_EXHAUSTED")
+
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_retag", _boom)
+
+    with pytest.raises(RuntimeError, match="429"):
+        gemini_pipe.run_topic_retag("x", [], [], "insight", taxonomy=[])
+
+
+def test_topic_retag_retries_once_on_validation_failure_then_succeeds(monkeypatch):
+    from app.models import TopicRetag
+
+    good = TopicRetag(topic_tags=["fitness"])
+    calls = []
+
+    def _flaky(prompt):
+        calls.append(prompt)
+        if len(calls) == 1:
+            return "{not valid json"
+        return good.model_dump_json()
+
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_retag", _flaky)
+
+    result = gemini_pipe.run_topic_retag("x", [], [], "insight", taxonomy=[])
+    assert len(calls) == 2
+    assert result == ["fitness"]
+
+
+def test_topic_retag_prompt_carries_content_and_taxonomy():
+    prompt = gemini_pipe._build_retag_prompt(
+        "Three steps to fix sleep.", ["Point one", "Point two"],
+        ["Andrej Karpathy"], "tutorial", ["sleep", "productivity-hacks"],
+    )
+    assert "Three steps to fix sleep." in prompt
+    assert "Point one; Point two" in prompt
+    assert "Andrej Karpathy" in prompt
+    assert "tutorial" in prompt
+    assert "sleep, productivity-hacks" in prompt
+    assert "zoey" in prompt and "jarvis" in prompt  # bad-example guardrail present
+
+
 def test_video_extraction_path_completely_unaffected_by_caption_only_addition(monkeypatch):
     """Regression guard: a normal video reel must still go through _call_gemini
     (audio path), never _call_gemini_text_only — this is purely an addition

@@ -2945,11 +2945,64 @@ the old local-SQLite-reading behavior.
 
 **928 passed, 1 xfailed** (up from 910 last session).
 
-## Still ahead (Phase 3 + 4, not started this session)
-- Re-tag the 131 rows with singleton/hallucinated tag combinations against the now-fixed
-  canonical taxonomy (text-only, from stored `main_point`/`named_entities`, no re-fetch;
-  resumable; quota-permitting).
-- Regenerate the Obsidian structure and report distinct-topic count, top-15 tags with
-  counts, and remaining marker-only row count. Success target (user-stated): the top 15
-  tags cover most of the corpus, tag count drops toward ~40-60 canonical tags with real
-  clustering, not ~191 singletons.
+## Phase 3 — repair existing rows (started, genuinely partial — stopped honestly on quota)
+
+Free step first, zero Gemini cost: re-ran `scripts/apply_taxonomy.py --apply` live.
+Confirmed the Phase 1 bonus finding (the un-merged `claude` drift-back) was real and not
+isolated — **8 rows** needed a merge fix (`claude`→`claude-ai`, `claude-code`→`claude-ai`
+etc.), priority-invariance gate passed clean, 2 orphaned auto-generated topic notes
+deleted, Obsidian re-synced (212 notes, 195 topics). Snapshot written for rollback
+(`taxonomy_snapshot_20260810T093455Z.json`, gitignored).
+
+Built `scripts/retag_singleton_rows.py` for the actual singleton repair: selects every
+row whose (merge+plural-canonicalized) topic combination is carried by exactly one row
+in the corpus, re-tags it via a new text-only Gemini call
+(`gemini_pipe.run_topic_retag`, new `prompts/retag.md`, new `TopicRetag` schema) using
+only content already stored in Notion (title/main_point, Supporting-points body block,
+named_entities, content type) — no re-fetch. Output is canonicalized
+(`apply_merges` + `canonicalize_plurals`) before being written, same as every other
+write path. Resumable via a gitignored `*_progress.json` file (matches
+`backfill_named_entities.py`'s established pattern exactly, including re-raising a
+quota error distinctly from `run_topic_retag` so a batch can stop cleanly instead of
+burning through every remaining row on rapid-fire 429s).
+
+**Live dry-run against the current 212-row corpus: 116 rows have a singleton topic
+combination** (down from the merge-only pass; close to the user's ~131 estimate — the
+gap is mostly the 8 rows the free merge step above already fixed for free, plus 3 rows
+of corpus growth since the 209-row snapshot the user's report was based on).
+
+Ran a small **live verification batch of 5 rows** to confirm the whole pipeline end to
+end before committing further quota: all 5 reused real canonical taxonomy tags, zero
+new inventions —
+```
+Dbk7wafDbgx: [developer-tools, ai-agents, graph-engineering, software-architecture]
+          -> [ai-agents, prompt-engineering, ai-workflows, developer-tools, generative-ai]
+Dbil5KhDJw9: [google-gemini, exam-prep, prompt-engineering, llm-workflows, study-hacks]
+          -> [ai-tools, prompt-engineering, ai-prompts, ai-workflows, productivity-hacks, generative-ai]
+DbgMVQLDS8e: [claude-ai, reels, shorts] -> [claude-ai, ai-tools, comment-gate, lead-generation, ai-video]
+DbgwmFcNw2_: [claude-ai, shopify] -> [claude-ai, ai-tools, web-development, ai-marketing]
+DbcSTKNthGN: [impeccable, claude-ai, impeccable-helps-claude-code-catch-ai-sl]
+          -> [web-design, web-development, generative-ai, ai-tools]
+```
+
+**Stopped there, honestly, on quota** — same discipline as the 2026-08-06 session.
+`gemini_quota.json` shows the account's real daily cap is close to 17 calls/day (that's
+exactly where the 2026-08-06 session hit its 429); today was already at 9 calls from
+Phase 1's live diagnostic testing before this batch, and is now at 14. Continuing today
+risked a mid-batch 429 with only ~3 calls of margin. **111 of 116 singleton rows remain
+unrepaired** — the script and progress file are resumable, so the next session (or a
+quota-appropriate window today) picks up exactly where this left off via
+`python scripts/retag_singleton_rows.py` (no `--limit`, runs until done or quota-stopped).
+
+**944 passed, 1 xfailed.**
+
+## Still ahead (Phase 3 completion + Phase 4)
+- Resume `scripts/retag_singleton_rows.py` across future sessions/quota windows until
+  all 111 remaining singleton rows are repaired (~111-222 more Gemini calls at ~17/day
+  free tier — several more days at this rate, faster if paid tier is enabled).
+- Once Phase 3 is materially further along: regenerate the Obsidian structure and
+  report distinct-topic count, top-15 tags with counts, and remaining marker-only row
+  count. Success target (user-stated): the top 15 tags cover most of the corpus, tag
+  count drops toward ~40-60 canonical tags with real clustering, not ~191 singletons.
+  Not meaningful to run yet at 5/116 rows repaired — would just report the same
+  collapsed distribution the diagnosis already established.
