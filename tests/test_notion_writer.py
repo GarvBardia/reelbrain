@@ -3,7 +3,11 @@
 client here (rather than reusing tests/test_pipeline.py's FakeClient) actually
 models the parent-page -> child-page relationship, since FakeClient's block
 listing always returns empty and can't represent "the page already exists"."""
+import pytest
+
 from app import notion_writer
+from tests.test_digest import _DigestDS, _digest_page
+from tests.test_pipeline import FakeClient
 
 
 class _FakeChildPageClient:
@@ -149,3 +153,156 @@ def test_upsert_named_page_caps_children_at_100(monkeypatch):
     notion_writer.upsert_named_page("PARENT", "Some Digest", children)
 
     assert len(client.created_calls[0]["children"]) == 100
+
+
+# --- get_live_taxonomy: the 2026-08-09 taxonomy-collapse incident fix ---
+# store.get_taxonomy used to read the local `tags` table (wiped on every
+# redeploy, 4 rows against 212 real Notion rows) -- every extraction call's
+# candidate list was silently near-empty, so the model had nothing real to
+# converge toward. This is the Notion-backed replacement.
+
+@pytest.fixture(autouse=True)
+def _reset_taxonomy_cache():
+    """The cache is module-level and TTL-based, so a prior test's fetch would
+    otherwise leak into the next test's assertions."""
+    notion_writer._TAXONOMY_CACHE["tags"] = []
+    notion_writer._TAXONOMY_CACHE["fetched_at"] = 0.0
+    yield
+    notion_writer._TAXONOMY_CACHE["tags"] = []
+    notion_writer._TAXONOMY_CACHE["fetched_at"] = 0.0
+
+
+def test_get_live_taxonomy_orders_by_frequency(monkeypatch):
+    client = FakeClient()
+    client.data_sources = _DigestDS([
+        _digest_page("T1", "one", topics=("ai-workflows", "productivity")),
+        _digest_page("T2", "two", topics=("ai-workflows",)),
+        _digest_page("T3", "three", topics=("fitness",)),
+    ])
+    monkeypatch.setattr(notion_writer, "_client", lambda: client)
+
+    taxonomy = notion_writer.get_live_taxonomy(limit=40)
+
+    assert taxonomy[0] == "ai-workflows"
+    assert "fitness" in taxonomy
+
+
+def test_get_live_taxonomy_applies_merges(monkeypatch):
+    """A stray unmerged spelling (e.g. "claude", which crept back in as a
+    fresh tag after the one-time Phase 0 cleanup) must count toward its
+    canonical target rather than polluting the ranking as its own tag."""
+    client = FakeClient()
+    client.data_sources = _DigestDS([
+        _digest_page("M1", "one", topics=("claude-ai",)),
+        _digest_page("M2", "two", topics=("claude",)),  # merges -> claude-ai
+        _digest_page("M3", "three", topics=("claude",)),  # merges -> claude-ai
+    ])
+    monkeypatch.setattr(notion_writer, "_client", lambda: client)
+
+    taxonomy = notion_writer.get_live_taxonomy(limit=40)
+
+    assert taxonomy == ["claude-ai"]
+
+
+def test_get_live_taxonomy_excludes_marker_tags(monkeypatch):
+    """uncategorized/near-duplicate/pending-extraction are pipeline-state
+    markers, never genuine subject-matter candidates to offer the model."""
+    client = FakeClient()
+    client.data_sources = _DigestDS([
+        _digest_page("N1", "one", topics=("near-duplicate", "fitness")),
+        _digest_page("N2", "two", topics=("uncategorized",)),
+        _digest_page("N3", "three", topics=("pending-extraction",)),
+    ])
+    monkeypatch.setattr(notion_writer, "_client", lambda: client)
+
+    taxonomy = notion_writer.get_live_taxonomy(limit=40)
+
+    assert taxonomy == ["fitness"]
+
+
+def test_get_live_taxonomy_respects_limit(monkeypatch):
+    client = FakeClient()
+    client.data_sources = _DigestDS([
+        _digest_page("L1", "one", topics=("a", "b", "c")),
+    ])
+    monkeypatch.setattr(notion_writer, "_client", lambda: client)
+
+    assert len(notion_writer.get_live_taxonomy(limit=2)) == 2
+
+
+def test_get_live_taxonomy_caches_within_ttl(monkeypatch):
+    client = FakeClient()
+    calls = []
+    real_query = _DigestDS.query
+
+    class _CountingDS(_DigestDS):
+        def query(self, **kwargs):
+            calls.append(kwargs)
+            return real_query(self, **kwargs)
+
+    client.data_sources = _CountingDS([_digest_page("C1", "one", topics=("fitness",))])
+    monkeypatch.setattr(notion_writer, "_client", lambda: client)
+
+    first = notion_writer.get_live_taxonomy(limit=40)
+    second = notion_writer.get_live_taxonomy(limit=40)
+
+    assert first == second == ["fitness"]
+    assert len(calls) == 1  # second call served from cache, no re-query
+
+
+def test_get_live_taxonomy_force_refresh_bypasses_cache(monkeypatch):
+    client = FakeClient()
+    client.data_sources = _DigestDS([_digest_page("F1", "one", topics=("fitness",))])
+    monkeypatch.setattr(notion_writer, "_client", lambda: client)
+
+    notion_writer.get_live_taxonomy(limit=40)
+    client.data_sources = _DigestDS([_digest_page("F2", "two", topics=("cooking",))])
+    refreshed = notion_writer.get_live_taxonomy(limit=40, force_refresh=True)
+
+    assert refreshed == ["cooking"]
+
+
+def test_get_live_taxonomy_falls_back_to_stale_cache_on_notion_error(monkeypatch):
+    client = FakeClient()
+    client.data_sources = _DigestDS([_digest_page("E1", "one", topics=("fitness",))])
+    monkeypatch.setattr(notion_writer, "_client", lambda: client)
+    notion_writer.get_live_taxonomy(limit=40)  # populate the cache
+
+    def _boom():
+        raise RuntimeError("notion down")
+    monkeypatch.setattr(notion_writer, "_client", _boom)
+
+    stale = notion_writer.get_live_taxonomy(limit=40, force_refresh=True)
+
+    assert stale == ["fitness"]  # last-known-good, not a crash or empty list
+
+
+def test_get_live_taxonomy_empty_on_cold_cache_and_notion_error(monkeypatch):
+    def _boom():
+        raise RuntimeError("notion down")
+    monkeypatch.setattr(notion_writer, "_client", _boom)
+
+    assert notion_writer.get_live_taxonomy(limit=40) == []
+
+
+# --- write-time canonicalization: _build_properties applies apply_merges +
+# canonicalize_plurals, not just get_live_taxonomy's candidate-list generation
+# (2026-08-09 incident: "claude" drifted back in because the curated MERGES map
+# was only ever applied by the one-time offline script, never at actual write
+# time -- see PROGRESS.md and app/notion_writer.py's _build_properties).
+
+def test_create_page_canonicalizes_merged_and_pluralized_topics(monkeypatch, tutorial_reel, tutorial_extraction):
+    client = FakeClient()
+    monkeypatch.setattr(notion_writer, "_client", lambda: client)
+    extraction = tutorial_extraction.model_copy(
+        update={"topic_tags": ["claude", "startup", "sleep"]}
+    )
+
+    notion_writer.create_page(tutorial_reel, extraction, status="done")
+
+    saves_ds_id = notion_writer._resolve_data_source_id(client, notion_writer.NOTION_DB_ID)
+    save_call = next(
+        c for c in client.pages.created if c["parent"].get("data_source_id") == saves_ds_id
+    )
+    tag_names = {t["name"] for t in save_call["properties"]["Topics"]["multi_select"]}
+    assert tag_names == {"claude-ai", "startups", "sleep"}

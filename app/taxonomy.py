@@ -218,6 +218,53 @@ def find_tag_drift(
     return sorted(findings, key=lambda f: -f["score"])
 
 
+def _plural_variants(tag: str) -> list[str]:
+    """The singular<->plural spelling(s) of a tag worth checking against the
+    canonical set. Deliberately narrow (regular -s/-ies only, no irregular
+    nouns) -- this only needs to catch kebab-case tech/topic tags, and a
+    narrow rule can't accidentally collide two unrelated words."""
+    variants = []
+    if tag.endswith("ies"):
+        variants.append(tag[:-3] + "y")
+    elif tag.endswith("y"):
+        variants.append(tag[:-1] + "ies")
+    if tag.endswith("s"):
+        variants.append(tag[:-1])
+    else:
+        variants.append(tag + "s")
+    return variants
+
+
+def canonicalize_plurals(topics: list[str], canonical: set[str] | None = None) -> list[str]:
+    """Rewrite each topic to an existing canonical tag's singular/plural form
+    when one exists, so e.g. 'startup' and 'startups' never coexist as two
+    separate live tags just because the model happened to pick one spelling.
+    Order preserved, de-duplicated. A tag with no singular/plural match in
+    `canonical` is left as-is -- that's apply_merges's job, or it's genuinely
+    a new tag.
+
+    INCIDENT (2026-08-09): this write-time enforcement exists because relying
+    on the model to consistently pick one spelling failed -- the taxonomy
+    collapse included exactly this pattern ("startup" vs "startups",
+    "mcp-server" vs "mcp-servers") splitting what should have been one tag's
+    count across two singleton tags. See PROGRESS.md."""
+    if canonical is None:
+        canonical = canonical_tags()
+    out: list[str] = []
+    seen: set[str] = set()
+    for tag in topics:
+        match = tag
+        if tag not in canonical:
+            for variant in _plural_variants(tag):
+                if variant in canonical:
+                    match = variant
+                    break
+        if match not in seen:
+            seen.add(match)
+            out.append(match)
+    return out
+
+
 def normalized_similarity(a: str, b: str) -> float:
     """0..1 similarity between two tag strings, hyphen/space-insensitive. Used by
     the Phase J2 drift check to flag a NEW tag that looks like a near-duplicate

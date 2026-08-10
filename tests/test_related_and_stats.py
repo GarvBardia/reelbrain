@@ -84,7 +84,35 @@ def test_near_dup_save_links_and_tags_near_duplicate(monkeypatch, tutorial_reel,
     props = _save_page(fake)["properties"]
     assert props["Related"]["relation"] == [{"id": "page-DUPSRC001"}]
     assert {"name": "near-duplicate"} in props["Topics"]["multi_select"]
-    assert "near-duplicate" in store.get_taxonomy()  # persisted to the tags table too
+
+
+def test_near_dup_never_becomes_the_only_topic_on_an_empty_extraction(monkeypatch, tutorial_reel):
+    """BUG (2026-08-09): appending 'near-duplicate' unconditionally turned an
+    empty topic_tags list (e.g. from a degraded extraction) into
+    ['near-duplicate'] as the row's ONLY topic — 24/209 rows hit this. It must
+    only ever be additive to real topics, never a row's sole content; a row
+    with no real topics still gets topic_guarantee's honest fallback marker."""
+    store.insert_processing("DUPSRC002", "https://www.instagram.com/reel/DUPSRC002/")
+    store.update_save("DUPSRC002", notion_page_id="page-DUPSRC002", notion_page_url="https://notion.so/page-DUPSRC002")
+    store.upsert_embedding("DUPSRC002", _vector(0, blend=0.1))  # cosine_sim ~0.995 -> near-dup
+
+    degraded = Extraction(
+        main_point="No caption or transcript available.",
+        topic_tags=[],
+        content_type="entertainment",
+        comment_gate=CommentGate(detected=False),
+        value_score=1,
+    )
+    fake = _install(monkeypatch, tutorial_reel, degraded, embed_vector=_vector(0))
+    store.insert_processing(tutorial_reel.shortcode, tutorial_reel.permalink)
+
+    run_pipeline(tutorial_reel.shortcode, tutorial_reel.permalink, note=None)
+
+    props = _save_page(fake)["properties"]
+    tag_names = {t["name"] for t in props["Topics"]["multi_select"]}
+    assert tag_names != {"near-duplicate"}
+    assert "near-duplicate" not in tag_names  # nothing real to attach it to, so it's skipped
+    assert tag_names  # topic_guarantee's fallback still guarantees a non-empty, honest marker
 
 
 def test_related_skips_neighbor_with_no_notion_page(monkeypatch, tutorial_reel, tutorial_extraction):

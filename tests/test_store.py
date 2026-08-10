@@ -46,17 +46,27 @@ def test_update_save_is_partial():
     assert row["permalink"] == "https://www.instagram.com/reel/PART001/"
 
 
-def test_taxonomy_orders_by_frequency():
-    store.insert_processing("T1", "https://www.instagram.com/reel/T1/")
-    store.insert_processing("T2", "https://www.instagram.com/reel/T2/")
-    store.insert_processing("T3", "https://www.instagram.com/reel/T3/")
-    store.set_tags("T1", ["ai-workflows", "productivity"])
-    store.set_tags("T2", ["ai-workflows"])
-    store.set_tags("T3", ["fitness"])
+def test_taxonomy_delegates_to_live_notion_taxonomy(monkeypatch):
+    """INCIDENT (2026-08-09): get_taxonomy used to read the local `tags` table
+    directly, which is wiped on every redeploy and had 4 rows against 212 real
+    rows in Notion — silently starving every extraction call's candidate list
+    and collapsing the taxonomy to ~190 near-singletons. It's now a thin
+    wrapper delegating to notion_writer.get_live_taxonomy (the durable,
+    Notion-backed source) — see that function's own tests in
+    test_notion_writer.py for the frequency/merge/exclusion/caching behavior
+    itself."""
+    calls = []
+
+    def _fake_live_taxonomy(limit):
+        calls.append(limit)
+        return ["ai-workflows", "fitness"]
+
+    monkeypatch.setattr(notion_writer, "get_live_taxonomy", _fake_live_taxonomy)
 
     taxonomy = store.get_taxonomy(limit=40)
-    assert taxonomy[0] == "ai-workflows"
-    assert "fitness" in taxonomy
+
+    assert taxonomy == ["ai-workflows", "fitness"]
+    assert calls == [40]
 
 
 def test_daily_fetch_count_and_record_fetch():

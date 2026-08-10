@@ -2872,3 +2872,84 @@ Awaiting-DM row, oldest first. Live: **59 rows waiting**, oldest from 2026-04-12
 2. Review `AWAITING_DM.md` — 59 rows waiting, oldest nearly 4 months.
 3. Run the Scout pick (`claude -p "$(cat SCOUT_PROMPT.md)"`).
 4. Monthly `vault_librarian` Task Scheduler entry still not created (carried over).
+
+---
+
+# Session 2026-08-10 — taxonomy collapse: root cause + fix (Phase 2 of 4)
+
+At 209 rows the taxonomy had visibly collapsed: 78 rows (37%) carried only a marker tag
+(uncategorized/near-duplicate/pending-extraction), and the other 131 had almost entirely
+UNIQUE tag combinations — ~191 distinct topics for 209 rows, vs. the ~96 converged,
+reused tags from an earlier session. User-reported evidence included hallucinated
+single-use tags ("zoey", "jarvis", "elu") and singular/plural splits ("startup" vs.
+"startups", "mcp-server" vs. "mcp-servers").
+
+## Phase 1 — root cause (diagnosed before any fix, per instruction)
+Three hypotheses tested directly against live data/model calls:
+1. **Model adherence is NOT the problem.** Given a genuine 40-tag live candidate list,
+   `gemini-3.6-flash` reused 9/9 candidates across 2 real rows and invented 0 new tags.
+2. **`store.get_taxonomy()` reading local SQLite was the primary, universal root cause.**
+   Local `tags` table had 4 rows against 212 real rows in Notion (wiped on every
+   redeploy/dev reset, same class of bug as the digests' FIX 2 and
+   `get_by_shortcode_or_notion`). Every extraction call across all 12 code call sites was
+   being prompted with a near-empty candidate list — the model had nothing real to
+   converge toward, so every row invented its own tags from scratch.
+3. **`near-duplicate` becoming a row's ONLY topic was a confirmed, reproducible
+   (24/24) side effect** of appending to an empty `topic_tags` list on a degraded
+   extraction, exploiting `topic_guarantee.ensure_topics`' truthiness-only guard
+   (`if extraction.topic_tags: return extraction.topic_tags` treats `["near-duplicate"]`
+   as "has real topics" and never triggers the honest fallback).
+
+Bonus finding: the tag `claude` (un-merged) had reappeared with 6 live uses since the
+prior session's one-time Phase 0 taxonomy merge (`claude`→`claude-ai`) — proof the
+curated `MERGES` map was only ever applied by the offline batch script
+(`scripts/apply_taxonomy.py`), never at the actual live write path. A one-time cleanup
+without write-time enforcement drifts back.
+
+## Phase 2 — fix
+1. **Taxonomy source**: new `notion_writer.get_live_taxonomy()` — ranks the live Notion
+   Saves DB by frequency (paginated via the existing `find_saves_pages_since`), applies
+   `taxonomy.apply_merges` so a stray unmerged spelling still counts toward its canonical
+   target, excludes `taxonomy.NON_TOPIC_TAGS`, and caches in-process for 5 minutes (falls
+   back to the last-known-good list on a Notion error rather than crashing every
+   extraction call in progress). `store.get_taxonomy()` is now a thin delegating wrapper —
+   same pattern as `get_by_shortcode_or_notion`: keep the public interface stable, fix the
+   implementation. All 12 call sites unchanged.
+2. **Prompt hardening**: all three extraction prompts (`extraction.md`,
+   `extraction_caption_only.md`, `extraction_carousel.md`) now explicitly forbid person
+   names, assistant/agent given names, and product/tool/company names as `topic_tags`
+   (redirect to `named_entities`), with "zoey"/"jarvis"/"elu" called out as bad examples,
+   and instruct reusing a candidate's exact spelling over inventing a near-variant.
+   `CHEAP_MODEL_GUIDE.md` updated to match.
+3. **Write-time canonicalization**: `taxonomy.canonicalize_plurals()` (new) rewrites a
+   tag to an existing canonical tag's singular/plural form when one exists (regular
+   -s/-ies only, matched against `canonical_tags()`). `notion_writer._build_properties` —
+   the single choke point every write already funnels through (PHASE H GUARD) — now
+   applies `apply_merges` + `canonicalize_plurals` to `extraction.topic_tags` before
+   `topic_guarantee.ensure_topics` runs. This also fixes the `claude` drift-back bug from
+   Phase 1, since `apply_merges` is now finally wired into the live write path, not just
+   the offline script.
+4. **near-duplicate additive-only**: `_apply_embeddings_and_related` (app/main.py) now
+   only appends `"near-duplicate"` when `extraction.topic_tags` already contains at least
+   one non-marker (real) topic. A degraded/empty extraction near a duplicate still gets
+   `topic_guarantee`'s honest fallback marker (uncategorized/pending-extraction) instead
+   of `near-duplicate` standing in for it alone.
+
+New/updated tests: `notion_writer.get_live_taxonomy` (frequency ranking, merge
+canonicalization, marker exclusion, TTL caching, force-refresh, stale-cache fallback on
+Notion error, cold-cache-and-error → empty list), `store.get_taxonomy` delegation,
+`taxonomy.canonicalize_plurals` (7 cases), write-time canonicalization at `create_page`,
+and a regression test proving near-duplicate never becomes a row's sole topic. Two stale
+tests rewritten (`test_store.py`, `test_related_and_stats.py`) whose premises depended on
+the old local-SQLite-reading behavior.
+
+**928 passed, 1 xfailed** (up from 910 last session).
+
+## Still ahead (Phase 3 + 4, not started this session)
+- Re-tag the 131 rows with singleton/hallucinated tag combinations against the now-fixed
+  canonical taxonomy (text-only, from stored `main_point`/`named_entities`, no re-fetch;
+  resumable; quota-permitting).
+- Regenerate the Obsidian structure and report distinct-topic count, top-15 tags with
+  counts, and remaining marker-only row count. Success target (user-stated): the top 15
+  tags cover most of the corpus, tag count drops toward ~40-60 canonical tags with real
+  clustering, not ~191 singletons.

@@ -38,6 +38,40 @@ def test_proposal_declares_exactly_twenty_merges():
     assert len(tx.MERGES) == 20
 
 
+# --- write-time singular/plural canonicalization (2026-08-09 taxonomy-collapse fix) --
+
+def test_canonicalize_plurals_rewrites_singular_to_existing_canonical_plural():
+    # "startups" is already canonical (business-building parent); "startup" is not.
+    assert tx.canonicalize_plurals(["startup"]) == ["startups"]
+
+
+def test_canonicalize_plurals_rewrites_hyphenated_singular():
+    # "mcp-servers" is canonical (claude-ecosystem parent); "mcp-server" is not.
+    assert tx.canonicalize_plurals(["mcp-server"]) == ["mcp-servers"]
+
+
+def test_canonicalize_plurals_dedupes_when_both_spellings_present():
+    assert tx.canonicalize_plurals(["startup", "startups"]) == ["startups"]
+
+
+def test_canonicalize_plurals_leaves_tag_with_no_canonical_match_untouched():
+    assert tx.canonicalize_plurals(["some-genuinely-new-topic"]) == ["some-genuinely-new-topic"]
+
+
+def test_canonicalize_plurals_is_a_noop_for_already_canonical_tags():
+    assert tx.canonicalize_plurals(["startups", "web-design"]) == ["startups", "web-design"]
+
+
+def test_canonicalize_plurals_preserves_order():
+    assert tx.canonicalize_plurals(["web-design", "startup", "obsidian"]) == \
+        ["web-design", "startups", "obsidian"]
+
+
+def test_canonicalize_plurals_respects_custom_canonical_set():
+    assert tx.canonicalize_plurals(["widget"], canonical={"widgets"}) == ["widgets"]
+    assert tx.canonicalize_plurals(["widgets"], canonical=set()) == ["widgets"]
+
+
 # --- parent grouping -----------------------------------------------------------------
 
 def test_group_topics_under_parents_places_children_and_leaves_loose():

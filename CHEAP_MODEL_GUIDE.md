@@ -50,6 +50,7 @@ Field constraints (these are enforced — violating them fails validation):
 - `suggested_action`: one imperative sentence, or exactly `"none — informational"`.
 - Do **NOT** output a `priority` field — it is computed afterward (see §4), not by you.
 - `named_entities`: distinct from `topic_tags` — categories stay in `topic_tags` (drives the reusable Notion/Obsidian taxonomy); `named_entities` is per-reel and specific on purpose (tool names, named techniques, stated claims). Empty list is correct when nothing specific is named — never invent an entity to fill this out.
+- `topic_tags`: subject-matter categories only, NEVER proper nouns — no person names, no assistant/agent given names, no product/tool/company names (those go in `named_entities`). Bad topic_tags (these are named entities, not topics): "zoey", "jarvis", "elu". Strongly prefer the taxonomy candidates injected into the prompt over inventing a new tag, and reuse a candidate's exact spelling/number rather than a near-variant (don't emit `startup` next to a `startups` candidate, or `mcp-server` next to `mcp-servers`).
 - `research_context`: **always return an empty array `[]`.** This is filled in by a separate, second Gemini call with real Google Search grounding (`gemini_pipe.run_research_context`) — never by the extraction model itself, since it has no way to verify anything against live search results. See §9 below.
 
 ---
@@ -87,8 +88,12 @@ search tool and no way to honestly satisfy this requirement, so it must not try.
 > - `steps_or_framework` stays empty unless the reel teaches a concrete procedure/method.
 > - `value_score` of 1 is correct and expected for pure music/aesthetic/vibe reels with
 >   no informational content — do not inflate it.
-> - `topic_tags`: prefer the taxonomy candidates provided (most-used existing tags) when
->   they genuinely fit; only introduce a new tag if none fit. Lowercase, kebab-case, 3–6 tags.
+> - `topic_tags`: subject-matter categories only, never proper nouns — no person names,
+>   assistant/agent given names, or product/tool/company names (those go in `named_entities`).
+>   Bad topic_tags: "zoey", "jarvis", "elu". Strongly prefer the taxonomy candidates provided
+>   (most-used existing tags) when they genuinely fit, reusing a candidate's exact spelling
+>   over a near-variant; only introduce a new tag if truly nothing fits. Lowercase,
+>   kebab-case, 3–6 tags.
 > - `comment_gate`: set `detected: true` only if the creator is explicitly asking viewers
 >   to comment a word/phrase to receive something in DM. Extract the exact `keyword` and
 >   what was promised in `promised_resource`.

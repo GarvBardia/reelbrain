@@ -11,7 +11,7 @@ import logging
 import os
 from typing import Optional
 
-from app import topic_guarantee
+from app import taxonomy, topic_guarantee
 from app.models import Extraction, ReelData
 
 # .strip(): env values pasted into a hosting dashboard often carry a trailing
@@ -247,6 +247,69 @@ def extract_digest_fields(page: dict) -> dict:
     }
 
 
+_TAXONOMY_CACHE: dict = {"tags": [], "fetched_at": 0.0}
+TAXONOMY_CACHE_TTL_SECONDS = 300  # 5 minutes
+
+
+def get_live_taxonomy(limit: int = 40, force_refresh: bool = False) -> list[str]:
+    """Preferred topic-tag candidates for the extraction prompt, ranked by
+    frequency across the LIVE Notion Saves DB — never the local SQLite mirror.
+
+    INCIDENT (2026-08-09): the taxonomy collapsed from ~96 converged, reusable
+    tags to ~190 near-singletons across 212 rows. Root cause: store.get_taxonomy
+    read ONLY from local SQLite, which is wiped on every redeploy/dev reset and
+    was never systematically repopulated — it had 4 rows against 212 real rows
+    in Notion. Every extraction call in the entire codebase (12 call sites) was
+    silently prompted with a near-empty or literally empty candidate list, so
+    the model had nothing real to converge toward. Verified live: on a genuine
+    40-tag candidate list, gemini-3.6-flash reused 9/9 tags across 2 real test
+    rows and invented 0 — the model was never the problem, the candidate list
+    reaching it was.
+
+    Applies taxonomy.apply_merges so a stray unmerged spelling (e.g. "claude",
+    which crept back in as a fresh tag after the one-time Phase 0 cleanup)
+    counts toward its canonical target instead of polluting the ranking, and
+    excludes taxonomy.NON_TOPIC_TAGS (uncategorized/near-duplicate/
+    pending-extraction) — those are pipeline-state markers, never genuine
+    subject-matter candidates to offer the model.
+
+    Cached in-process for TAXONOMY_CACHE_TTL_SECONDS: daily_runner and the
+    backfill scripts call this once per ROW in a loop, and re-querying and
+    paginating the entire Saves DB on every single call would be wasteful.
+    On a Notion query failure, falls back to whatever was last cached (stale
+    is better than crashing every extraction call in progress); returns an
+    empty list only on a cold cache with no prior successful fetch."""
+    import time
+
+    now = time.time()
+    if not force_refresh and _TAXONOMY_CACHE["tags"] and (
+        now - _TAXONOMY_CACHE["fetched_at"] < TAXONOMY_CACHE_TTL_SECONDS
+    ):
+        return _TAXONOMY_CACHE["tags"][:limit]
+
+    from collections import Counter
+
+    from app.taxonomy import NON_TOPIC_TAGS, apply_merges
+
+    try:
+        pages = find_saves_pages_since("1970-01-01T00:00:00")
+    except Exception:  # noqa: BLE001 - a Notion hiccup must not break extraction
+        logger.warning("get_live_taxonomy: Notion query failed — using last cached list", exc_info=True)
+        return _TAXONOMY_CACHE["tags"][:limit]
+
+    counter: Counter = Counter()
+    for page in pages:
+        digest = extract_digest_fields(page)
+        for tag in apply_merges(digest["topics"]):
+            if tag and tag not in NON_TOPIC_TAGS:
+                counter[tag] += 1
+
+    tags = [tag for tag, _ in counter.most_common()]
+    _TAXONOMY_CACHE["tags"] = tags
+    _TAXONOMY_CACHE["fetched_at"] = now
+    return tags[:limit]
+
+
 def _build_properties(
     reel: ReelData,
     extraction: Optional[Extraction],
@@ -277,6 +340,19 @@ def _build_properties(
         props["Related"] = {"relation": [{"id": pid} for pid in related_page_ids]}
     if extraction:
         props["Content type"] = {"select": {"name": extraction.content_type}}
+        # WRITE-TIME CANONICALIZATION — the taxonomy-collapse incident
+        # (2026-08-09, see PROGRESS.md) showed relying on the model to spell
+        # a tag consistently doesn't hold: "claude" drifted back in after the
+        # one-time Phase 0 merge cleanup, and "startup"/"startups",
+        # "mcp-server"/"mcp-servers" split what should have been one tag's
+        # count across two singletons. This is the same choke point every
+        # caller already funnels through (see PHASE H GUARD below), so fixing
+        # spelling here — not just at candidate-list-generation time in
+        # get_live_taxonomy — is what actually prevents drift rather than
+        # just reporting it after the fact.
+        extraction.topic_tags = taxonomy.canonicalize_plurals(
+            taxonomy.apply_merges(extraction.topic_tags)
+        )
         # PHASE H GUARD — the backstop that makes "no reel without topics"
         # structural rather than merely likely. Every caller in the codebase
         # funnels through here, so refusing an empty write here is what

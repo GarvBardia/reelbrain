@@ -38,6 +38,7 @@ from app.models import (
     NightlyRequest,
     ReelData,
 )
+from app.taxonomy import NON_TOPIC_TAGS
 
 logger = logging.getLogger("reelbrain")
 logging.basicConfig(level=logging.INFO)
@@ -193,7 +194,21 @@ def _apply_embeddings_and_related(shortcode: str, extraction: Extraction) -> lis
         return []
 
     related = [(sc, sim) for sc, sim in neighbors if sim > RELATED_SIMILARITY][:RELATED_TOP_K]
-    if related and related[0][1] > NEAR_DUP_SIMILARITY and "near-duplicate" not in extraction.topic_tags:
+    # BUG (2026-08-09): appending unconditionally made "near-duplicate" a row's
+    # ONLY topic on 24/209 rows -- whenever extraction.topic_tags started empty
+    # (e.g. a degraded/caption-only extraction), .append turned [] into
+    # ["near-duplicate"], and topic_guarantee.ensure_topics' truthiness-only
+    # guard let that single marker tag through untouched instead of triggering
+    # its real fallback derivation. near-duplicate must only ever ADD to a
+    # row's real topics, never stand in for them -- so it's skipped here when
+    # there's no real (non-marker) topic to attach it to; ensure_topics' normal
+    # fallback still runs and produces an honest uncategorized/pending-extraction
+    # marker on its own.
+    has_real_topic = any(t not in NON_TOPIC_TAGS for t in extraction.topic_tags)
+    if (
+        related and related[0][1] > NEAR_DUP_SIMILARITY
+        and has_real_topic and "near-duplicate" not in extraction.topic_tags
+    ):
         extraction.topic_tags.append("near-duplicate")
 
     related_page_ids = []

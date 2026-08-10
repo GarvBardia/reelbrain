@@ -184,13 +184,20 @@ def set_tags(shortcode: str, tags: list[str]) -> None:
 
 
 def get_taxonomy(limit: int = 40) -> list[str]:
-    """Top tag candidates for the extraction prompt, per DATA_SCHEMA.md §4."""
-    with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT tag, COUNT(*) c FROM tags GROUP BY tag ORDER BY c DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    return [row["tag"] for row in rows]
+    """Top tag candidates for the extraction prompt, per DATA_SCHEMA.md §4.
+
+    INCIDENT (2026-08-09): this used to read the local `tags` table directly —
+    which is wiped on every redeploy/dev reset and had 4 rows against 212 real
+    rows in Notion, so every extraction call across the whole codebase was
+    silently prompted with a near-empty candidate list. That's why the
+    taxonomy collapsed from ~96 converged tags to ~190 near-singletons: the
+    model was never given anything real to converge toward. Same lesson as
+    get_by_shortcode_or_notion and the digests' FIX 2 — Notion is the durable
+    source, local SQLite is not. Delegates to notion_writer's cached,
+    canonicalized, marker-excluded live count instead."""
+    from app import notion_writer
+
+    return notion_writer.get_live_taxonomy(limit)
 
 
 def get_failed(shortcode: str) -> Optional[sqlite3.Row]:
