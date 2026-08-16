@@ -3231,3 +3231,65 @@ a major breaking change.
   frontend: the "Other" category holds 26 saves, which is exactly that backlog showing
   through. Draining it via `scripts/retag_singleton_rows.py` will visibly improve the
   graph.
+
+---
+
+# Session 2026-08-16 (part 3) — Mycelium frontend: retargeted from Vercel to GitHub Pages
+
+User request: "use github pages" instead of Vercel. GitHub Pages serves plain static
+files — no Node server — which forced a real architecture change, not just a config swap.
+
+## What changed
+- `next.config.mjs`: `output: "export"` (Next emits a static `out/` dir instead of a
+  server bundle), `basePath`/`assetPrefix` of `/reelbrain` for the project-Pages URL
+  shape (`<user>.github.io/reelbrain/`), applied only when `GITHUB_ACTIONS=true` so
+  `npm run dev` still serves at the plain root.
+- **Removed entirely** (unsupported by static export): `src/middleware.ts`,
+  `src/app/api/**` route handlers, `src/lib/admin-proxy.ts`.
+- **Every data-driven page became a client component** fetching the public API
+  directly from the browser on mount (`src/lib/use-api.ts`), since there is no server
+  left to run a Server Component against. Real upside: numbers are live on every visit,
+  not "fresh as of the last deploy" the way ISR would have been.
+- Three pages (`how-it-works`, `library`, `scout`) split into a thin Server Component
+  `page.tsx` (exports `metadata` for `<title>`) wrapping a client `*-client.tsx` — Next
+  requires `metadata` from a Server Component, so per-page titles needed this split.
+  The landing page needed no override (root layout's default title already fits), so
+  it stayed a single client component.
+- `library`'s `searchParams` prop (server-only) became `useSearchParams()` (client hook,
+  wrapped in Suspense — same pattern the admin login form already used).
+- New `.github/workflows/deploy-pages.yml`: builds and publishes `web/` on every push
+  to `web/**`, via the official `actions/configure-pages` + `upload-pages-artifact` +
+  `deploy-pages` actions. No secrets in the workflow — `NEXT_PUBLIC_API_BASE` points at
+  the already-public Render URL.
+
+## The trade-off this forces, and why it's not hidden
+The previous design kept the backend secret entirely server-side (httpOnly cookie +
+Next.js proxy route attaching `ADMIN_API_SECRET`). With no server, that pattern is
+impossible. The admin dashboard now asks for `CAPTURE_SECRET` once per browser tab,
+holds it in `sessionStorage` (cleared on tab close, never written to a build artifact),
+and sends it directly to the FastAPI backend's `/api/admin/*` endpoints as
+`x-admin-secret`. The backend's own constant-time comparison is the real gate; the
+frontend never pretended to be more than that. Stated plainly in
+`web/src/lib/admin-auth.ts` and both READMEs rather than glossed over — if that's not
+an acceptable trade-off, the doc says explicitly to host the admin dashboard somewhere
+with a real server instead.
+
+`ADMIN_PASSWORD` and the separate `ADMIN_API_SECRET` concept are both gone — there is
+now exactly one secret (`CAPTURE_SECRET`, already existing on Render) the operator needs
+to know.
+
+## Verification
+- `npm run build` succeeds, all 7 routes render as `○ Static`.
+- Simulated the real CI build (`GITHUB_ACTIONS=true`): confirmed asset URLs are
+  correctly prefixed `/reelbrain/_next/...` and `NEXT_PUBLIC_API_BASE` is baked into
+  the admin/how-it-works page chunks as expected.
+- Served `out/` with a plain static file server against the live local backend: all
+  five routes 200, landing page's static shell (pre-hydration HTML) contains the real
+  headline text.
+- **1031 passed, 1 xfailed** (backend test suite unaffected — this was a frontend-only
+  architecture change).
+
+## Still ahead
+- Not yet deployed. `FRONTEND_DEPLOY.md` has the click-by-click: enable Pages
+  (Settings → Pages → Source: GitHub Actions), set `PUBLIC_CORS_ORIGINS` on Render to
+  the `github.io` origin, then push (or run the workflow by hand).

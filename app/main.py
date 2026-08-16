@@ -70,12 +70,11 @@ async def _lifespan(app: FastAPI):
 # renders as the heading of the auto-generated /docs page.
 app = FastAPI(title="Mycelium", lifespan=_lifespan)
 
-# The Next.js frontend (Vercel) is a different origin from this API (Render),
-# so the browser needs explicit permission to read these responses. Scoped to
-# an allow-list from the environment rather than "*": the public read
-# endpoints would be harmless either way, but the same app also serves the
-# secret-guarded write endpoints, and a wildcard there is a habit worth not
-# forming. Localhost stays allowed unconditionally for development.
+# The frontend (GitHub Pages, garvbardia.github.io/reelbrain) is a fully
+# static site -- no server of its own, so every browser request (public reads
+# AND admin calls) hits this API directly rather than through a same-origin
+# proxy. PUBLIC_CORS_ORIGINS must include the Pages origin for the browser to
+# be allowed to read the response at all.
 PUBLIC_CORS_ORIGINS = [
     o.strip() for o in os.environ.get("PUBLIC_CORS_ORIGINS", "").split(",") if o.strip()
 ] + ["http://localhost:3000", "http://127.0.0.1:3000"]
@@ -83,9 +82,6 @@ PUBLIC_CORS_ORIGINS = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=PUBLIC_CORS_ORIGINS,
-    # Vercel preview deployments get a fresh generated subdomain per push, so
-    # an exact-match list alone would break every preview build.
-    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
@@ -729,9 +725,11 @@ def weekly_digest_endpoint(req: NightlyRequest, request: Request) -> JSONRespons
 #
 # The secret travels in a header rather than a JSON body only because these are
 # GETs; _check_secret is the identical constant-time comparison used everywhere
-# else. The browser never holds this value -- the Next.js admin dashboard keeps
-# it in a server-side env var and proxies through its own route handlers, so it
-# is never shipped to the client bundle. See web/README.md.
+# else. The frontend is a static site (GitHub Pages) with no server of its own,
+# so unlike a server-rendered admin panel, the browser DOES hold this secret for
+# the session -- entered once, kept in sessionStorage (cleared on tab close),
+# sent directly to this API. See web/src/lib/admin-auth.ts for the trade-off
+# that forces, stated plainly there rather than hidden.
 
 def _check_admin_header(request: Request) -> None:
     _check_secret(request.headers.get("x-admin-secret", ""))

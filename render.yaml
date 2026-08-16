@@ -48,11 +48,11 @@ services:
         value: "3"
       - key: NTFY_TOPIC
         sync: false
-      # --- public frontend (Vercel) — see FRONTEND_DEPLOY.md ---
+      # --- public frontend (GitHub Pages) — see FRONTEND_DEPLOY.md ---
       # Comma-separated origins allowed to read the public API from a browser.
-      # Set this to the Vercel production domain AFTER the first frontend
-      # deploy. localhost:3000 and *.vercel.app previews are allowed in code,
-      # so this is only needed for the production domain.
+      # Set to the GitHub Pages origin, e.g. https://<user>.github.io
+      # (the origin only — no path, even though the site itself lives under
+      # /reelbrain/). localhost:3000 is allowed in code for local dev.
       - key: PUBLIC_CORS_ORIGINS
         sync: false
       # Per-IP cap on /api/public/* (separate from the write-path limiter).

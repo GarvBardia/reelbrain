@@ -1,25 +1,24 @@
+"use client";
+
 import Link from "next/link";
 import { ArrowRight, Compass, Layers, Sparkles } from "lucide-react";
 
-import { getGraph, getStats } from "@/lib/api";
+import { EMPTY_GRAPH, EMPTY_STATS, getGraph, getStats } from "@/lib/api";
+import { useApi } from "@/lib/use-api";
 import { KnowledgeGraph } from "@/components/knowledge-graph";
 import { BlurFade } from "@/components/magic/blur-fade";
 import { NumberTicker } from "@/components/magic/number-ticker";
 import { Spotlight } from "@/components/aceternity/spotlight";
+import { Skeleton } from "@/components/skeleton";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 
-// Regenerated at most every 5 minutes (matches PUBLIC_CACHE_TTL_SECONDS on
-// the API, so the two cache layers do not fight). Declared explicitly rather
-// than inferred from the fetch options so the rendering mode of this route is
-// obvious from the file itself.
-export const revalidate = 300;
-
-
-export default async function LandingPage() {
-  // Both fetched server-side in parallel: one round trip each, cached by ISR,
-  // so the graph is already in the HTML when the page paints.
-  const [stats, graph] = await Promise.all([getStats(), getGraph()]);
+// Client-fetched, not server-rendered: GitHub Pages serves static files with
+// no server to run against, so every data-driven page fetches the public API
+// directly from the browser. See src/lib/api.ts.
+export default function LandingPage() {
+  const { data: stats } = useApi(getStats, EMPTY_STATS);
+  const { data: graph, loading: graphLoading } = useApi(getGraph, EMPTY_GRAPH);
 
   return (
     <>
@@ -64,7 +63,11 @@ export default async function LandingPage() {
 
           {/* THE CENTREPIECE. */}
           <BlurFade delay={0.15} className="mt-14">
-            <KnowledgeGraph initial={graph} />
+            {graphLoading ? (
+              <Skeleton className="h-[560px] w-full rounded-2xl" />
+            ) : (
+              <KnowledgeGraph initial={graph} />
+            )}
           </BlurFade>
         </div>
       </section>

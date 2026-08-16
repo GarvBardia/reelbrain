@@ -4,6 +4,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { Loader2, Lock } from "lucide-react";
 
+import { storeSecret } from "@/lib/admin-auth";
+import { verifyAdminSecret } from "@/lib/admin-api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -11,7 +13,7 @@ import { Input } from "@/components/ui/input";
 function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
-  const [password, setPassword] = useState("");
+  const [secret, setSecret] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -20,22 +22,15 @@ function LoginForm() {
     setBusy(true);
     setError("");
     try {
-      const res = await fetch("/api/admin/login", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ password }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        setError(body.error ?? "Login failed.");
+      const ok = await verifyAdminSecret(secret);
+      if (!ok) {
+        setError("Incorrect secret.");
         return;
       }
-      // The session cookie is httpOnly, so the client cannot read it -- a full
-      // navigation is what lets middleware see it on the next request.
+      storeSecret(secret);
       router.push(params.get("next") ?? "/admin/dashboard");
-      router.refresh();
     } catch {
-      setError("Could not reach the server.");
+      setError("Could not reach the API.");
     } finally {
       setBusy(false);
     }
@@ -57,19 +52,22 @@ function LoginForm() {
         <form onSubmit={submit} className="space-y-3">
           <Input
             type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Password"
+            value={secret}
+            onChange={(e) => setSecret(e.target.value)}
+            placeholder="API secret (CAPTURE_SECRET)"
             autoFocus
             autoComplete="current-password"
           />
           {error && (
             <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
           )}
-          <Button type="submit" className="w-full" disabled={busy || !password}>
+          <Button type="submit" className="w-full" disabled={busy || !secret}>
             {busy && <Loader2 className="h-4 w-4 animate-spin" />}
             Sign in
           </Button>
+          <p className="text-center text-xs text-slate-400">
+            Kept only in this tab&apos;s session storage — cleared when the tab closes.
+          </p>
         </form>
       </CardContent>
     </Card>
@@ -79,7 +77,6 @@ function LoginForm() {
 export default function AdminLoginPage() {
   return (
     <div className="flex min-h-[70vh] items-center justify-center px-6 py-16">
-      {/* useSearchParams needs a Suspense boundary for static generation. */}
       <Suspense fallback={<Loader2 className="h-5 w-5 animate-spin text-slate-400" />}>
         <LoginForm />
       </Suspense>

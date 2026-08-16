@@ -1,32 +1,60 @@
-# FRONTEND_DEPLOY.md — shipping Mycelium to Vercel
+# FRONTEND_DEPLOY.md — shipping Mycelium to GitHub Pages
 
 Click-by-click. Assumes the FastAPI backend is already live on Render (see
 `DEPLOYMENT.md`); this covers only what the frontend adds.
 
 ---
 
-## 0. What changes on each side
+## 0. What changes, and the trade-off this hosting choice makes
 
-| | Render (API) | Vercel (frontend) |
+| | Render (API) | GitHub Pages (frontend) |
 |---|---|---|
-| New env vars | `PUBLIC_CORS_ORIGINS`, optionally `PUBLIC_RATE_LIMIT_PER_MINUTE`, `PUBLIC_CACHE_TTL_SECONDS` | `NEXT_PUBLIC_API_BASE`, `ADMIN_PASSWORD`, `ADMIN_API_SECRET` |
+| New env vars | `PUBLIC_CORS_ORIGINS`, optionally `PUBLIC_RATE_LIMIT_PER_MINUTE`, `PUBLIC_CACHE_TTL_SECONDS` | none — `NEXT_PUBLIC_API_BASE` is baked in by the GitHub Actions workflow |
 | New endpoints | `/api/public/*` (read-only), `/api/admin/*` (secret-guarded) | — |
-| Redeploy needed | yes | n/a (first deploy) |
+| Deploy trigger | manual env var change + redeploy | automatic on every push to `web/**` |
+
+**GitHub Pages serves plain static files — there is no server.** That rules
+out the usual "browser never holds the secret" pattern (a server-side proxy
+that attaches a credential). The admin dashboard here instead asks for the
+`CAPTURE_SECRET` once per browser session, keeps it in `sessionStorage`
+(cleared when the tab closes, never written to a file or the JS bundle), and
+sends it directly to the FastAPI backend on every admin call. The backend's
+own constant-time secret check is what actually gates access — the frontend
+never pretends otherwise. See `web/src/lib/admin-auth.ts` for the full
+reasoning. If that trade-off is unacceptable for your threat model, host the
+admin dashboard on something with a real server (Vercel, a small VPS, etc.)
+and keep only the public marketing pages on GitHub Pages.
+
+Every data-driven page (landing, library, scout queue) fetches the public API
+directly from the browser, for the same reason: there is no server to
+prerender against. This has an upside — the numbers are live on every visit,
+not "fresh as of the last build."
 
 ---
 
-## 1. Render — add the CORS allow-list
+## 1. Enable GitHub Pages on the repo
 
-The browser will refuse to read API responses from a different origin unless
-the API says it may. Until step 3 you do not know the Vercel URL, so this is a
-two-pass step: deploy the frontend first, then come back and set this.
+1. Repo → **Settings** → **Pages**.
+2. Under **Build and deployment → Source**, choose **GitHub Actions** (not
+   "Deploy from a branch" — the workflow here uses the official Pages Actions).
+3. Save. Nothing deploys yet; that happens in step 3.
+
+---
+
+## 2. Render — add the CORS allow-list
+
+The browser refuses to read API responses from a different origin unless the
+API explicitly allows it.
 
 1. Render dashboard → your `reelbrain` service → **Environment**.
 2. Add:
 
    | Key | Value |
    |---|---|
-   | `PUBLIC_CORS_ORIGINS` | `https://<your-vercel-domain>` (comma-separate multiples) |
+   | `PUBLIC_CORS_ORIGINS` | `https://<your-github-username>.github.io` |
+
+   Origin only — no path, even though the site itself is served under
+   `/reelbrain/`. Comma-separate if you ever add another origin.
 
    Optional tuning, both with working defaults:
 
@@ -37,12 +65,9 @@ two-pass step: deploy the frontend first, then come back and set this.
 
 3. **Save changes** → Render redeploys automatically.
 
-`localhost:3000` and any `*.vercel.app` preview domain are allowed
-unconditionally in code, so previews work without touching this variable.
-
 ---
 
-## 2. Confirm the public API is live
+## 3. Confirm the public API is live
 
 ```bash
 curl https://<your-render-domain>/api/public/stats
@@ -53,46 +78,24 @@ work — redeploy from the latest commit.
 
 ---
 
-## 3. Vercel — import the project
+## 4. Deploy the frontend
 
-1. Go to <https://vercel.com/new> and import the GitHub repo.
-2. **Root Directory** — click *Edit* and set it to **`web`**. This is the one
-   setting people miss; the repo root is a Python project and the build fails
-   without it.
-3. Framework preset auto-detects as **Next.js**. Leave build/output commands
-   at their defaults.
-4. Add environment variables (apply to Production, Preview and Development):
+Already automatic: `.github/workflows/deploy-pages.yml` runs on every push to
+`main` that touches `web/**`, and can also be run by hand from the **Actions**
+tab → *Deploy Mycelium to GitHub Pages* → **Run workflow**.
 
-   | Key | Value | Notes |
-   |---|---|---|
-   | `NEXT_PUBLIC_API_BASE` | `https://<your-render-domain>` | **No trailing slash** |
-   | `ADMIN_PASSWORD` | a long random passphrase | Gates the `/admin` login form |
-   | `ADMIN_API_SECRET` | the *same value* as `CAPTURE_SECRET` on Render | Never sent to the browser |
+If your Render service has a different name than `reelbrain.onrender.com`,
+edit the `NEXT_PUBLIC_API_BASE` line near the top of the workflow file before
+the first run.
 
-   Generate a password with:
+Watch the run in the **Actions** tab. On success the site is live at:
 
-   ```bash
-   python -c "import secrets; print(secrets.token_urlsafe(32))"
-   ```
-
-5. **Deploy**.
-
----
-
-## 4. Close the CORS loop
-
-Vercel now shows the production domain. Go back to Render, set
-`PUBLIC_CORS_ORIGINS` to that `https://…` origin, and save.
-
-Verify from the browser console on the live site:
-
-```js
-fetch(`${location.origin}`) // sanity
-fetch("https://<your-render-domain>/api/public/stats").then(r => r.json()).then(console.log)
+```
+https://<your-github-username>.github.io/reelbrain/
 ```
 
-A CORS error here means the origin string does not match exactly — check for a
-trailing slash or `http` vs `https`.
+(A trailing slash matters for the base path — `next.config.mjs` sets
+`basePath: "/reelbrain"` specifically for this project-Pages URL shape.)
 
 ---
 
@@ -100,46 +103,46 @@ trailing slash or `http` vs `https`.
 
 | Check | Expected |
 |---|---|
-| `/` | Hero, graph with coloured category nodes, non-zero live numbers |
+| `/` | Hero, graph with coloured category nodes (loads a beat after the page, since it's a client fetch), non-zero live numbers |
 | Click a graph node | Expands into that category's reels |
-| `/library` | Cards; search and category filters change the URL and the results |
-| `/scout` | Ranked list, each with a "Next step" |
-| `/admin` | Login form |
-| `/admin/dashboard` while logged out | Redirects to `/admin` |
-| `/api/admin/overview` while logged out | `{"error":"unauthorized"}` |
-| `/admin/dashboard` after login | Health panel, counters, unredacted queue |
+| `/library/` | Cards; search and category filters update the URL and results |
+| `/scout/` | Ranked list, each with a "Next step" |
+| `/admin/` | Secret-entry form |
+| `/admin/dashboard/` with no secret in sessionStorage | Redirects to `/admin/` |
+| `/admin/dashboard/` after entering the correct `CAPTURE_SECRET` | Health panel, counters, unredacted queue |
+| `/admin/dashboard/` after entering a wrong secret | "Incorrect secret." on the login form, never reaches the dashboard |
 
 ---
 
 ## 6. Free-tier behaviour worth knowing
 
 **Render sleeps after ~15 minutes idle.** The first request then takes ~30s.
-This is largely hidden because every public page is server-rendered with ISR
-(`revalidate = 300`) — visitors get cached HTML while Vercel refreshes in the
-background. Two consequences:
+Because every page here fetches client-side, a visitor hitting a sleeping
+backend sees the loading skeleton for that ~30s rather than an instant (but
+stale) render — a direct consequence of static hosting having no server-side
+cache layer to hide the cold start behind. The existing `/ping` keep-alive job
+(`SCHEDULING.md`) mitigates this; keep it running.
 
-- If Render happens to be asleep during a Vercel build, pages bake with empty
-  state and self-heal at the next revalidation (≤5 min). Redeploy if you want
-  it immediate.
-- The existing `/ping` keep-alive job (see `SCHEDULING.md`) already mitigates
-  this. Keep it running.
-
-**Vercel free tier** is ample here: five routes, no images, no server-side
-compute beyond ISR regeneration and the admin proxy handlers.
+**GitHub Pages** itself has no meaningful free-tier limits for a project this
+size (soft caps around 100GB bandwidth/month, 1GB site size — this site is a
+few hundred KB of JS).
 
 ---
 
 ## 7. Custom domains (optional)
 
-- **Frontend**: Vercel → Project → Settings → Domains.
+- **Frontend**: repo → Settings → Pages → **Custom domain**. Update
+  `PUBLIC_CORS_ORIGINS` on Render to match.
 - **API**: Render → Settings → Custom Domain, e.g.
-  `api.mycelium.<yourdomain>`. Then update `NEXT_PUBLIC_API_BASE` on Vercel and
-  `PUBLIC_CORS_ORIGINS` on Render. This is also the only way to stop the
-  internal `reelbrain` codename appearing in network requests.
+  `api.mycelium.<yourdomain>`. Then update `NEXT_PUBLIC_API_BASE` in
+  `.github/workflows/deploy-pages.yml` and `PUBLIC_CORS_ORIGINS` on Render.
+  This is also the only way to stop the internal `reelbrain` codename
+  appearing in network requests.
 
 ---
 
 ## 8. Rollback
 
-Vercel keeps every deployment. Project → Deployments → the last good one →
-**Promote to Production**. No rebuild, effectively instant.
+Actions tab → find the last known-good *Deploy Mycelium to GitHub Pages* run →
+**Re-run all jobs**. This rebuilds and republishes that commit's `web/`
+directory as-is.

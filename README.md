@@ -21,8 +21,9 @@ Design docs: `BUILD_SPEC.md`, `CLAUDE.md`, `DATA_SCHEMA.md`, `OPEN_QUESTIONS.md`
 - **Phase 2:** iOS Shortcuts, `/attach` (comment-gate loop), nightly cleanup (`/nightly` + script).
 - **Phase 3:** embeddings (sqlite-vec) + near-dup detection + related-saves, low-signal
   filter, creator "Core source" flag.
-- **Frontend:** `web/` — Next.js on Vercel, reading the read-only `/api/public/*`
-  endpoints. See `web/README.md` and `FRONTEND_DEPLOY.md`.
+- **Frontend:** `web/` — Next.js static export on GitHub Pages, reading the
+  read-only `/api/public/*` endpoints directly from the browser. See
+  `web/README.md` and `FRONTEND_DEPLOY.md`.
 - **Ops:** `/health`, `/ping` keep-alive, rate limiting, `render.yaml` — see
   `DEPLOYMENT.md` (Render setup) and `SCHEDULING.md` (keep-alive + nightly cron).
 

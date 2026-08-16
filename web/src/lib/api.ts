@@ -1,37 +1,36 @@
 import type { GraphPayload, ReelPage, ScoutItem, Stats } from "./types";
 
-/** The Render-hosted FastAPI. NEXT_PUBLIC_ so client components (the graph's
- *  expand-on-click) can call it too -- the base URL is not a secret, and the
- *  endpoints behind it are read-only and redacted by design. */
+/**
+ * The Render-hosted FastAPI. Baked in at BUILD TIME (see
+ * .github/workflows/deploy-pages.yml) since GitHub Pages serves static files
+ * with no server to hold a runtime env var -- Next.js inlines any
+ * NEXT_PUBLIC_ value into the JS bundle at build time regardless of hosting
+ * target, so this has always been "public" in practice; GitHub Pages just
+ * makes that explicit instead of implicit.
+ */
 export const API_BASE = (
   process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000"
 ).replace(/\/$/, "");
 
 /**
- * Every public page is server-rendered with ISR rather than fetched in the
- * browser, for three reasons that all point the same way:
- *   - the backend is a Render FREE instance that cold-starts after 15 minutes
- *     idle, so a client-side fetch would show a spinner for ~30s on the first
- *     visit of the day; a cached server render serves instantly,
- *   - it keeps the API off the critical path for SEO/first paint,
- *   - `revalidate` caps how hard Vercel can hit a free-tier backend no matter
- *     how much traffic the page gets.
- * 300s matches PUBLIC_CACHE_TTL_SECONDS on the API so the two layers do not
- * fight each other.
+ * Every data-driven page in this app is a CLIENT component fetching this
+ * module directly (see the `"use client"` + useEffect pattern in
+ * src/app/page.tsx and friends). That is not a stylistic choice: GitHub
+ * Pages has no server, so there is no request to run a Server Component
+ * against and no ISR to revalidate a cached render. Fetching from the
+ * browser is the only way these pages can show live data at all -- and as a
+ * side effect, the numbers are genuinely live on every visit, not "fresh as
+ * of the last deploy."
  */
-const REVALIDATE_SECONDS = 300;
-
 async function getJSON<T>(path: string, fallback: T): Promise<T> {
   try {
-    const res = await fetch(`${API_BASE}${path}`, {
-      next: { revalidate: REVALIDATE_SECONDS },
-    });
+    const res = await fetch(`${API_BASE}${path}`);
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     return (await res.json()) as T;
   } catch (err) {
     // A marketing page that renders with empty/zero state beats one that
-    // 500s because a free-tier backend was briefly asleep. Every consumer
-    // below is written to handle the empty shape.
+    // throws because a free-tier backend was briefly asleep. Every consumer
+    // is written to handle the empty shape (see the `EMPTY_*` constants).
     console.error(`[mycelium] GET ${path} failed:`, err);
     return fallback;
   }

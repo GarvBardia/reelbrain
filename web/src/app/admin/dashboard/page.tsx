@@ -13,6 +13,15 @@ import {
   RefreshCw,
 } from "lucide-react";
 
+import { getStoredSecret, clearSecret } from "@/lib/admin-auth";
+import {
+  AdminUnauthorized,
+  attachResource,
+  confirmAttach,
+  fetchAdminOverview,
+  fetchAdminScoutQueue,
+  triggerJob,
+} from "@/lib/admin-api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -40,37 +49,56 @@ type AdminScoutItem = {
 
 export default function AdminDashboard() {
   const router = useRouter();
+  const [ready, setReady] = useState(false);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [queue, setQueue] = useState<AdminScoutItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
 
+  // No middleware on a static site to gate this route server-side, so the
+  // check happens on mount instead -- see src/lib/admin-auth.ts.
+  useEffect(() => {
+    if (!getStoredSecret()) {
+      router.replace("/admin?next=/admin/dashboard");
+      return;
+    }
+    setReady(true);
+  }, [router]);
+
   const load = useCallback(async () => {
     setLoading(true);
     setErr("");
     try {
-      const [o, q] = await Promise.all([
-        fetch("/api/admin/overview").then((r) => r.json()),
-        fetch("/api/admin/scout-queue").then((r) => r.json()),
-      ]);
-      if (o.error) throw new Error(o.error);
+      const [o, q] = await Promise.all([fetchAdminOverview(), fetchAdminScoutQueue()]);
       setOverview(o);
       setQueue(q.items ?? []);
     } catch (e) {
+      if (e instanceof AdminUnauthorized) {
+        clearSecret();
+        router.replace("/admin?next=/admin/dashboard");
+        return;
+      }
       setErr(e instanceof Error ? e.message : "Could not load dashboard data.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [router]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (ready) void load();
+  }, [ready, load]);
 
-  async function logout() {
-    await fetch("/api/admin/logout", { method: "POST" });
+  function logout() {
+    clearSecret();
     router.push("/admin");
-    router.refresh();
+  }
+
+  if (!ready) {
+    return (
+      <div className="flex min-h-[50vh] items-center justify-center">
+        <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
+      </div>
+    );
   }
 
   return (
@@ -85,7 +113,7 @@ export default function AdminDashboard() {
             <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
             Refresh
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => void logout()}>
+          <Button variant="ghost" size="sm" onClick={logout}>
             <LogOut className="h-3.5 w-3.5" />
             Sign out
           </Button>
@@ -121,8 +149,8 @@ export default function AdminDashboard() {
         </div>
       )}
 
-      <TriggerPanel />
-      <AttachPanel />
+      <TriggerPanel onUnauthorized={() => { clearSecret(); router.replace("/admin"); }} />
+      <AttachPanel onUnauthorized={() => { clearSecret(); router.replace("/admin"); }} />
 
       <section className="mt-10">
         <h2 className="mb-4 text-lg font-semibold text-slate-900">
@@ -248,7 +276,7 @@ function HealthPanel({ health, loading }: { health?: Record<string, unknown>; lo
   );
 }
 
-function TriggerPanel() {
+function TriggerPanel({ onUnauthorized }: { onUnauthorized: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [result, setResult] = useState<string>("");
 
@@ -256,19 +284,11 @@ function TriggerPanel() {
     setBusy(job);
     setResult("");
     try {
-      const res = await fetch("/api/admin/trigger", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ job }),
-      });
-      const body = await res.json();
-      setResult(
-        res.ok
-          ? `${job}: ${JSON.stringify(body).slice(0, 300)}`
-          : `${job} failed: ${body.error ?? res.status}`,
-      );
-    } catch {
-      setResult(`${job}: could not reach the server.`);
+      const body = await triggerJob(job);
+      setResult(`${job}: ${JSON.stringify(body).slice(0, 300)}`);
+    } catch (e) {
+      if (e instanceof AdminUnauthorized) return onUnauthorized();
+      setResult(`${job}: ${e instanceof Error ? e.message : "request failed"}`);
     } finally {
       setBusy(null);
     }
@@ -313,23 +333,23 @@ function TriggerPanel() {
   );
 }
 
-function AttachPanel() {
+function AttachPanel({ onUnauthorized }: { onUnauthorized: () => void }) {
   const [url, setUrl] = useState("");
   const [hint, setHint] = useState("");
   const [busy, setBusy] = useState(false);
   const [response, setResponse] = useState<any>(null);
 
-  async function send(payload: Record<string, unknown>) {
+  async function send(kind: "attach" | "confirm", shortcode?: string) {
     setBusy(true);
     try {
-      const res = await fetch("/api/admin/attach", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      setResponse(await res.json());
-    } catch {
-      setResponse({ error: "could not reach the server" });
+      const body =
+        kind === "attach"
+          ? await attachResource({ resource_url: url, ...(hint ? { shortcode_or_note: hint } : {}) })
+          : await confirmAttach({ shortcode: shortcode!, resource_url: url });
+      setResponse(body);
+    } catch (e) {
+      if (e instanceof AdminUnauthorized) return onUnauthorized();
+      setResponse({ error: e instanceof Error ? e.message : "request failed" });
     } finally {
       setBusy(false);
     }
@@ -359,12 +379,7 @@ function AttachPanel() {
               placeholder="shortcode or note (optional)"
               className="sm:w-64"
             />
-            <Button
-              disabled={busy || !url}
-              onClick={() =>
-                void send({ resource_url: url, ...(hint ? { shortcode_or_note: hint } : {}) })
-              }
-            >
+            <Button disabled={busy || !url} onClick={() => void send("attach")}>
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
               Attach
             </Button>
@@ -384,13 +399,7 @@ function AttachPanel() {
                       size="sm"
                       variant="outline"
                       disabled={busy}
-                      onClick={() =>
-                        void send({
-                          confirm: true,
-                          resource_url: url,
-                          shortcode: c.shortcode ?? c,
-                        })
-                      }
+                      onClick={() => void send("confirm", c.shortcode ?? c)}
                     >
                       Confirm {c.shortcode ?? c}
                     </Button>
