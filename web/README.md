@@ -38,6 +38,36 @@ files you own and can edit:
 | shadcn/ui     | `src/components/ui/`           | Button, Card, Badge, Input              |
 | Magic UI      | `src/components/magic/`        | BlurFade (scroll reveal), NumberTicker   |
 | Aceternity UI | `src/components/aceternity/`   | Spotlight (used once, on the hero)      |
+| obsidianui.dev | `src/components/obsidian/`    | LightLines (hero background), GlowingEffect (graph card border) |
+
+### obsidianui components: adopted vs rejected
+
+Pulled from `https://obsidianui.dev/r/<name>.json` (the same source
+`shadcn add` reads). `shadcn init` was deliberately not run -- it rewrites
+`globals.css` and `tailwind.config.ts`, both hand-tuned here, and the registry
+JSON contains the identical source.
+
+**Adopted:** `light-lines`, `glowing-effect`.
+
+**Evaluated and rejected**, since these demos are overwhelmingly designed
+against dark backgrounds and this site is white-first:
+
+| Component | Why not |
+|---|---|
+| `sine-wave` | Not a background at all — it lays out an array of **images** (`items: {image}[]`, `next/image`) along a sine curve. Wrong tool for "animated background texture". |
+| `perspective-grid` | Genuinely light-mode-first, but renders `gridSize²` divs (1600 at default) where the existing CSS dot-grid costs **zero** DOM nodes, on a hero already running a canvas simulation. Its 3D vanishing-point look also fights the graph for depth cues. |
+| `mask-cursor-effect` | Reveals a *second* hidden layer through a cursor circle — requires inventing alternate hero content that serves no message. |
+| `eagle-vision` | Hardcodes `white` ring borders (invisible on white) and a `#00ff00` HUD accent; the targeting-reticle aesthetic clashes with "premium and quiet". |
+| `horizontal-scroll` | The category cards exist to show **breadth at a glance**; hiding most of them behind a horizontal gesture works against that. |
+| `interactive-book` | The how-it-works page's vertical "hypha" strand *is* the mycelium metaphor — one continuous growing organism. A paginated book is a discrete, sequential metaphor that fights it, and it needs a cover image that doesn't exist. |
+| `glitch-text` | A deliberately-corrupted look contradicts the product's core claim of honest, reliable extraction. |
+| `flip-text` | Clean and light-safe, but every section already carries exactly one effect. Adding it would break the one-standout-effect-per-section rule for no gain. |
+
+**Note for anyone adding more of these:** `LightLines` paints a full-bleed
+`linear-gradient` container background from its `gradientFrom`/`gradientTo`
+props — their *only* use. Left at the upstream blue defaults it covers the
+entire hero and the white base disappears. They are set to `transparent` at
+the call site for exactly that reason.
 
 ## Local development
 

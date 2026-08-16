@@ -22,17 +22,48 @@ export const API_BASE = (
  * side effect, the numbers are genuinely live on every visit, not "fresh as
  * of the last deploy."
  */
-async function getJSON<T>(path: string, fallback: T): Promise<T> {
+/**
+ * Render's free tier sleeps after ~15 minutes idle and takes ~30s to wake.
+ * The browser's own fetch timeout is minutes long, so without this the page
+ * would sit on a skeleton with no explanation. 45s is comfortably past a
+ * normal cold start but short enough to fail visibly rather than hang.
+ */
+const FETCH_TIMEOUT_MS = 45_000;
+
+/** Thrown so callers can tell "the request failed" apart from "the request
+ *  succeeded and the answer was legitimately empty". Swallowing that
+ *  distinction is what made the landing-page graph silently vanish: a failed
+ *  fetch returned an empty node list, which renders as a blank canvas that
+ *  looks identical to a healthy-but-empty graph. */
+export class ApiError extends Error {
+  constructor(message: string, readonly cause?: unknown) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+async function getJSON<T>(path: string): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
-    const res = await fetch(`${API_BASE}${path}`);
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    const res = await fetch(`${API_BASE}${path}`, { signal: controller.signal });
+    if (!res.ok) throw new ApiError(`${res.status} ${res.statusText}`);
     return (await res.json()) as T;
   } catch (err) {
-    // A marketing page that renders with empty/zero state beats one that
-    // throws because a free-tier backend was briefly asleep. Every consumer
-    // is written to handle the empty shape (see the `EMPTY_*` constants).
     console.error(`[mycelium] GET ${path} failed:`, err);
-    return fallback;
+    if (err instanceof ApiError) throw err;
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new ApiError(
+        "The API did not respond in time. It runs on a free tier that sleeps when idle — this usually clears on a retry.",
+        err,
+      );
+    }
+    // A TypeError here is fetch's opaque network/CORS failure. The browser
+    // deliberately withholds the detail, so the message says what the reader
+    // can actually act on rather than guessing at a cause.
+    throw new ApiError("Could not reach the API. Check your connection and try again.", err);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -58,17 +89,17 @@ export const EMPTY_GRAPH: GraphPayload = {
 };
 
 export function getStats() {
-  return getJSON<Stats>("/api/public/stats", EMPTY_STATS);
+  return getJSON<Stats>("/api/public/stats");
 }
 
-export function getGraph() {
-  return getJSON<GraphPayload>("/api/public/graph", EMPTY_GRAPH);
+export function getGraph(expand?: string) {
+  const qs = expand ? `?expand=${encodeURIComponent(expand)}` : "";
+  return getJSON<GraphPayload>(`/api/public/graph${qs}`);
 }
 
 export function getScoutQueue(limit = 25) {
   return getJSON<{ items: ScoutItem[]; total_reels: number }>(
     `/api/public/scout-queue?limit=${limit}`,
-    { items: [], total_reels: 0 },
   );
 }
 
@@ -84,11 +115,5 @@ export function getReels(params: {
   if (params.min_value && params.min_value > 1) qs.set("min_value", String(params.min_value));
   qs.set("page", String(params.page ?? 1));
   qs.set("page_size", "24");
-  return getJSON<ReelPage>(`/api/public/reels?${qs}`, {
-    items: [],
-    total: 0,
-    page: 1,
-    page_size: 24,
-    total_pages: 1,
-  });
+  return getJSON<ReelPage>(`/api/public/reels?${qs}`);
 }

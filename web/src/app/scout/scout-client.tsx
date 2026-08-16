@@ -4,12 +4,16 @@ import { ExternalLink } from "lucide-react";
 
 import { getScoutQueue } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
+import { ApiErrorState } from "@/components/api-error-state";
 import { BlurFade } from "@/components/magic/blur-fade";
 import { Skeleton } from "@/components/skeleton";
 import { Card, CardContent } from "@/components/ui/card";
 
 export function ScoutClient() {
-  const { data, loading } = useApi(() => getScoutQueue(40), { items: [], total_reels: 0 });
+  const { data, loading, error, retry } = useApi(() => getScoutQueue(40), {
+    items: [],
+    total_reels: 0,
+  });
   const { items, total_reels } = data;
 
   return (
@@ -37,6 +41,8 @@ export function ScoutClient() {
             <Skeleton key={i} className="h-32 w-full rounded-xl" />
           ))}
         </div>
+      ) : error ? (
+        <ApiErrorState message={error} onRetry={retry} className="mt-12" />
       ) : items.length === 0 ? (
         <BlurFade delay={0.1}>
           <div className="mt-12 rounded-2xl border border-dashed border-slate-200 py-20 text-center">

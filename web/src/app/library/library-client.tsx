@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 
 import { EMPTY_STATS, getReels, getStats } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
+import { ApiErrorState } from "@/components/api-error-state";
 import { BlurFade } from "@/components/magic/blur-fade";
 import { ReelCard } from "@/components/reel-card";
 import { LibraryFilters } from "@/components/library-filters";
@@ -23,7 +24,7 @@ export function LibraryClient() {
   const minValue = Number(searchParams.get("min_value") ?? 1) || 1;
 
   const { data: stats } = useApi(getStats, EMPTY_STATS, []);
-  const { data, loading } = useApi(
+  const { data, loading, error, retry } = useApi(
     () => getReels({ q, category, page, min_value: minValue }),
     EMPTY_REELS,
     [q, category, page, minValue],
@@ -68,6 +69,8 @@ export function LibraryClient() {
             <Skeleton key={i} className="h-56 w-full rounded-xl" />
           ))}
         </div>
+      ) : error ? (
+        <ApiErrorState message={error} onRetry={retry} className="mt-16" />
       ) : data.items.length === 0 ? (
         <BlurFade delay={0.1}>
           <div className="mt-16 rounded-2xl border border-dashed border-slate-200 py-20 text-center">

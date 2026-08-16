@@ -3293,3 +3293,89 @@ to know.
 - Not yet deployed. `FRONTEND_DEPLOY.md` has the click-by-click: enable Pages
   (Settings → Pages → Source: GitHub Actions), set `PUBLIC_CORS_ORIGINS` on Render to
   the `github.io` origin, then push (or run the workflow by hand).
+
+---
+
+# Session 2026-08-17 — Mycelium graph: visual overhaul + two real disappearance bugs
+
+## Phase 1 — "the graph disappears": CORS was fixed, but was not the only cause
+
+**CORS confirmed fixed.** `PUBLIC_CORS_ORIGINS` on Render correctly returns
+`access-control-allow-origin: https://garvbardia.github.io`. Verified 12/12 consecutive
+curl fetches (identical 8131B payload, header present every time) and 10/10 in-browser
+`fetch()` calls from an allowed origin (13 nodes / 52 links every run, median 241ms).
+
+But three *further* causes of the same visible symptom were found, two of them live in
+the shipped code and one introduced by this session's own work:
+
+1. **Silent empty fallback (pre-existing).** `getJSON` caught every error and returned
+   `EMPTY_GRAPH`, so a failed fetch produced an empty node list — which renders as a
+   blank canvas *indistinguishable from success*. No error, no retry, no console clue
+   for a visitor. Replaced with a thrown `ApiError`; `useApi` now exposes
+   `{error, retry}` and every consumer renders `<ApiErrorState>` with a visible
+   "Try again" button. Also added a 45s `AbortController` timeout so a sleeping
+   free-tier Render instance fails *visibly* instead of hanging on a skeleton.
+2. **ResizeObserver-only sizing (pre-existing).** The canvas rendered behind
+   `size.width > 0 &&`, and `size` was populated *solely* by ResizeObserver. Reproduced
+   directly: in a browser tab that is not compositing frames, RO never fires at all
+   (measured: 0 callbacks), so the graph stayed permanently blank while the surrounding
+   legend rendered fine — the exact reported symptom, entirely unrelated to CORS. Now
+   measured synchronously in `useLayoutEffect` via `getBoundingClientRect`, with RO
+   *and* a window-resize listener only keeping it current. Any one of the three
+   succeeding draws the graph.
+3. **`createRadialGradient` crash (introduced this session).** The new glassmorphic
+   node renderer called `createRadialGradient` with `node.x/node.y`, which are
+   `undefined` on the first paint before the force simulation's first tick. That API
+   **throws** on non-finite input rather than no-opping, and the throw propagates out
+   of the render loop and kills the canvas entirely. Caught in a live browser console.
+   Guarded with `Number.isFinite` checks in both `paintNode` and `paintLink`.
+
+## Phases 2-3 — visual overhaul (obsidianui.dev as a third component source)
+
+Added `src/components/obsidian/` alongside `magic/` and `aceternity/`, same
+copy-the-source-in model. `shadcn init` deliberately not run: it rewrites `globals.css`
+and `tailwind.config.ts`, both hand-tuned, and the registry JSON is the identical source.
+
+- **Background:** `LightLines`, colours overridden for white (slate-400 lines, indigo
+  travelling lights). **Its `gradientFrom`/`gradientTo` props paint a full-bleed
+  container gradient** — at upstream defaults that covers the whole hero and the white
+  base disappears; set to `transparent`, which is precisely the "demos default to dark
+  mode" trap the brief warned about. Masked to fade out by 55% height.
+- **Graph card:** `GlowingEffect` (`variant="white"`) for a cursor-proximity border
+  glow, over a gradient hairline border and a `bg-white/85 backdrop-blur-xl` frosted
+  panel. Chosen over `glow-border-card`, which hardcodes `bg-neutral-900` and neon
+  presets and wraps content at a fixed aspect ratio.
+- **Nodes:** glassmorphic, composited by hand since canvas has no `backdrop-filter` —
+  outer colour bloom via `shadowBlur`, a translucent radial-gradient body
+  (opaque core → transparent rim), and a specular top-left arc. Verified against real
+  data: **99.6% of painted pixels are semi-transparent** (144 fully-opaque vs 39,122
+  translucent) across **517 distinct colour buckets**.
+- **Edges:** per-link `createLinearGradient` blending the two connected nodes' category
+  colours, replacing flat grey. Weight still drives width, so the co-occurrence signal
+  survives the restyle.
+- **Performance:** worst real case is the largest category expanded — Productivity &
+  Knowledge, 65 reels → **78 nodes**. Full-glow path measured at **0.63ms/frame**
+  (~1600fps headroom). A `GLOW_NODE_BUDGET` of 90 drops to a cheap single-arc path if
+  the corpus ever grows past it.
+- Mobile fallback untouched: `GlowingEffect` is pointer-driven and inert on touch, and
+  the <768px list view is unchanged.
+
+## Phase 4 — evaluated, all four rejected
+
+`horizontal-scroll` (hides the breadth the category cards exist to show),
+`interactive-book` (a paginated metaphor fighting the page's continuous-growth "hypha"),
+`glitch-text` (a corrupted look contradicting the product's honest-extraction claim),
+`flip-text` (clean and light-safe, but every section already carries exactly one effect).
+Rationale table in `web/README.md` so this isn't re-litigated. `perspective-grid` was
+vendored, evaluated, then **deleted** rather than left as dead code — it also emitted a
+Tailwind ambiguity warning.
+
+**1031 passed, 1 xfailed.**
+
+## Verification note
+The browser pane used for testing never composites frames — `requestAnimationFrame`
+fires 0 times, so react-force-graph cannot paint there and screenshots time out. Canvas
+*presence*, sizing, data, error states and console cleanliness were verified live across
+multiple reloads and a fresh tab; the *pixel output* of the paint functions was verified
+by executing them directly against real API data on an offscreen canvas. Stated plainly
+because it is a genuine limit on what was observed rather than inferred.

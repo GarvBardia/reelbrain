@@ -6,9 +6,11 @@ import { ArrowRight, Compass, Layers, Sparkles } from "lucide-react";
 import { EMPTY_GRAPH, EMPTY_STATS, getGraph, getStats } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 import { KnowledgeGraph } from "@/components/knowledge-graph";
+import { ApiErrorState } from "@/components/api-error-state";
 import { BlurFade } from "@/components/magic/blur-fade";
 import { NumberTicker } from "@/components/magic/number-ticker";
 import { Spotlight } from "@/components/aceternity/spotlight";
+import { LightLines } from "@/components/obsidian/light-lines";
 import { Skeleton } from "@/components/skeleton";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -18,13 +20,48 @@ import { Card, CardContent } from "@/components/ui/card";
 // directly from the browser. See src/lib/api.ts.
 export default function LandingPage() {
   const { data: stats } = useApi(getStats, EMPTY_STATS);
-  const { data: graph, loading: graphLoading } = useApi(getGraph, EMPTY_GRAPH);
+  const {
+    data: graph,
+    loading: graphLoading,
+    error: graphError,
+    retry: retryGraph,
+  } = useApi(() => getGraph(), EMPTY_GRAPH);
 
   return (
     <>
       {/* ---------------- HERO + GRAPH ---------------- */}
       <section className="relative overflow-hidden">
-        {/* The single Aceternity spotlight on the entire site. */}
+        {/*
+          Background stack, deliberately three quiet layers rather than one
+          loud one:
+            1. LightLines (obsidianui) -- slow light streaks travelling along
+               near-invisible guide lines. Upstream defaults are white-on-dark
+               and would be invisible here, so the colours are overridden to a
+               faint slate line with an indigo travelling light.
+            2. the existing CSS dot-grid, kept over obsidianui's
+               PerspectiveGrid -- see the note in that component's header: it
+               renders gridSize^2 divs (1600 at default) where this costs zero
+               DOM nodes, and the hero already pays for a canvas simulation.
+            3. the single Aceternity spotlight, unchanged.
+        */}
+        <div className="pointer-events-none absolute inset-0 opacity-70 [mask-image:linear-gradient(to_bottom,black_0%,black_55%,transparent_100%)]">
+          <LightLines
+            linesOpacity={0.22}
+            lightsOpacity={0.55}
+            speedMultiplier={0.4}
+            lineColor="#94a3b8"
+            lightColor="#6366f1"
+            // gradientFrom/To are the component's own full-bleed container
+            // background -- its ONLY use of those two props. Left at the
+            // upstream blue they paint a solid gradient over the entire hero,
+            // which is the exact "demo was designed for dark mode" trap: the
+            // white base disappears under it. Transparent keeps the lines and
+            // the travelling lights while letting the page's own white show
+            // through, which is the whole point of using this on a light UI.
+            gradientFrom="transparent"
+            gradientTo="transparent"
+          />
+        </div>
         <Spotlight className="-top-40 left-0 text-indigo-500 md:-top-20 md:left-60" />
         <div className="pointer-events-none absolute inset-0 bg-dot-grid mask-radial-fade" />
 
@@ -61,10 +98,20 @@ export default function LandingPage() {
             </div>
           </BlurFade>
 
-          {/* THE CENTREPIECE. */}
+          {/* THE CENTREPIECE. Three explicit states -- loading, failed,
+              loaded -- all at the same height so the page never jumps. The
+              failed branch is the fix for the graph silently vanishing: it
+              used to fall through to an empty node list, which renders as a
+              blank canvas indistinguishable from success. */}
           <BlurFade delay={0.15} className="mt-14">
             {graphLoading ? (
-              <Skeleton className="h-[560px] w-full rounded-2xl" />
+              <Skeleton className="h-[560px] w-full rounded-[1.35rem]" />
+            ) : graphError ? (
+              <ApiErrorState
+                message={graphError}
+                onRetry={retryGraph}
+                className="h-[560px]"
+              />
             ) : (
               <KnowledgeGraph initial={graph} />
             )}
