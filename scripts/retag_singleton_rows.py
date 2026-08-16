@@ -142,9 +142,11 @@ def run_retag(
         from app import gemini_pipe
         retag_fn = gemini_pipe.run_topic_retag
 
+    from app.local_llm import OllamaUnavailable
+
     progress = _load(progress_file)
     written = errors = skipped = 0
-    quota_stopped = False
+    quota_stopped = ollama_stopped = False
 
     for i, row in enumerate(rows):
         shortcode = row["shortcode"]
@@ -165,6 +167,15 @@ def run_retag(
             print_fn(f"[{i + 1}/{len(rows)}] {shortcode} -> QUOTA STOP ({str(exc)[:100]}); resume later")
             quota_stopped = True
             break
+        except OllamaUnavailable as exc:
+            # Hard boundary (PROGRESS.md Phase 5): Ollama being down means
+            # every remaining row would fail identically -- stop cleanly
+            # instead of burning through the rest, and NEVER fall back to
+            # Gemini here (this task is local-routed specifically to protect
+            # the Gemini quota).
+            print_fn(f"[{i + 1}/{len(rows)}] {shortcode} -> OLLAMA UNAVAILABLE ({str(exc)[:100]}); resume later")
+            ollama_stopped = True
+            break
         except Exception as exc:  # noqa: BLE001 - retried next run, from is_quota_error re-raise or otherwise
             from app.gemini_pipe import is_quota_error
             if is_quota_error(exc):
@@ -177,7 +188,7 @@ def run_retag(
 
         if new_topics is None:
             errors += 1
-            print_fn(f"[{i + 1}/{len(rows)}] {shortcode} -> DEGRADED (Gemini) — will retry later")
+            print_fn(f"[{i + 1}/{len(rows)}] {shortcode} -> DEGRADED — will retry later")
             continue
 
         try:
@@ -196,9 +207,10 @@ def run_retag(
         print_fn(f"[{i + 1}/{len(rows)}] {shortcode}: {row['current_topics']} -> {new_topics}")
 
     summary = {"written": written, "errors": errors, "skipped": skipped,
-               "quota_stopped": quota_stopped, "total_rows": len(rows)}
+               "quota_stopped": quota_stopped, "ollama_stopped": ollama_stopped,
+               "total_rows": len(rows)}
     print_fn(f"\ndone: {written} written, {errors} errors, {skipped} skipped, "
-             f"quota_stopped={quota_stopped}, of {len(rows)} rows")
+             f"quota_stopped={quota_stopped}, ollama_stopped={ollama_stopped}, of {len(rows)} rows")
     return summary
 
 

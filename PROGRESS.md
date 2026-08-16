@@ -3006,3 +3006,133 @@ quota-appropriate window today) picks up exactly where this left off via
   count drops toward ~40-60 canonical tags with real clustering, not ~191 singletons.
   Not meaningful to run yet at 5/116 rows repaired — would just report the same
   collapsed distribution the diagnosis already established.
+
+**UPDATE 2026-08-16 — this constraint is now gone.** See the session below: local
+Ollama routing means 4 of 5 text-only backlogs (including this exact retag task) no
+longer cost a single Gemini call. `scripts/retag_singleton_rows.py`'s remaining 111
+rows can now be drained in one local run (minutes, not days) instead of waiting on
+~17/day free-tier quota. Not run yet this session -- next session should just run
+`python scripts/retag_singleton_rows.py` (no `--limit`) and expect it to finish.
+
+---
+
+# Session 2026-08-16 — local Ollama provider: the permanent fix for the quota bottleneck
+
+Every session so far had been rationing a ~17-20/day Gemini free-tier budget across six-plus
+backlogs, repeatedly stopping mid-batch on real 429s (2026-08-06, and again this session's own
+Phase 3 taxonomy repair — 5/116 rows before stopping on quota). The user confirmed Ollama +
+llama3.1:8b already installed and working locally (CPU-only AMD laptop, no CUDA, sub-second
+for a trivial reply) and was explicit: **no Gemini billing, ever** -- local is the permanent
+fix, not a stopgap.
+
+## Phase 1 — provider abstraction
+- New `app/local_llm.py`: thin httpx client for Ollama's `/api/generate`. `LOCAL_LLM_MODEL` env
+  var (default `llama3.1:8b`), `LOCAL_LLM_TIMEOUT_SECONDS` (default 120 -- real prompts run
+  longer than the sub-second trivial-reply baseline). Raises `OllamaUnavailable` distinctly on
+  connection-refused only -- a reachable-but-erroring Ollama raises httpx's own exceptions
+  unchanged, so callers can tell "Ollama is down" from "this one call failed."
+- New `app/llm_router.py`: the single choke point deciding Gemini vs local per task.
+  `TASK_PROVIDERS` is the one source of truth for routing. `generate_text(task, prompt,
+  response_schema=None)` routes to `gemini_pipe.generate_content_tracked` (unchanged, still the
+  sole Gemini quota-tracking path) or `local_llm.generate`. `generate_json(task, prompt,
+  schema_cls)` adds ONE retry with a stricter re-prompt on schema-validation failure, shared
+  across every task instead of each call site duplicating its own loop.
+- Verified live before writing any code: Ollama reachable at `localhost:11434`, `llama3.1:8b`
+  installed, plain replies sub-second, `"format": "json"` mode produces syntactically valid
+  JSON (though see Phase 4 -- valid JSON is not the same as good output).
+
+## Phase 2 — routed 5 text-only tasks through the router
+`suggested_action_backfill`/`plain_summary_backfill` (own genai.Client calls) →
+`topic_retag`/`notion_deep_clean_tagging` (own genai.Client calls) → `research_context_web_fetch`
+(`gemini_pipe._call_gemini_webfetch_context`, the LAST-resort fallback in the grounded-search
+chain -- `research_context_grounded`, the first-choice grounded call, stays on Gemini since it
+needs the `google_search` tool Ollama doesn't have). Each kept its existing external contract
+(return type, None-vs-raise-on-failure convention) -- only the underlying "make one call" step
+was swapped for the router. `run_topic_retag`'s own dead `_call_gemini_retag` helper was deleted
+outright rather than left unused.
+
+## Phase 3 — daily_runner.py quota accounting split
+`Step` gained a `local: bool` field alongside `free`. Local steps are never decremented from the
+Gemini `remaining` budget and never gated on `quota_stopped`/the Gemini-429 watcher -- a
+genuinely separate resource. Instead they're capped by a new wall-clock `LOCAL_TIME_BUDGET_SECONDS`
+(default 30 min), checked before each local step runs; `run_backfill`'s in both backfill scripts
+gained a `deadline` param, checked once per row. Ollama going down mid-run sets a run-scoped
+`ollama_down` flag so every OTHER local step skips cleanly instead of each independently
+rediscovering the same outage via a wasted connection-refused attempt. Log line now reads
+`Gemini: X/20 calls used | Local: Y processed (Z min elapsed)`. `scripts/backlog_status.py`
+(the drain-time estimator) got the same split -- local-routed backlogs no longer inflate "how
+many Gemini calls to fully drain."
+
+Verified live end-to-end with `daily_runner.py --dry-run` against the real 225-row corpus:
+`suggested_action`/`notion_deep_clean_tagging`-style steps correctly show `LOCAL (0 Gemini
+calls)` in the plan while `named_entities`/`recover_placeholders` still correctly slice against
+the Gemini budget.
+
+## Phase 4 — honest quality comparison (live, 3 real rows per task, no mocks)
+Ran each local-routed task on real stored Notion content and diffed against the Gemini output
+already on the same row (or, for the web-fetch fallback, assessed groundedness directly against
+real fetched material) -- no Gemini calls spent, since this only reads already-stored Gemini
+output for comparison.
+
+- **plain_summary_backfill — comparable.** All 3 local summaries were accurate, plain-language,
+  occasionally more verbose than Gemini's but substantively correct on the same facts.
+- **topic_retag / notion_deep_clean_tagging — good, arguably the standout.** All 3 rows: local
+  correctly avoided proper nouns as topics (the exact Phase 2 taxonomy-collapse fix from earlier
+  this session) and mostly reused real canonical taxonomy candidates rather than inventing new
+  ones. One row's current (Gemini-era, pre-fix) tags were `['ruflo', 'claude-opus', 'opus']` --
+  all hallucinated proper nouns; local's replacement was `['ai-agents', 'lead-generation',
+  'sales-automation', 'business-operations']`, all real canonical tags. This is the task the
+  whole taxonomy-repair effort needed.
+- **research_context_web_fetch — good after one prompt fix.** Initial run: accurate and
+  grounded on real material, but llama3.1:8b prepended an unwanted "Here are 2-3 sentences
+  about..." preamble the prompt never asked for, and was occasionally inconsistent on
+  borderline-relevant material (said "not found" then continued describing it anyway). Added an
+  explicit "no preamble" line to `_WEBFETCH_CONTEXT_PROMPT` -- re-verified live, preamble gone,
+  output now a clean, grounded 2-3 sentences. The borderline-relevance inconsistency remains a
+  known minor quirk (fails safely toward the material, never fabricates) -- not chased further.
+- **suggested_action_backfill — materially worse, REVERTED to Gemini.** Of 3 real rows: one
+  local answer was flatly wrong (a title about "Playwright CLI with Claude Code" got the reply
+  "Reply to the comment with 'skills'" -- an apparently hallucinated comment-gate keyword with
+  no connection to the actual content); the other two were generic ("Save this for your next
+  agent build", "Install Google Gemini and explore its capabilities") where Gemini's stored
+  answers were specific and directly actionable. Per the explicit instruction not to silently
+  degrade the corpus, `TASK_PROVIDERS["suggested_action_backfill"]` stays `GEMINI` -- the one
+  exception among the five original candidates. `daily_runner.py`'s `suggested_action` step and
+  `scripts/backlog_status.py` were reverted to Gemini-budgeted accordingly.
+
+Not chased further given time: prompt-tuning `suggested_action_backfill` to see if a stricter
+prompt closes the gap (plausible, untried) and a broader sample than 3 rows per task (the
+explicit scope asked for).
+
+## Phase 5 — hard fallback boundary
+`local_llm.OllamaUnavailable` is never caught-and-retried-via-Gemini anywhere in the codebase --
+confirmed by test, not just by inspection: `test_topic_retag_reraises_ollama_unavailable_never_falls_back_to_gemini`
+mocks `gemini_pipe.generate_content_tracked` to fail loudly if called, forces `OllamaUnavailable`
+from the local path, and asserts the Gemini call site was never touched. Every batch script
+(`retag_singleton_rows`, `notion_deep_clean.fix_topics`, both backfill scripts) catches
+`OllamaUnavailable` distinctly from a generic error and stops its whole batch cleanly (same
+resumable-progress-file pattern as a quota stop) rather than looping through every remaining row
+rediscovering the same outage.
+
+**992 passed, 1 xfailed.**
+
+## Routing table (current)
+| Task | Provider | Why |
+|---|---|---|
+| full_extraction, caption_only_extraction, carousel_extraction, recover_placeholders | Gemini | needs real audio/vision input |
+| research_context_grounded | Gemini | needs the `google_search` tool |
+| suggested_action_backfill | Gemini | Phase 4: local was materially worse |
+| plain_summary_backfill | Local | Phase 4: comparable quality |
+| topic_retag | Local | Phase 4: good quality, fixes the taxonomy-collapse problem |
+| notion_deep_clean_tagging | Local | same prompt shape as topic_retag |
+| research_context_web_fetch | Local | Phase 4: good after a prompt fix |
+
+## Still ahead
+- Resume `scripts/retag_singleton_rows.py` (now free/fast via local routing) to finish the 111
+  remaining taxonomy-collapse rows, then re-run Phase 4 of the taxonomy work (Obsidian
+  readability check) once that's done.
+- Optionally revisit `suggested_action_backfill` with a stricter/few-shot local prompt to see if
+  the gap closes -- not attempted this session.
+- `backfill_named_entities` was deliberately left on Gemini (not in the user's five-task list for
+  this session) despite also being text-only -- worth a future look given the same local-routing
+  logic would apply.

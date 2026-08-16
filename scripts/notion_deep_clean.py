@@ -346,20 +346,16 @@ Title: {title}
 
 
 def suggest_tags(title: str, taxonomy: list[str]) -> list[str]:
-    from google import genai
+    """One text-only call, routed via app.llm_router (LOCAL by default -- see
+    TASK_PROVIDERS; PROGRESS.md 2026-08-16 permanent local-LLM fix for the
+    Gemini free-tier quota bottleneck). Raises whatever the provider raises
+    (a Gemini quota error if ever re-routed to Gemini, or
+    app.local_llm.OllamaUnavailable when Ollama isn't running) -- fix_topics'
+    caller-level handling below decides whether to stop the whole run."""
+    from app import llm_router
 
-    from app import gemini_pipe
-
-    client = genai.Client(api_key=gemini_pipe.GEMINI_API_KEY)
-    # gemini_pipe.generate_content_tracked, not client.models.generate_content
-    # directly: it records quota under the RESOLVED model version Google
-    # actually served, not the requested string (see its docstring). A raw
-    # generate_content call here would silently go untracked.
-    response = gemini_pipe.generate_content_tracked(
-        client, gemini_pipe.GEMINI_MODEL,
-        contents=[_TAG_ONLY_PROMPT.format(title=title, taxonomy=", ".join(taxonomy) or "(none yet)")],
-    )
-    raw = (response.text or "").strip()
+    prompt = _TAG_ONLY_PROMPT.format(title=title, taxonomy=", ".join(taxonomy) or "(none yet)")
+    raw = (llm_router.generate_text("notion_deep_clean_tagging", prompt) or "").strip()
     tags = [re.sub(r"[^a-z0-9-]", "", t.strip().lower()) for t in raw.split(",")]
     return [t for t in tags if t][:6]
 
@@ -418,10 +414,20 @@ def fix_topics(rows: list[dict], taxonomy: list[str], limit: Optional[int] = Non
     gemini_logger.addHandler(watcher)
     fixed = []
     quota_stopped = False
+    from app.local_llm import OllamaUnavailable
+
     try:
         for row in rows:
             try:
                 tags = suggest_fn(row["title"], taxonomy)
+            except OllamaUnavailable as exc:
+                # Hard boundary (PROGRESS.md Phase 5): Ollama being down means
+                # every remaining row would fail identically -- stop cleanly
+                # instead of looping through the whole list re-discovering
+                # that, and NEVER fall back to Gemini here.
+                print_fn(f"OLLAMA UNAVAILABLE at {row['shortcode']} — {exc}; re-run to resume")
+                quota_stopped = True
+                break
             except Exception as exc:  # noqa: BLE001
                 if any(m in str(exc) for m in QUOTA_MARKERS) or watcher.quota_hit:
                     print_fn(f"QUOTA STOP at {row['shortcode']} — re-run to resume")

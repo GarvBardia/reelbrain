@@ -153,3 +153,85 @@ def test_backfill_quota_stop_halts_cleanly(tmp_path):
     assert len(attempted) == 1
     assert summary["quota_stopped"] is True
     assert summary["written"] == 0
+
+
+def test_backfill_stops_on_time_budget_deadline(tmp_path):
+    """PROGRESS.md 2026-08-16: this task is now LOCAL-routed and free of
+    Gemini's call-count budget, so daily_runner caps it by elapsed wall-clock
+    time instead -- see the `deadline` param."""
+    import time
+
+    attempted = []
+    summary = bsa.run_backfill(
+        _rows("A1", "NEVER1"), str(tmp_path / "p.json"),
+        suggest_fn=lambda t, c: attempted.append(t) or "x", caption_fn=lambda pid: "",
+        write_fn=lambda pid, a: None, print_fn=lambda m: None,
+        deadline=time.monotonic() - 1,  # already past
+    )
+    assert attempted == []
+    assert summary["time_stopped"] is True
+    assert summary["written"] == 0
+
+
+def test_backfill_ollama_unavailable_halts_cleanly(tmp_path):
+    """Phase 5 hard boundary: Ollama down must stop the batch cleanly, never
+    fall back to Gemini."""
+    from app.local_llm import OllamaUnavailable
+
+    def boom(title, caption):
+        raise OllamaUnavailable("ollama not running")
+
+    attempted = []
+    summary = bsa.run_backfill(
+        _rows("O1", "NEVER1"), str(tmp_path / "p.json"),
+        suggest_fn=lambda t, c: attempted.append(t) or boom(t, c),
+        caption_fn=lambda pid: "", write_fn=lambda pid, a: None, print_fn=lambda m: None,
+    )
+    assert len(attempted) == 1
+    assert summary["ollama_stopped"] is True
+    assert summary["quota_stopped"] is False
+    assert summary["written"] == 0
+
+
+def test_suggest_action_stays_on_gemini():
+    """PROGRESS.md 2026-08-16 Phase 4: unlike its four sibling text-only
+    tasks, this one deliberately stayed on Gemini -- a live 3-row comparison
+    found local (llama3.1:8b) output materially worse (one flatly wrong
+    answer, two generic where Gemini's were specific)."""
+    from app import llm_router
+
+    assert llm_router.provider_for("suggested_action_backfill") == llm_router.GEMINI
+
+
+def test_suggest_action_routes_through_llm_router(monkeypatch):
+    from app import llm_router
+
+    captured = {}
+
+    def _fake_generate_text(task, prompt, **kwargs):
+        captured["task"] = task
+        captured["prompt"] = prompt
+        return "Install X and try it on one clip"
+
+    monkeypatch.setattr(llm_router, "generate_text", _fake_generate_text)
+
+    action = bsa.suggest_action("A title", "A caption")
+
+    assert action == "Install X and try it on one clip"
+    assert captured["task"] == "suggested_action_backfill"
+    assert "A title" in captured["prompt"]
+
+
+def test_suggest_action_reraises_ollama_unavailable_never_falls_back_to_gemini(monkeypatch):
+    """Phase 5 hard boundary: never silently retry via Gemini on a local
+    provider outage."""
+    import pytest
+
+    from app import llm_router
+    from app.local_llm import OllamaUnavailable
+
+    monkeypatch.setattr(llm_router, "generate_text",
+                         lambda task, prompt, **k: (_ for _ in ()).throw(OllamaUnavailable("down")))
+
+    with pytest.raises(OllamaUnavailable):
+        bsa.suggest_action("title", "caption")

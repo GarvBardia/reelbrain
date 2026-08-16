@@ -147,6 +147,29 @@ def test_run_retag_quota_error_halts_cleanly_and_is_resumable(tmp_path):
     assert summary["written"] == 0
 
 
+def test_run_retag_ollama_unavailable_halts_cleanly_never_falls_back_to_gemini(tmp_path):
+    """Phase 5 hard boundary: Ollama down must stop the batch cleanly (every
+    remaining row would fail identically) and must never silently retry via
+    Gemini -- proven by asserting the Gemini call site is never touched."""
+    from app import local_llm
+
+    def _boom(mp, sp, ne, ct, tax):
+        raise local_llm.OllamaUnavailable("ollama not running")
+
+    attempted = []
+    summary = rsr.run_retag(
+        _rows("O1", "NEVER1"), ["fitness"], str(tmp_path / "p.json"),
+        retag_fn=lambda mp, sp, ne, ct, tax: attempted.append(mp) or _boom(mp, sp, ne, ct, tax),
+        body_fn=lambda pid: [], write_fn=lambda pid, t: None,
+        print_fn=lambda m: None,
+    )
+
+    assert len(attempted) == 1  # NEVER1 was never attempted
+    assert summary["ollama_stopped"] is True
+    assert summary["quota_stopped"] is False
+    assert summary["written"] == 0
+
+
 def test_run_retag_write_failure_is_retryable_not_fatal(tmp_path):
     def _boom_write(pid, t):
         raise RuntimeError("notion 500")

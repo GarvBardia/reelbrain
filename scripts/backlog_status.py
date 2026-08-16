@@ -31,14 +31,23 @@ load_dotenv()
 logger = logging.getLogger("reelbrain.backlog_status")
 
 # Estimated Gemini calls per row, matching daily_runner.ROW_COST so the two
-# never disagree about what a backlog costs.
+# never disagree about what a backlog costs. plain_summary is deliberately
+# ABSENT (2026-08-16): it's LOCAL-routed now (Ollama, via app.llm_router), so
+# it costs zero Gemini calls -- see LOCAL_TASKS below. suggested_action
+# stayed on Gemini (Phase 4 quality comparison found local materially worse
+# for this specific task -- see app.llm_router.TASK_PROVIDERS).
 COSTS = {
     "named_entities": 1,
     "recover_placeholders": 3,   # extraction + research per entity
     "suggested_action": 1,
-    "plain_summary": 1,
     "ingest_resources": 1,
 }
+# Text-only backlogs routed to the local Ollama provider instead of Gemini
+# (PROGRESS.md 2026-08-16 permanent local-LLM fix for the free-tier quota
+# bottleneck) -- real work, real wall-clock time, but zero Gemini calls, so
+# they're reported separately from the Gemini-costed total below rather than
+# inflating "how many Gemini calls to fully drain the backlog."
+LOCAL_TASKS = ("plain_summary",)
 FREE_TIER_RPD = 20
 
 
@@ -63,8 +72,10 @@ def collect() -> dict:
         "named_entities": count(lambda: backfill_named_entities.find_rows_needing_entities(pages)),
         "recover_placeholders": count(recover_placeholders.find_placeholder_rows),
         "suggested_action": count(backfill_suggested_action.find_backfill_rows),
-        "plain_summary": count(lambda: backfill_plain_summary.find_rows_needing_plain_summary(pages)),
         "ingest_resources": count(ingest_resources.find_gated_resources),
+    }
+    local_backlogs = {
+        "plain_summary": count(lambda: backfill_plain_summary.find_rows_needing_plain_summary(pages)),
     }
     free_backlog = count(lambda: enforce_topics.find_topicless_rows(pages, include_upgradable=True))
 
@@ -83,6 +94,7 @@ def collect() -> dict:
         "vault_notes": vault_notes,
         "count_drift": len(digests) - vault_notes,
         "backlogs": backlogs,
+        "local_backlogs": local_backlogs,
         "enforce_topics_free": free_backlog,
         "total_gemini_calls": total_calls,
         "markers": dict(marker_counts),
@@ -92,7 +104,7 @@ def collect() -> dict:
 def format_report(data: dict) -> str:
     lines = [f"Notion rows: {data['notion_rows']}   vault notes: {data['vault_notes']}"
              f"   drift: {data['count_drift']:+d}", ""]
-    lines.append("BACKLOG                    PENDING   EST. CALLS")
+    lines.append("BACKLOG (Gemini)            PENDING   EST. CALLS")
     for name, n in data["backlogs"].items():
         if n is None:
             lines.append(f"  {name:24s}   ERROR")
@@ -101,10 +113,17 @@ def format_report(data: dict) -> str:
     free = data["enforce_topics_free"]
     lines.append(f"  {'enforce_topics (FREE)':24s} {free if free is not None else 0:5d}        0")
     lines.append("")
-    lines.append(f"TOTAL to fully drain: ~{data['total_gemini_calls']} Gemini calls")
+    lines.append(f"TOTAL to fully drain (Gemini-costed work only): ~{data['total_gemini_calls']} Gemini calls")
     days = -(-data["total_gemini_calls"] // FREE_TIER_RPD) if data["total_gemini_calls"] else 0
     lines.append(f"  scenario A (free tier, {FREE_TIER_RPD}/day): ~{days} days")
     lines.append("  scenario B (paid tier): not rate-bound — the limit is spend, not days")
+    lines.append("")
+    lines.append("BACKLOG (LOCAL — Ollama, zero Gemini cost)   PENDING")
+    for name, n in data.get("local_backlogs", {}).items():
+        if n is None:
+            lines.append(f"  {name:24s}   ERROR")
+            continue
+        lines.append(f"  {name:24s} {n:5d}   (wall-clock time only, see LOCAL_TIME_BUDGET_SECONDS)")
     if data["markers"]:
         lines.append("")
         lines.append("Fallback-marker rows: " + ", ".join(

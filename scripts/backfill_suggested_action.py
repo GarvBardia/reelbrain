@@ -98,28 +98,27 @@ def _fetch_raw_caption(page_id: str) -> str:
 
 
 def suggest_action(title: str, caption: str) -> str:
-    """One plain-text Gemini call. Raises QuotaExhausted on a 429 so the run
-    stops cleanly instead of burning through remaining rows."""
-    from google import genai
+    """One text-only call, routed via app.llm_router. Stays on GEMINI by
+    design (see TASK_PROVIDERS): a live 3-row comparison against local
+    llama3.1:8b (PROGRESS.md 2026-08-16 Phase 4) found local output
+    materially worse for this specific task -- one answer was flatly wrong,
+    the other two generic where Gemini's were specific -- so this is
+    deliberately NOT local-routed despite being text-only, unlike its four
+    sibling backfill/tagging tasks. Raises QuotaExhausted on a 429 so the run
+    stops cleanly instead of burning through remaining rows; would raise
+    app.local_llm.OllamaUnavailable unchanged if ever re-routed to local --
+    the caller must skip this row, NEVER silently fall back to Gemini."""
+    from app import gemini_pipe, llm_router
 
-    from app import gemini_pipe
-
-    client = genai.Client(api_key=gemini_pipe.GEMINI_API_KEY)
+    prompt = _PROMPT.format(title=title, caption=caption or "(none)")
     try:
-        # gemini_pipe.generate_content_tracked, not client.models.generate_content
-        # directly: it records quota under the RESOLVED model version Google
-        # actually served, not the requested string (see its docstring). A raw
-        # generate_content call here would silently go untracked.
-        response = gemini_pipe.generate_content_tracked(
-            client, gemini_pipe.GEMINI_MODEL,
-            contents=[_PROMPT.format(title=title, caption=caption or "(none)")],
-        )
+        text = llm_router.generate_text("suggested_action_backfill", prompt)
     except Exception as exc:  # noqa: BLE001
         gemini_pipe.note_gemini_failure(exc)
         if any(m in str(exc) for m in QUOTA_MARKERS):
             raise QuotaExhausted(str(exc)) from exc
         raise
-    return (response.text or "").strip().splitlines()[0][:500]
+    return (text or "").strip().splitlines()[0][:500]
 
 
 def write_action(page_id: str, action: str) -> None:
@@ -154,12 +153,28 @@ def run_backfill(
     caption_fn: Callable[[str], str] = _fetch_raw_caption,
     write_fn: Callable[[str, str], None] = write_action,
     print_fn: Callable[[str], None] = print,
+    deadline: Optional[float] = None,
 ) -> dict:
+    """`deadline` (a time.monotonic() value) is for the local-LLM wall-clock
+    time budget (PROGRESS.md 2026-08-16, daily_runner.py) -- this task is now
+    LOCAL-routed and free of Gemini's call-count budget, so daily_runner caps
+    it by elapsed time instead. None (the default) means no cap, for direct/
+    manual runs. Checked once per row so a single slow generation can't blow
+    past it by much."""
+    import time
+
+    from app.local_llm import OllamaUnavailable
+
     progress = load_progress(progress_file)
     written = errors = skipped = 0
-    quota_stopped = False
+    quota_stopped = ollama_stopped = time_stopped = False
 
     for i, fields in enumerate(rows):
+        if deadline is not None and time.monotonic() >= deadline:
+            print_fn(f"[{i + 1}/{len(rows)}] TIME BUDGET STOP — re-run to resume")
+            time_stopped = True
+            break
+
         shortcode = fields["shortcode"]
         if progress.get(shortcode, {}).get("status") == "written":
             skipped += 1
@@ -179,6 +194,14 @@ def run_backfill(
                      f"stopping cleanly, re-run later to resume")
             quota_stopped = True
             break
+        except OllamaUnavailable as exc:
+            # Hard boundary (PROGRESS.md Phase 5): Ollama down means every
+            # remaining row would fail identically -- stop cleanly instead of
+            # looping through the rest, and NEVER fall back to Gemini here.
+            print_fn(f"[{i + 1}/{len(rows)}] {shortcode} -> OLLAMA UNAVAILABLE ({str(exc)[:120]}); "
+                     f"stopping cleanly, re-run later to resume")
+            ollama_stopped = True
+            break
         except Exception as exc:  # noqa: BLE001 - keep going; retried next run
             errors += 1
             print_fn(f"[{i + 1}/{len(rows)}] {shortcode} -> ERROR (retryable next run): {exc}")
@@ -193,9 +216,11 @@ def run_backfill(
         print_fn(f"[{i + 1}/{len(rows)}] {shortcode} -> {action}")
 
     summary = {"written": written, "errors": errors, "skipped": skipped,
-               "quota_stopped": quota_stopped, "total_rows": len(rows)}
+               "quota_stopped": quota_stopped, "ollama_stopped": ollama_stopped,
+               "time_stopped": time_stopped, "total_rows": len(rows)}
     print_fn(f"\ndone: {written} written, {errors} errors, {skipped} skipped, "
-             f"quota_stopped={quota_stopped}, out of {len(rows)} rows")
+             f"quota_stopped={quota_stopped}, ollama_stopped={ollama_stopped}, "
+             f"time_stopped={time_stopped}, out of {len(rows)} rows")
     return summary
 
 

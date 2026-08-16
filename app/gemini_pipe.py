@@ -826,72 +826,60 @@ def _build_retag_prompt(main_point: str, supporting_points: list[str],
     )
 
 
-def _call_gemini_retag(prompt: str) -> str:
-    from google import genai
-    from google.genai import types
-
-    from app.models import TopicRetag
-
-    client = genai.Client(api_key=GEMINI_API_KEY)
-    response = generate_content_tracked(
-        client, GEMINI_MODEL, contents=[prompt],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=TopicRetag,
-        ),
-    )
-    return response.text
-
-
 def run_topic_retag(
     main_point: str, supporting_points: list[str], named_entities: list[str],
     content_type: str, taxonomy: list[str],
 ) -> Optional[list[str]]:
     """Re-picks topic_tags for one already-extracted row against the current
-    taxonomy, text-only, no re-fetch. Returns None on a non-quota failure
-    (schema validation, network) -- caller must treat None as "leave this
-    row's tags untouched, don't overwrite with something unverified." A quota
-    error (429/RESOURCE_EXHAUSTED) is deliberately RE-RAISED rather than
-    swallowed into None, same as scripts/backfill_named_entities.py's
-    QuotaExhausted pattern -- a caller running this in a batch needs to
-    distinguish "this one row failed, keep going" from "the account is out
-    of quota, stop the whole batch now" so it can log a clean, resumable stop
-    instead of burning through every remaining row on rapid-fire 429s.
+    taxonomy, text-only, no re-fetch. Routed via app.llm_router -- LOCAL by
+    default (TASK_PROVIDERS["topic_retag"]; PROGRESS.md 2026-08-16 permanent
+    local-LLM fix for the Gemini free-tier quota bottleneck), which also
+    supplies the validate + retry-with-stricter-prompt behavior every
+    schema-based call here already used, now shared in one place.
+
+    Returns None on a per-row failure (schema validation still bad after
+    llm_router's retry, or another ordinary/transient error) -- caller must
+    treat None as "leave this row's tags untouched, don't overwrite with
+    something unverified." Two failures are deliberately RE-RAISED instead of
+    swallowed into None, because a caller running this in a batch needs to
+    stop the WHOLE batch cleanly rather than burn through every remaining row
+    identically failing:
+      - a Gemini quota error (429/RESOURCE_EXHAUSTED) -- only reachable if
+        this task is ever re-routed to Gemini, same as every other
+        Gemini-tracked call site;
+      - app.local_llm.OllamaUnavailable -- Ollama isn't running. This is the
+        hard boundary from PROGRESS.md Phase 5: the caller must skip the rest
+        of this run, NEVER silently fall back to Gemini and burn the exact
+        quota this local routing exists to protect.
 
     Applies apply_merges + canonicalize_plurals to the result before
     returning, same write-time canonicalization every other write path gets
     (app/notion_writer.py's _build_properties) -- this pass IS the repair for
     exactly that class of drift, so its own output must not reintroduce it."""
+    from app import llm_router, local_llm
     from app.models import TopicRetag
     from app.taxonomy import apply_merges, canonicalize_plurals
 
     prompt = _build_retag_prompt(main_point, supporting_points, named_entities, content_type, taxonomy)
 
-    for attempt in range(2):  # one retry, same convention as run_resource_extraction
-        try:
-            raw = _call_gemini_retag(prompt)
-            result = TopicRetag.model_validate(json.loads(raw))
-            return canonicalize_plurals(apply_merges(result.topic_tags))
-        except (json.JSONDecodeError, ValidationError) as exc:
-            logger.warning(
-                "run_topic_retag: schema validation failed for %r (attempt %d/2): %s",
-                main_point[:60], attempt + 1, exc,
-            )
-        except Exception as exc:  # noqa: BLE001 - network/API errors: no retry budget for these
-            note_gemini_failure(exc)
-            if is_quota_error(exc):
-                raise
-            logger.exception(
-                "run_topic_retag: Gemini call failed for %r (attempt %d/2): %s",
-                main_point[:60], attempt + 1, exc,
-            )
-            break
+    try:
+        result = llm_router.generate_json("topic_retag", prompt, TopicRetag)
+    except (json.JSONDecodeError, ValidationError) as exc:
+        logger.warning(
+            "run_topic_retag: schema validation still failing for %r after retry: %s",
+            main_point[:60], exc,
+        )
+        return None
+    except local_llm.OllamaUnavailable:
+        raise
+    except Exception as exc:  # noqa: BLE001 - network/API errors: no retry budget for these
+        note_gemini_failure(exc)
+        if is_quota_error(exc):
+            raise
+        logger.exception("run_topic_retag: call failed for %r: %s", main_point[:60], exc)
+        return None
 
-    logger.warning(
-        "run_topic_retag: giving up for %r after exhausting attempts — caller must "
-        "leave this row's tags untouched", main_point[:60],
-    )
-    return None
+    return canonicalize_plurals(apply_merges(result.topic_tags))
 
 
 # --- research pass: Gemini call 2, one grounded call PER named entity ---------
@@ -940,6 +928,9 @@ write 2-3 sentences: what is "{entity}" and why does it matter? Restate only wha
 material actually says — never add facts from your own knowledge. If the material does \
 not actually describe "{entity}", answer exactly: not found via search
 
+Answer with the 2-3 sentences only — no preamble like "Here is a description" or \
+"Here are 2-3 sentences", no restating these instructions, no markdown.
+
 --- FETCHED MATERIAL ---
 {material}
 --- END FETCHED MATERIAL ---
@@ -947,19 +938,23 @@ not actually describe "{entity}", answer exactly: not found via search
 
 
 def _call_gemini_webfetch_context(entity: str, material: str, url: str) -> str:
-    """Plain (ungrounded) Gemini call that may ONLY restate genuinely-fetched
-    material — the free fallback when Search grounding isn't available on this
-    API key. The honesty guarantee holds because the material itself was
+    """Plain (ungrounded) call that may ONLY restate genuinely-fetched
+    material -- the free fallback when Search grounding isn't available on
+    this API key. The honesty guarantee holds because the material itself was
     fetched for real (app/web_research.py), so nothing here is unverified
-    model memory presented as verified."""
-    from google import genai
+    model memory presented as verified.
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
-    response = generate_content_tracked(
-        client, GEMINI_MODEL,
-        contents=[_WEBFETCH_CONTEXT_PROMPT.format(entity=entity, material=material, url=url)],
-    )
-    return (response.text or "").strip()
+    Routed via app.llm_router (LOCAL by default -- see TASK_PROVIDERS;
+    PROGRESS.md 2026-08-16 permanent local-LLM fix for the Gemini free-tier
+    quota bottleneck). No local-only wording change needed here: this is
+    already the LAST resort in run_research_context's grounded-then-fallback
+    chain, and that caller already treats any failure here (including
+    app.local_llm.OllamaUnavailable) as "skip this one entity" -- there is no
+    further fallback step after this one to accidentally spend Gemini quota on."""
+    from app import llm_router
+
+    prompt = _WEBFETCH_CONTEXT_PROMPT.format(entity=entity, material=material, url=url)
+    return (llm_router.generate_text("research_context_web_fetch", prompt) or "").strip()
 
 
 def _research_via_web_fetch(entity: str) -> "ResearchContextItem":

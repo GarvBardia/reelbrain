@@ -409,6 +409,56 @@ def test_fix_topics_stops_cleanly_on_quota(monkeypatch):
     assert result["fixed"] == []
 
 
+def test_fix_topics_stops_cleanly_on_ollama_unavailable(monkeypatch):
+    """Phase 5 hard boundary (PROGRESS.md 2026-08-16): Ollama down must stop
+    the whole batch cleanly, never fall back to Gemini."""
+    from app import notion_writer
+    from app.local_llm import OllamaUnavailable
+
+    monkeypatch.setattr(notion_writer, "_client", lambda: type("C", (), {})())
+
+    def boom(title, tax):
+        raise OllamaUnavailable("ollama not running")
+
+    rows = [{"shortcode": "O1", "page_id": "pg-O1", "title": "t"},
+            {"shortcode": "NEVER1", "page_id": "pg-N1", "title": "t"}]
+    attempted = []
+    result = ndc.fix_topics(
+        rows, [],
+        suggest_fn=lambda t, tax: attempted.append(t) or boom(t, tax),
+    )
+    assert attempted == ["t"]  # only the first row attempted
+    assert result["quota_stopped"] is True
+    assert result["fixed"] == []
+
+
+def test_suggest_tags_is_routed_as_a_local_task():
+    """PROGRESS.md 2026-08-16: this is one of the five tasks moved to local
+    Ollama specifically to stop costing Gemini quota."""
+    from app import llm_router
+
+    assert llm_router.provider_for("notion_deep_clean_tagging") == llm_router.LOCAL
+
+
+def test_suggest_tags_routes_through_llm_router(monkeypatch):
+    from app import llm_router
+
+    captured = {}
+
+    def _fake_generate_text(task, prompt, **kwargs):
+        captured["task"] = task
+        captured["prompt"] = prompt
+        return "claude-ai, developer-tools"
+
+    monkeypatch.setattr(llm_router, "generate_text", _fake_generate_text)
+
+    tags = ndc.suggest_tags("Claude MCP servers guide", ["claude-ai"])
+
+    assert tags == ["claude-ai", "developer-tools"]
+    assert captured["task"] == "notion_deep_clean_tagging"
+    assert "Claude MCP servers guide" in captured["prompt"]
+
+
 def test_fix_topics_skips_row_with_no_tags_returned(monkeypatch):
     from app import notion_writer
 

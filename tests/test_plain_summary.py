@@ -191,3 +191,85 @@ def test_backfill_quota_stop_halts_cleanly(tmp_path):
     )
     assert len(attempted) == 1
     assert summary["quota_stopped"] is True and summary["written"] == 0
+
+
+def test_backfill_stops_on_time_budget_deadline(tmp_path):
+    """PROGRESS.md 2026-08-16: this task is now LOCAL-routed and free of
+    Gemini's call-count budget, so daily_runner caps it by elapsed wall-clock
+    time instead -- see the `deadline` param."""
+    import time
+
+    rows = [{"shortcode": "A1", "page_id": "p", "title": "t", "topics": []},
+            {"shortcode": "NEVER1", "page_id": "p", "title": "t", "topics": []}]
+    attempted = []
+    summary = bps.run_backfill(
+        rows, str(tmp_path / "p.json"),
+        summarize_fn=lambda t, tp: attempted.append(t) or "x",
+        write_fn=lambda pid, s: None, print_fn=lambda m: None,
+        deadline=time.monotonic() - 1,  # already past
+    )
+    assert attempted == []
+    assert summary["time_stopped"] is True
+    assert summary["written"] == 0
+
+
+def test_backfill_ollama_unavailable_halts_cleanly(tmp_path):
+    """Phase 5 hard boundary: Ollama down must stop the batch cleanly, never
+    fall back to Gemini."""
+    from app.local_llm import OllamaUnavailable
+
+    def boom(title, topics):
+        raise OllamaUnavailable("ollama not running")
+
+    rows = [{"shortcode": "O1", "page_id": "p", "title": "t", "topics": []},
+            {"shortcode": "NEVER1", "page_id": "p", "title": "t", "topics": []}]
+    attempted = []
+    summary = bps.run_backfill(
+        rows, str(tmp_path / "p.json"),
+        summarize_fn=lambda t, tp: attempted.append(t) or boom(t, tp),
+        write_fn=lambda pid, s: None, print_fn=lambda m: None,
+    )
+    assert len(attempted) == 1
+    assert summary["ollama_stopped"] is True
+    assert summary["quota_stopped"] is False
+    assert summary["written"] == 0
+
+
+def test_summarize_plainly_is_routed_as_a_local_task():
+    """PROGRESS.md 2026-08-16: this is one of the five tasks moved to local
+    Ollama specifically to stop costing Gemini quota."""
+    from app import llm_router
+
+    assert llm_router.provider_for("plain_summary_backfill") == llm_router.LOCAL
+
+
+def test_summarize_plainly_routes_through_llm_router(monkeypatch):
+    from app import llm_router
+
+    captured = {}
+
+    def _fake_generate_text(task, prompt, **kwargs):
+        captured["task"] = task
+        captured["prompt"] = prompt
+        return "It lets you do a thing easily."
+
+    monkeypatch.setattr(llm_router, "generate_text", _fake_generate_text)
+
+    summary = bps.summarize_plainly("A title", ["claude-ai"])
+
+    assert summary == "It lets you do a thing easily."
+    assert captured["task"] == "plain_summary_backfill"
+    assert "A title" in captured["prompt"]
+
+
+def test_summarize_plainly_reraises_ollama_unavailable_never_falls_back_to_gemini(monkeypatch):
+    """Phase 5 hard boundary: never silently retry via Gemini on a local
+    provider outage."""
+    from app import llm_router
+    from app.local_llm import OllamaUnavailable
+
+    monkeypatch.setattr(llm_router, "generate_text",
+                         lambda task, prompt, **k: (_ for _ in ()).throw(OllamaUnavailable("down")))
+
+    with pytest.raises(OllamaUnavailable):
+        bps.summarize_plainly("title", [])

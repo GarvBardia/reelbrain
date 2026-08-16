@@ -394,11 +394,12 @@ def test_resource_extraction_retries_once_on_validation_failure_then_succeeds(mo
 # --- run_topic_retag (2026-08-09 taxonomy-collapse repair pass, scripts/retag_singleton_rows.py) --
 
 def test_topic_retag_produces_canonicalized_tags(monkeypatch):
+    from app import llm_router
     from app.models import TopicRetag
 
     monkeypatch.setattr(
-        gemini_pipe, "_call_gemini_retag",
-        lambda prompt: TopicRetag(topic_tags=["startups", "developer-tools"]).model_dump_json(),
+        llm_router, "generate_text",
+        lambda task, prompt, **k: TopicRetag(topic_tags=["startups", "developer-tools"]).model_dump_json(),
     )
 
     result = gemini_pipe.run_topic_retag(
@@ -408,15 +409,24 @@ def test_topic_retag_produces_canonicalized_tags(monkeypatch):
     assert result == ["startups", "developer-tools"]
 
 
+def test_topic_retag_is_routed_as_a_local_task(monkeypatch):
+    """PROGRESS.md 2026-08-16: this is one of the five tasks moved to local
+    Ollama specifically to stop costing Gemini quota."""
+    from app import llm_router
+
+    assert llm_router.provider_for("topic_retag") == llm_router.LOCAL
+
+
 def test_topic_retag_applies_merges_and_plural_canonicalization(monkeypatch):
     """The model can still answer with a drifted spelling (e.g. "claude" instead
     of "claude-ai", or "startup" instead of "startups") -- this pass IS the
     taxonomy repair, so its own output must not reintroduce that drift."""
+    from app import llm_router
     from app.models import TopicRetag
 
     monkeypatch.setattr(
-        gemini_pipe, "_call_gemini_retag",
-        lambda prompt: TopicRetag(topic_tags=["claude", "startup"]).model_dump_json(),
+        llm_router, "generate_text",
+        lambda task, prompt, **k: TopicRetag(topic_tags=["claude", "startup"]).model_dump_json(),
     )
 
     result = gemini_pipe.run_topic_retag("x", [], [], "insight", taxonomy=[])
@@ -424,11 +434,13 @@ def test_topic_retag_applies_merges_and_plural_canonicalization(monkeypatch):
     assert result == ["claude-ai", "startups"]
 
 
-def test_topic_retag_returns_none_when_gemini_call_fails_non_quota(monkeypatch):
-    def _boom(prompt):
-        raise RuntimeError("gemini 500")
+def test_topic_retag_returns_none_when_call_fails_non_quota(monkeypatch):
+    from app import llm_router
 
-    monkeypatch.setattr(gemini_pipe, "_call_gemini_retag", _boom)
+    def _boom(task, prompt, **k):
+        raise RuntimeError("some ordinary failure")
+
+    monkeypatch.setattr(llm_router, "generate_text", _boom)
 
     result = gemini_pipe.run_topic_retag("x", [], [], "insight", taxonomy=[])
     assert result is None
@@ -437,31 +449,59 @@ def test_topic_retag_returns_none_when_gemini_call_fails_non_quota(monkeypatch):
 def test_topic_retag_reraises_on_quota_error_instead_of_returning_none(monkeypatch):
     """A caller batching this over many rows needs to distinguish 'this one row
     failed' from 'the account is out of quota, stop the whole batch' -- see
-    scripts/retag_singleton_rows.py's QuotaExhausted handling."""
+    scripts/retag_singleton_rows.py's QuotaExhausted handling. Only reachable
+    if this task is ever re-routed to Gemini."""
     import pytest
 
-    def _boom(prompt):
+    from app import llm_router
+
+    def _boom(task, prompt, **k):
         raise RuntimeError("429 RESOURCE_EXHAUSTED")
 
-    monkeypatch.setattr(gemini_pipe, "_call_gemini_retag", _boom)
+    monkeypatch.setattr(llm_router, "generate_text", _boom)
 
     with pytest.raises(RuntimeError, match="429"):
         gemini_pipe.run_topic_retag("x", [], [], "insight", taxonomy=[])
 
 
+def test_topic_retag_reraises_ollama_unavailable_never_falls_back_to_gemini(monkeypatch):
+    """The Phase 5 hard boundary: if Ollama isn't running, this must propagate
+    unchanged so the caller stops cleanly -- it must NEVER be swallowed and
+    silently retried against Gemini, which would burn the exact quota this
+    local routing exists to protect."""
+    import pytest
+
+    from app import llm_router, local_llm
+
+    gemini_calls = []
+    monkeypatch.setattr(gemini_pipe, "generate_content_tracked",
+                         lambda *a, **k: gemini_calls.append(1) or None)
+
+    def _boom(task, prompt, **k):
+        raise local_llm.OllamaUnavailable("ollama not running")
+
+    monkeypatch.setattr(llm_router, "generate_text", _boom)
+
+    with pytest.raises(local_llm.OllamaUnavailable):
+        gemini_pipe.run_topic_retag("x", [], [], "insight", taxonomy=[])
+
+    assert gemini_calls == []  # never fell back to Gemini
+
+
 def test_topic_retag_retries_once_on_validation_failure_then_succeeds(monkeypatch):
+    from app import llm_router
     from app.models import TopicRetag
 
     good = TopicRetag(topic_tags=["fitness"])
     calls = []
 
-    def _flaky(prompt):
+    def _flaky(task, prompt, **k):
         calls.append(prompt)
         if len(calls) == 1:
             return "{not valid json"
         return good.model_dump_json()
 
-    monkeypatch.setattr(gemini_pipe, "_call_gemini_retag", _flaky)
+    monkeypatch.setattr(llm_router, "generate_text", _flaky)
 
     result = gemini_pipe.run_topic_retag("x", [], [], "insight", taxonomy=[])
     assert len(calls) == 2
@@ -630,6 +670,59 @@ def test_run_research_context_caps_at_max_research_entities(monkeypatch):
     entities = [f"Tool{i}" for i in range(10)]
     gemini_pipe.run_research_context(entities)
     assert len(calls) == gemini_pipe.MAX_RESEARCH_ENTITIES
+
+
+def test_webfetch_context_is_routed_as_a_local_task():
+    """PROGRESS.md 2026-08-16: this is one of the five tasks moved to local
+    Ollama specifically to stop costing Gemini quota. The grounded
+    first-choice path (research_context_grounded) stays on Gemini -- it
+    needs the google_search tool Ollama doesn't have."""
+    from app import llm_router
+
+    assert llm_router.provider_for("research_context_web_fetch") == llm_router.LOCAL
+    assert llm_router.provider_for("research_context_grounded") == llm_router.GEMINI
+
+
+def test_webfetch_context_routes_through_llm_router(monkeypatch):
+    from app import llm_router
+
+    captured = {}
+
+    def _fake_generate_text(task, prompt, **kwargs):
+        captured["task"] = task
+        captured["prompt"] = prompt
+        return "Cleanlist.ai is a Chrome extension for scraping contacts."
+
+    monkeypatch.setattr(llm_router, "generate_text", _fake_generate_text)
+
+    text = gemini_pipe._call_gemini_webfetch_context(
+        "Cleanlist.ai", "fetched material about Cleanlist", "https://example.com",
+    )
+
+    assert text == "Cleanlist.ai is a Chrome extension for scraping contacts."
+    assert captured["task"] == "research_context_web_fetch"
+    assert "Cleanlist.ai" in captured["prompt"]
+    assert "fetched material about Cleanlist" in captured["prompt"]
+
+
+def test_webfetch_fallback_failure_from_ollama_unavailable_is_skipped_not_escalated(monkeypatch):
+    """Phase 5 hard boundary: this is already the LAST resort in
+    run_research_context's grounded-then-fallback chain. If Ollama is down,
+    the existing best-effort per-entity handling must just skip this one
+    entity (never raise, never crash the whole batch) -- there is no further
+    step after this one that could accidentally spend Gemini quota, so this
+    is the "clean skip" case, not a "stop everything" case."""
+    from app import llm_router, web_research
+    from app.local_llm import OllamaUnavailable
+
+    monkeypatch.setattr(gemini_pipe, "_call_gemini_research", lambda entity: (_ for _ in ()).throw(RuntimeError("no grounding")))
+    monkeypatch.setattr(web_research, "fetch_context_material", lambda entity: ("some real material", "https://x.com"))
+    monkeypatch.setattr(llm_router, "generate_text",
+                         lambda task, prompt, **k: (_ for _ in ()).throw(OllamaUnavailable("down")))
+
+    result = gemini_pipe.run_research_context(["SomeEntity"])
+
+    assert result == []  # skipped honestly, no crash, never raised out of run_research_context
 
 
 def test_extraction_success_path_populates_research_context(monkeypatch):

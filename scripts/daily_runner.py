@@ -51,6 +51,7 @@ import argparse
 import logging
 import os
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -71,15 +72,29 @@ LOG_FILE = "daily_runner.log"
 DAILY_GEMINI_BUDGET = int(os.environ.get("DAILY_GEMINI_BUDGET", "20"))
 QUOTA_MARKERS = ("429", "RESOURCE_EXHAUSTED")
 
+# PROGRESS.md 2026-08-16: local-LLM (Ollama) steps are a genuinely separate,
+# free, effectively-unlimited resource from the Gemini call budget above --
+# they must never be counted against DAILY_GEMINI_BUDGET or gated on a Gemini
+# 429. But each call is real wall-clock time (~10-60s+ on this CPU-only
+# machine), so an unbounded local backlog could otherwise run for hours in one
+# pass. Capped by elapsed time instead of a call count; whatever's left when
+# the cap hits is picked up resumably next run, same pattern as every other
+# stop condition here.
+LOCAL_TIME_BUDGET_SECONDS = int(os.environ.get("LOCAL_TIME_BUDGET_SECONDS", str(30 * 60)))
+
 # Estimated Gemini calls PER ROW, used to slice each step's work to the
 # remaining budget. Deliberately explicit rather than assuming 1 everywhere:
 # a recovery row runs an extraction AND up to MAX_RESEARCH_ENTITIES research
 # calls, so treating it as 1 would blow through the day's quota in two rows.
+# plain_summary is deliberately ABSENT here (2026-08-16): it's LOCAL-routed
+# now, so it no longer costs anything from this budget at all -- see the
+# `local` Step field and LOCAL_TIME_BUDGET_SECONDS instead.
+# suggested_action stayed on Gemini (Phase 4 quality comparison found local
+# materially worse for this specific task) so it keeps a normal cost entry.
 ROW_COST = {
     "named_entities": 1,
     "recover_placeholders": 3,
     "suggested_action": 1,
-    "plain_summary": 1,
     "ingest_resources": 1,
 }
 
@@ -106,13 +121,23 @@ class _QuotaWatcher(logging.Handler):
 class Step:
     """One unit of daily work.
 
-    free=True means it makes ZERO Gemini calls, so it is never budgeted and
-    runs even after quota is exhausted.
+    free=True means it makes ZERO Gemini calls (derives everything from data
+    already on the row), so it is never budgeted and runs even after quota is
+    exhausted.
+
+    local=True means it's routed to the local Ollama provider (see
+    app.llm_router.TASK_PROVIDERS) instead of Gemini -- also never counted
+    against the Gemini budget and never gated on a Gemini 429, but unlike
+    `free` it isn't free of COST entirely: it costs real wall-clock time, so
+    it's capped by LOCAL_TIME_BUDGET_SECONDS instead of a call count. `run`
+    receives a third argument, a `deadline` (time.monotonic() value, or None
+    when uncapped) that the underlying script checks per-row.
     """
     name: str
     find_pending: Callable[[], list]
-    run: Callable[[list, bool], dict]
+    run: Callable[[list, bool, Optional[float]], dict]
     free: bool = False
+    local: bool = False
     cost_per_row: int = 1
     # filled in during the run
     pending_before: int = 0
@@ -153,13 +178,15 @@ def _calls_used(step: Step, result: dict) -> int:
 def run_day(
     steps: list[Step],
     budget: int = DAILY_GEMINI_BUDGET,
+    local_time_budget_seconds: int = LOCAL_TIME_BUDGET_SECONDS,
     dry_run: bool = False,
     print_fn: Callable[[str], None] = print,
 ) -> dict:
     """Execute the day's pass. Returns a structured summary for the log.
 
     Pure orchestration: every step is injected, so this is fully testable
-    without touching Notion, Gemini, or the clock.
+    without touching Notion, Gemini, Ollama, or the real clock (dry_run skips
+    the local deadline entirely, same as it skips the Gemini budget).
     """
     watcher = _QuotaWatcher()
     gemini_logger = logging.getLogger("reelbrain.gemini")
@@ -167,6 +194,9 @@ def run_day(
 
     remaining = budget
     quota_stopped = False
+    ollama_down = False
+    local_start = time.monotonic()
+    local_deadline = local_start + local_time_budget_seconds
     try:
         for step in steps:
             try:
@@ -185,9 +215,34 @@ def run_day(
                 # Never budgeted, and deliberately NOT skipped when quota is
                 # gone -- this is the one thing that still makes progress on
                 # an exhausted day.
-                step.result = step.run(pending, dry_run)
+                step.result = step.run(pending, dry_run, None)
                 step.processed = len(pending)
                 step.ran = True
+                continue
+
+            if step.local:
+                # A genuinely separate resource from the Gemini budget above
+                # (PROGRESS.md 2026-08-16): never gated on quota_stopped or
+                # watcher.quota_hit, never decremented from `remaining`.
+                # Capped by wall-clock time instead of a call count.
+                if ollama_down:
+                    step.note = "skipped — Ollama unavailable, detected earlier this run"
+                    continue
+                if not dry_run and time.monotonic() >= local_deadline:
+                    step.note = "skipped — local time budget spent by higher-priority local work"
+                    continue
+                step.result = step.run(pending, dry_run, None if dry_run else local_deadline)
+                step.processed = (
+                    len(pending) if dry_run else _calls_used(step, step.result)
+                )
+                step.ran = True
+                if step.result.get("ollama_stopped"):
+                    # Ollama being down affects every local step identically
+                    # (PROGRESS.md Phase 5) -- don't let each remaining local
+                    # step waste a connection-refused attempt rediscovering
+                    # the same thing.
+                    ollama_down = True
+                    step.note = "stopped on Ollama unavailable"
                 continue
 
             if quota_stopped or watcher.quota_hit:
@@ -199,7 +254,7 @@ def run_day(
 
             allowance = max(1, remaining // step.cost_per_row)
             slice_ = pending[:allowance]
-            step.result = step.run(slice_, dry_run)
+            step.result = step.run(slice_, dry_run, None)
             step.processed = len(slice_)
             step.ran = True
 
@@ -213,6 +268,11 @@ def run_day(
     finally:
         gemini_logger.removeHandler(watcher)
 
+    local_elapsed_seconds = 0.0 if dry_run else (time.monotonic() - local_start)
+    local_processed = sum(
+        _calls_used(step, step.result) for step in steps if step.local and step.ran and not dry_run
+    )
+
     return {
         "budget": budget,
         "remaining": max(remaining, 0),
@@ -220,6 +280,8 @@ def run_day(
         "quota_stopped": quota_stopped or watcher.quota_hit,
         "steps": steps,
         "dry_run": dry_run,
+        "local_processed": local_processed,
+        "local_elapsed_seconds": local_elapsed_seconds,
     }
 
 
@@ -243,12 +305,13 @@ def format_log_paragraph(summary: dict, named_entities_remaining: Optional[int],
         elif step.note:
             pending_bits.append(f"{step.name}: {step.pending_before} pending — {step.note}")
 
+    local_minutes = summary.get("local_elapsed_seconds", 0.0) / 60
     parts = [
         f"[{stamp}] {mode} pass (model {model}). "
         f"Ran: {', '.join(ran_bits) if ran_bits else 'nothing (no pending work)'}. "
-        f"Quota: {summary['used']}/{summary['budget']} calls used"
+        f"Gemini: {summary['used']}/{summary['budget']} calls used"
         + (f", STOPPED on a 429 (model {model} exhausted)" if summary["quota_stopped"] else "")
-        + "."
+        + f" | Local: {summary.get('local_processed', 0)} processed ({local_minutes:.1f} min elapsed)."
     ]
     if pending_bits:
         parts.append("Still pending — " + "; ".join(pending_bits) + ".")
@@ -284,6 +347,11 @@ def format_dry_run_plan(summary: dict) -> str:
             continue
         if pending == 0:
             lines.append(f"  • {step.name}: nothing pending")
+            continue
+        if step.local:
+            lines.append(f"  • {step.name}: {pending} pending, LOCAL "
+                         f"(0 Gemini calls — runs on Ollama, capped by "
+                         f"LOCAL_TIME_BUDGET_SECONDS, not the Gemini budget)")
             continue
         if remaining <= 0:
             lines.append(f"  • {step.name}: {pending} pending, ~{pending * step.cost_per_row} "
@@ -328,14 +396,14 @@ def build_steps() -> list[Step]:
             name="named_entities",
             cost_per_row=ROW_COST["named_entities"],
             find_pending=lambda: backfill_named_entities.find_rows_needing_entities(_pages()),
-            run=lambda rows, dry: backfill_named_entities.run_backfill(
+            run=lambda rows, dry, deadline: backfill_named_entities.run_backfill(
                 rows, backfill_named_entities.DEFAULT_PROGRESS_FILE, dry_run=dry),
         ),
         Step(
             name="recover_placeholders",
             cost_per_row=ROW_COST["recover_placeholders"],
             find_pending=recover_placeholders.find_placeholder_rows,
-            run=lambda rows, dry: recover_placeholders.run_worker(
+            run=lambda rows, dry, deadline: recover_placeholders.run_worker(
                 rows, recover_placeholders.DEFAULT_PROGRESS_FILE, dry_run=dry),
         ),
         Step(
@@ -343,27 +411,35 @@ def build_steps() -> list[Step]:
             free=True,
             find_pending=lambda: enforce_topics.find_topicless_rows(
                 _pages(), include_upgradable=True),
-            run=lambda rows, dry: enforce_topics.run_enforce(rows, dry_run=dry),
+            run=lambda rows, dry, deadline: enforce_topics.run_enforce(rows, dry_run=dry),
         ),
         Step(
+            # STAYS ON GEMINI (PROGRESS.md 2026-08-16 Phase 4): a live 3-row
+            # comparison found local (llama3.1:8b) output materially worse
+            # for this task -- one flatly wrong answer, two generic where
+            # Gemini's were specific. See app.llm_router.TASK_PROVIDERS.
             name="suggested_action",
             cost_per_row=ROW_COST["suggested_action"],
             find_pending=backfill_suggested_action.find_backfill_rows,
-            run=lambda rows, dry: backfill_suggested_action.run_backfill(
+            run=lambda rows, dry, deadline: backfill_suggested_action.run_backfill(
                 rows, backfill_suggested_action.DEFAULT_PROGRESS_FILE, dry_run=dry),
         ),
         Step(
+            # LOCAL (PROGRESS.md 2026-08-16): text-only, already-stored
+            # content -- routed to Ollama via app.llm_router, so this no
+            # longer costs a Gemini call. Capped by LOCAL_TIME_BUDGET_SECONDS
+            # instead, via the deadline passed through to run_backfill.
             name="plain_summary",
-            cost_per_row=ROW_COST["plain_summary"],
+            local=True,
             find_pending=lambda: backfill_plain_summary.find_rows_needing_plain_summary(_pages()),
-            run=lambda rows, dry: backfill_plain_summary.run_backfill(
-                rows, backfill_plain_summary.DEFAULT_PROGRESS_FILE, dry_run=dry),
+            run=lambda rows, dry, deadline: backfill_plain_summary.run_backfill(
+                rows, backfill_plain_summary.DEFAULT_PROGRESS_FILE, dry_run=dry, deadline=deadline),
         ),
         Step(
             name="ingest_resources",
             cost_per_row=ROW_COST["ingest_resources"],
             find_pending=ingest_resources.find_gated_resources,
-            run=lambda rows, dry: ingest_resources.run_ingest(
+            run=lambda rows, dry, deadline: ingest_resources.run_ingest(
                 rows, Path(obsidian_sync.VAULT_PATH),
                 Path(ingest_resources.DEFAULT_PROGRESS_FILE), dry_run=dry,
                 taxonomy=store.get_taxonomy(),
@@ -395,8 +471,11 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true",
                         help="list what each step WOULD do; makes no Gemini calls and no writes")
     parser.add_argument("--budget", type=int, default=None,
-                        help="override the day's call budget; default is the TRUE "
+                        help="override the day's Gemini call budget; default is the TRUE "
                              "remaining quota for the configured model (gemini_quota)")
+    parser.add_argument("--local-time-budget", type=int, default=LOCAL_TIME_BUDGET_SECONDS,
+                        help="seconds of wall-clock time to spend on LOCAL "
+                             f"(Ollama-routed) steps this pass, default {LOCAL_TIME_BUDGET_SECONDS}")
     parser.add_argument("--log-file", default=LOG_FILE)
     args = parser.parse_args()
 
@@ -412,10 +491,11 @@ def main() -> None:
         budget = gemini_quota.remaining_today(model, limit=DAILY_GEMINI_BUDGET)
 
     print(f"daily runner — model {model}, budget {budget} Gemini calls "
-          f"(true remaining today)"
+          f"(true remaining today), local time budget {args.local_time_budget}s"
           f"{' (DRY-RUN)' if args.dry_run else ''}\n")
 
-    summary = run_day(build_steps(), budget=budget, dry_run=args.dry_run)
+    summary = run_day(build_steps(), budget=budget,
+                       local_time_budget_seconds=args.local_time_budget, dry_run=args.dry_run)
     paragraph = format_log_paragraph(summary, count_named_entities_remaining(), model=model)
 
     print("\n" + "=" * 70)

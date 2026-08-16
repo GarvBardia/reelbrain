@@ -5,13 +5,14 @@ import logging
 from scripts import daily_runner as dr
 
 
-def _step(name, pending=5, result=None, free=False, cost=1, calls=None):
-    """A Step whose run() records that it ran and returns a canned result."""
+def _step(name, pending=5, result=None, free=False, local=False, cost=1, calls=None):
+    """A Step whose run() records that it ran and returns a canned result.
+    `calls` records (name, num_rows, dry_run, deadline) per invocation."""
     calls = calls if calls is not None else []
     return dr.Step(
-        name=name, free=free, cost_per_row=cost,
+        name=name, free=free, local=local, cost_per_row=cost,
         find_pending=lambda: [{"i": i} for i in range(pending)],
-        run=lambda rows, dry: (calls.append((name, len(rows), dry))
+        run=lambda rows, dry, deadline: (calls.append((name, len(rows), dry, deadline))
                                or (result if result is not None else {"written": len(rows)})),
     ), calls
 
@@ -23,7 +24,7 @@ def test_steps_run_in_priority_order():
     steps = []
     for name in ("named_entities", "recover", "suggested", "plain"):
         s, _ = _step(name, pending=1)
-        s.run = (lambda n: lambda rows, dry: (order.append(n) or {"written": 1}))(name)
+        s.run = (lambda n: lambda rows, dry, deadline: (order.append(n) or {"written": 1}))(name)
         steps.append(s)
     dr.run_day(steps, budget=100, print_fn=lambda m: None)
     assert order == ["named_entities", "recover", "suggested", "plain"]
@@ -108,12 +109,114 @@ def test_paid_steps_after_a_quota_stop_are_skipped():
     assert "quota already exhausted" in later.note
 
 
+# --- local (Ollama-routed) steps -- PROGRESS.md 2026-08-16 -----------------------------
+
+def test_local_step_is_never_budgeted_from_gemini():
+    local, local_calls = _step("suggested_action", pending=50, local=True, result={"written": 50})
+    summary = dr.run_day([local], budget=5, print_fn=lambda m: None)
+    assert local_calls[0][1] == 50        # ALL rows, not sliced to Gemini budget
+    assert summary["used"] == 0           # and costs nothing from it
+
+
+def test_local_step_runs_even_after_gemini_quota_is_exhausted():
+    """The whole point: local is a genuinely separate resource, so a
+    Gemini-dead day still makes progress on local-routed backlogs."""
+    burner, _ = _step("named_entities", pending=5, result={"written": 1, "quota_stopped": True})
+    local, local_calls = _step("suggested_action", pending=7, local=True, result={"written": 7})
+    summary = dr.run_day([burner, local], budget=20, print_fn=lambda m: None)
+    assert summary["quota_stopped"] is True
+    assert local_calls[0][1] == 7          # ran anyway
+
+
+def test_local_step_receives_the_deadline():
+    local, local_calls = _step("suggested_action", pending=3, local=True)
+    dr.run_day([local], budget=20, local_time_budget_seconds=900, print_fn=lambda m: None)
+    assert local_calls[0][3] is not None   # a real deadline, not None
+
+
+def test_local_step_gets_no_deadline_on_dry_run():
+    local, local_calls = _step("suggested_action", pending=3, local=True)
+    dr.run_day([local], budget=20, dry_run=True, print_fn=lambda m: None)
+    assert local_calls[0][3] is None
+
+
+def test_local_time_budget_exhausted_skips_remaining_local_steps():
+    """Once the wall-clock local budget is spent, further local steps are
+    skipped (resumable next run) -- they are NOT gated on Gemini quota, but
+    they ARE gated on their own separate time budget."""
+    first, first_calls = _step("suggested_action", pending=1, local=True)
+    second, second_calls = _step("plain_summary", pending=1, local=True)
+    # A budget of 0 seconds means the deadline is already in the past by the
+    # time the second local step is reached.
+    summary = dr.run_day([first, second], budget=20, local_time_budget_seconds=0,
+                          print_fn=lambda m: None)
+    assert first_calls == []      # even the first is already past deadline
+    assert second_calls == []
+    assert "local time budget" in second.note
+    assert summary["quota_stopped"] is False  # this is NOT a quota stop
+
+
+def test_local_step_processed_count_uses_spent_keys_not_full_pending():
+    """`processed` (and the log's Local: N figure) reflects rows the step
+    actually reports acting on, not the full pending count -- matters once a
+    local step's own deadline check stops it partway through its list."""
+    local, _ = _step("suggested_action", pending=10, local=True,
+                      result={"written": 4, "errors": 1})
+    summary = dr.run_day([local], budget=20, print_fn=lambda m: None)
+    assert local.processed == 5          # written + errors, not the 10 pending
+    assert summary["local_processed"] == 5
+
+
+def test_local_step_dry_run_reports_full_pending_as_processed():
+    local, _ = _step("suggested_action", pending=6, local=True)
+    dr.run_day([local], budget=20, dry_run=True, print_fn=lambda m: None)
+    assert local.processed == 6
+
+
+def test_local_processed_excluded_from_gemini_used_count():
+    local, _ = _step("suggested_action", pending=10, local=True, result={"written": 10})
+    summary = dr.run_day([local], budget=20, print_fn=lambda m: None)
+    assert summary["used"] == 0
+    assert summary["local_processed"] == 10
+
+
+def test_format_log_paragraph_shows_gemini_and_local_split():
+    gemini_step, _ = _step("named_entities", pending=3, result={"written": 3})
+    local_step, _ = _step("suggested_action", pending=4, local=True, result={"written": 4})
+    summary = dr.run_day([gemini_step, local_step], budget=20, print_fn=lambda m: None)
+    line = dr.format_log_paragraph(summary, named_entities_remaining=0, model="local-test-model")
+    assert "Gemini: 3/20 calls used" in line
+    assert "Local: 4 processed" in line
+    assert "min elapsed)" in line
+
+
+def test_ollama_down_in_one_local_step_skips_remaining_local_steps():
+    """Phase 5: Ollama being down affects every local step identically --
+    don't waste a connection-refused attempt on each remaining one."""
+    first, first_calls = _step("suggested_action", pending=1, local=True,
+                                result={"written": 0, "ollama_stopped": True})
+    second, second_calls = _step("plain_summary", pending=1, local=True)
+    summary = dr.run_day([first, second], budget=20, print_fn=lambda m: None)
+    assert len(first_calls) == 1     # first was attempted
+    assert second_calls == []        # second was skipped, never attempted
+    assert "Ollama unavailable" in second.note
+    assert summary["quota_stopped"] is False  # this is NOT a quota stop
+
+
+def test_dry_run_plan_shows_local_step_at_zero_gemini_cost():
+    local, _ = _step("suggested_action", pending=9, local=True)
+    summary = dr.run_day([local], budget=20, dry_run=True, print_fn=lambda m: None)
+    plan = dr.format_dry_run_plan(summary)
+    assert "9 pending, LOCAL" in plan
+    assert "0 Gemini calls" in plan
+
+
 # --- quota detection -------------------------------------------------------------------
 
 def test_quota_detected_from_the_gemini_logger_even_without_self_report():
     """ingest_resources does NOT return quota_stopped — it reports 'degraded'.
     Watching the reelbrain.gemini logger catches it anyway."""
-    def _run(rows, dry):
+    def _run(rows, dry, deadline):
         logging.getLogger("reelbrain.gemini").warning("call failed: 429 RESOURCE_EXHAUSTED")
         return {"written": 0, "degraded": ["x"]}
 
@@ -125,7 +228,7 @@ def test_quota_detected_from_the_gemini_logger_even_without_self_report():
 
 
 def test_watcher_ignores_non_quota_errors():
-    def _run(rows, dry):
+    def _run(rows, dry, deadline):
         logging.getLogger("reelbrain.gemini").warning("call failed: 503 service unavailable")
         return {"written": 1}
 
@@ -142,7 +245,7 @@ def test_a_failing_pending_lookup_does_not_sink_the_day():
     def _boom():
         raise RuntimeError("notion down")
 
-    broken = dr.Step(name="broken", find_pending=_boom, run=lambda rows, dry: {})
+    broken = dr.Step(name="broken", find_pending=_boom, run=lambda rows, dry, deadline: {})
     healthy, healthy_calls = _step("healthy", pending=2)
     dr.run_day([broken, healthy], budget=20, print_fn=lambda m: None)
     assert healthy_calls[0][1] == 2

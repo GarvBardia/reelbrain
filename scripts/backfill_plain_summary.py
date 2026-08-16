@@ -85,26 +85,23 @@ def find_rows_needing_plain_summary(pages: list[dict]) -> list[dict]:
 
 
 def summarize_plainly(title: str, topics: list[str]) -> str:
-    from google import genai
+    """One text-only call, routed via app.llm_router (LOCAL by default -- see
+    TASK_PROVIDERS; PROGRESS.md 2026-08-16 permanent local-LLM fix for the
+    Gemini free-tier quota bottleneck). Raises QuotaExhausted on a Gemini 429
+    (only reachable if this task is ever re-routed to Gemini); raises
+    app.local_llm.OllamaUnavailable unchanged when Ollama isn't running --
+    the caller must skip this row, NEVER silently fall back to Gemini."""
+    from app import gemini_pipe, llm_router
 
-    from app import gemini_pipe
-
-    client = genai.Client(api_key=gemini_pipe.GEMINI_API_KEY)
+    prompt = _PROMPT.format(title=title, topics=", ".join(topics) or "(none)")
     try:
-        # gemini_pipe.generate_content_tracked, not client.models.generate_content
-        # directly: it records quota under the RESOLVED model version Google
-        # actually served, not the requested string (see its docstring). A raw
-        # generate_content call here would silently go untracked.
-        response = gemini_pipe.generate_content_tracked(
-            client, gemini_pipe.GEMINI_MODEL,
-            contents=[_PROMPT.format(title=title, topics=", ".join(topics) or "(none)")],
-        )
+        text = llm_router.generate_text("plain_summary_backfill", prompt)
     except Exception as exc:  # noqa: BLE001
         gemini_pipe.note_gemini_failure(exc)
         if any(m in str(exc) for m in QUOTA_MARKERS):
             raise QuotaExhausted(str(exc)) from exc
         raise
-    return " ".join((response.text or "").strip().split())[:600]
+    return " ".join((text or "").strip().split())[:600]
 
 
 def write_plain_summary(page_id: str, text: str) -> None:
@@ -140,12 +137,27 @@ def run_backfill(
     summarize_fn: Callable[[str, list], str] = summarize_plainly,
     write_fn: Callable[[str, str], None] = write_plain_summary,
     print_fn: Callable[[str], None] = print,
+    deadline: Optional[float] = None,
 ) -> dict:
+    """`deadline` (a time.monotonic() value) is for the local-LLM wall-clock
+    time budget (PROGRESS.md 2026-08-16, daily_runner.py) -- this task is now
+    LOCAL-routed and free of Gemini's call-count budget, so daily_runner caps
+    it by elapsed time instead. None (the default) means no cap, for direct/
+    manual runs."""
+    import time
+
+    from app.local_llm import OllamaUnavailable
+
     progress = _load_progress(progress_file)
     written = errors = skipped = 0
-    quota_stopped = False
+    quota_stopped = ollama_stopped = time_stopped = False
 
     for i, row in enumerate(rows):
+        if deadline is not None and time.monotonic() >= deadline:
+            print_fn(f"[{i + 1}/{len(rows)}] TIME BUDGET STOP — re-run to resume")
+            time_stopped = True
+            break
+
         shortcode = row["shortcode"]
         if progress.get(shortcode, {}).get("status") == "written":
             skipped += 1
@@ -162,6 +174,13 @@ def run_backfill(
             print_fn(f"[{i + 1}/{len(rows)}] {shortcode} -> QUOTA STOP ({str(exc)[:110]}); resume later")
             quota_stopped = True
             break
+        except OllamaUnavailable as exc:
+            # Hard boundary (PROGRESS.md Phase 5): Ollama down means every
+            # remaining row would fail identically -- stop cleanly instead of
+            # looping through the rest, and NEVER fall back to Gemini here.
+            print_fn(f"[{i + 1}/{len(rows)}] {shortcode} -> OLLAMA UNAVAILABLE ({str(exc)[:110]}); resume later")
+            ollama_stopped = True
+            break
         except Exception as exc:  # noqa: BLE001 - retried on the next run
             errors += 1
             print_fn(f"[{i + 1}/{len(rows)}] {shortcode} -> ERROR (retryable): {exc}")
@@ -174,9 +193,11 @@ def run_backfill(
         print_fn(f"[{i + 1}/{len(rows)}] {shortcode} -> {text[:90]}")
 
     summary = {"written": written, "errors": errors, "skipped": skipped,
-               "quota_stopped": quota_stopped, "total_rows": len(rows)}
+               "quota_stopped": quota_stopped, "ollama_stopped": ollama_stopped,
+               "time_stopped": time_stopped, "total_rows": len(rows)}
     print_fn(f"\ndone: {written} written, {errors} errors, {skipped} skipped, "
-             f"quota_stopped={quota_stopped}, of {len(rows)} rows")
+             f"quota_stopped={quota_stopped}, ollama_stopped={ollama_stopped}, "
+             f"time_stopped={time_stopped}, of {len(rows)} rows")
     return summary
 
 
