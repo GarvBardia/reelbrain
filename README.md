@@ -1,18 +1,47 @@
-# ReelBrain
+# Mycelium
 
-Instagram Reel → Notion knowledge-base capture pipeline, ₹0/month. Share a reel from the
-iOS share sheet → backend fetches it (yt-dlp + burner cookies), one Gemini free-tier call
-transcribes + extracts structured takeaways, and a Notion page appears with the main
-point, steps, quotes, transcript, topic tags, related-saves links, and comment-gate
-handling. Notion is the whole UI. Design docs: `BUILD_SPEC.md`, `CLAUDE.md`,
-`DATA_SCHEMA.md`, `OPEN_QUESTIONS.md`.
+**Mycelium turns scattered saved content into a self-organizing, self-improving
+knowledge network.**
+
+Instagram Reel → Notion knowledge-base capture pipeline, ₹0/month, with a public
+Next.js frontend. Share a reel from the iOS share sheet → backend fetches it
+(yt-dlp + burner cookies), transcribes and extracts structured takeaways, and a
+Notion page appears with the main point, steps, quotes, transcript, topic tags,
+related-saves links, and comment-gate handling.
+
+> **Naming.** The product is **Mycelium**; the Python package, this directory,
+> the Render service and the SQLite file are still `reelbrain`. That is the
+> internal codename, deliberately kept — renaming it would touch nearly every
+> file for no user-visible gain. Every string a visitor can read says Mycelium.
+> See `app/public_api.py`'s module docstring.
+
+Design docs: `BUILD_SPEC.md`, `CLAUDE.md`, `DATA_SCHEMA.md`, `OPEN_QUESTIONS.md`.
 
 - **Phase 1:** `/capture`, `/retry`, fetch → transcribe+extract → Notion page, all fail-soft.
 - **Phase 2:** iOS Shortcuts, `/attach` (comment-gate loop), nightly cleanup (`/nightly` + script).
 - **Phase 3:** embeddings (sqlite-vec) + near-dup detection + related-saves, low-signal
   filter, creator "Core source" flag.
+- **Frontend:** `web/` — Next.js on Vercel, reading the read-only `/api/public/*`
+  endpoints. See `web/README.md` and `FRONTEND_DEPLOY.md`.
 - **Ops:** `/health`, `/ping` keep-alive, rate limiting, `render.yaml` — see
   `DEPLOYMENT.md` (Render setup) and `SCHEDULING.md` (keep-alive + nightly cron).
+
+## The public API
+
+Read-only, rate-limited, and redacted by an allow-list (never a deny-list), so a
+new private Notion property cannot leak by being forgotten. Comment-gate
+keywords, attached resource URLs, raw transcripts and private notes never appear.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/public/graph` | Force-graph nodes+links. Defaults to the ~13 **category** nodes; `?expand=<slug>` adds that category's reels |
+| `GET /api/public/stats` | Live aggregate counters for the landing page |
+| `GET /api/public/reels` | Paginated/filterable library (`q`, `category`, `min_value`, `page`) |
+| `GET /api/public/scout-queue` | Redacted implementation queue |
+| `GET /api/public/categories` | Colour/label legend |
+
+Admin equivalents (`/api/admin/*`) require the `CAPTURE_SECRET` in an
+`x-admin-secret` header and return the **unredacted** data.
 
 ## Quickstart
 
@@ -198,7 +227,7 @@ starts after ~15min idle unless the keep-alive is on — acceptable at <20 captu
 
 ## Phase 2 — iOS Shortcuts, comment-gate assist, nightly cleanup
 
-### Shortcut 1: "Save to ReelBrain" (BUILD_SPEC §2.1)
+### Shortcut 1: "Save to Mycelium" (BUILD_SPEC §2.1)
 
 Trigger: Share Sheet, accepts URLs and Instagram's share text.
 
@@ -242,7 +271,7 @@ So there's no keyword to show on the *first* share. Instead:
   keyword (already on your clipboard) and wait for the creator's DM.
 - If `capture_status` is anything else (`done`, `failed`, etc.), just show that instead.
 
-### Shortcut 2: "Attach to ReelBrain" (BUILD_SPEC §2.2 — REDESIGNED)
+### Shortcut 2: "Attach to Mycelium" (BUILD_SPEC §2.2 — REDESIGNED)
 
 For once the creator's DM arrives with the promised link. Trigger: Share Sheet from the
 Instagram DM (or Messages/any app), accepting URLs.

@@ -1,4 +1,5 @@
-# Render Blueprint — free-tier web service for ReelBrain.
+# Render Blueprint — free-tier web service for Mycelium (internal codename
+# "reelbrain"; the service name is left alone deliberately, see README.md).
 # Values for the env vars are NOT stored here (this file is committed) — paste
 # them into the Render dashboard; see DEPLOYMENT.md for the click-by-click steps.
 services:
@@ -47,3 +48,17 @@ services:
         value: "3"
       - key: NTFY_TOPIC
         sync: false
+      # --- public frontend (Vercel) — see FRONTEND_DEPLOY.md ---
+      # Comma-separated origins allowed to read the public API from a browser.
+      # Set this to the Vercel production domain AFTER the first frontend
+      # deploy. localhost:3000 and *.vercel.app previews are allowed in code,
+      # so this is only needed for the production domain.
+      - key: PUBLIC_CORS_ORIGINS
+        sync: false
+      # Per-IP cap on /api/public/* (separate from the write-path limiter).
+      - key: PUBLIC_RATE_LIMIT_PER_MINUTE
+        value: "120"
+      # How long the API caches the Notion corpus for public reads. Matches
+      # the frontend's ISR `revalidate` so the two layers do not fight.
+      - key: PUBLIC_CACHE_TTL_SECONDS
+        value: "300"

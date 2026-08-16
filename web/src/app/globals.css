@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* shadcn/ui token layer. Deliberately LIGHT-ONLY: the brief calls for a
+   white, very-light surface, and the force-graph canvas draws its own
+   background, so a dark variant would have to be threaded into the canvas
+   renderer too. One committed look beats a half-working theme toggle. */
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --primary: 222 47% 11%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 210 40% 96%;
+    --accent-foreground: 222 47% 11%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 222 47% 11%;
+    --radius: 0.75rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+}
+
+@layer utilities {
+  /* The faint dot field behind the hero. Pure CSS so it costs no image
+     request and stays crisp at any DPR. */
+  .bg-dot-grid {
+    background-image: radial-gradient(circle, rgb(226 232 240) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+
+  /* Fades the dot grid out toward the edges so it reads as texture rather
+     than as a hard-edged panel. */
+  .mask-radial-fade {
+    -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 40%, black 40%, transparent 100%);
+    mask-image: radial-gradient(ellipse 70% 60% at 50% 40%, black 40%, transparent 100%);
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+}

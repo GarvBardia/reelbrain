@@ -16,6 +16,7 @@ load_dotenv()
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import (
@@ -26,6 +27,7 @@ from app import (
     gemini_pipe,
     nightly,
     notion_writer,
+    public_api,
     resource_lookup,
     store,
     topic_guarantee,
@@ -62,7 +64,33 @@ async def _lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="ReelBrain", lifespan=_lifespan)
+# "Mycelium" is the PUBLIC product name (2026-08-16). The internal package is
+# still `reelbrain` on purpose -- see app/public_api.py's module docstring for
+# why the rename stops at the user-visible boundary. This title is public: it
+# renders as the heading of the auto-generated /docs page.
+app = FastAPI(title="Mycelium", lifespan=_lifespan)
+
+# The Next.js frontend (Vercel) is a different origin from this API (Render),
+# so the browser needs explicit permission to read these responses. Scoped to
+# an allow-list from the environment rather than "*": the public read
+# endpoints would be harmless either way, but the same app also serves the
+# secret-guarded write endpoints, and a wildcard there is a habit worth not
+# forming. Localhost stays allowed unconditionally for development.
+PUBLIC_CORS_ORIGINS = [
+    o.strip() for o in os.environ.get("PUBLIC_CORS_ORIGINS", "").split(",") if o.strip()
+] + ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=PUBLIC_CORS_ORIGINS,
+    # Vercel preview deployments get a fresh generated subdomain per push, so
+    # an exact-match list alone would break every preview build.
+    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
+app.include_router(public_api.router)
 
 
 @app.exception_handler(RequestValidationError)
@@ -691,6 +719,76 @@ def weekly_digest_endpoint(req: NightlyRequest, request: Request) -> JSONRespons
     _check_secret(req.secret)
     result = digest.run()
     return JSONResponse(status_code=200, content=result)
+
+
+# --- admin (secret-guarded) --------------------------------------------------------
+#
+# The public endpoints in app/public_api.py are read-only and redacted. These
+# are the same data WITHOUT redaction, and so are gated on the same
+# CAPTURE_SECRET every write endpoint already uses.
+#
+# The secret travels in a header rather than a JSON body only because these are
+# GETs; _check_secret is the identical constant-time comparison used everywhere
+# else. The browser never holds this value -- the Next.js admin dashboard keeps
+# it in a server-side env var and proxies through its own route handlers, so it
+# is never shipped to the client bundle. See web/README.md.
+
+def _check_admin_header(request: Request) -> None:
+    _check_secret(request.headers.get("x-admin-secret", ""))
+
+
+@app.get("/api/admin/scout-queue")
+def admin_scout_queue(request: Request, limit: int = 50) -> dict:
+    """The Implementation Queue WITH the fields the public version strips:
+    the comment-gate keyword and the attached resource URL. That is precisely
+    the information the admin needs (which magic word to comment, and whether
+    the DM'd link already landed) and precisely what must never be public."""
+    _check_rate_limit(request)
+    _check_admin_header(request)
+
+    pages = notion_writer.find_saves_pages_since("1970-01-01T00:00:00")
+    public_rows = {r["shortcode"]: r for r in public_api.build_scout_queue(
+        public_api.load_public_reels(), limit=limit)}
+
+    by_shortcode = {}
+    for page in pages:
+        fields = notion_writer.extract_saves_fields(page)
+        if fields["shortcode"] in public_rows:
+            # Gate resource is the one private field extract_saves_fields does
+            # not surface, so it is read straight off the page here.
+            fields["gate_resource"] = (
+                (page.get("properties", {}).get("Gate resource") or {}).get("url") or ""
+            )
+            by_shortcode[fields["shortcode"]] = fields
+
+    items = []
+    for shortcode, row in public_rows.items():
+        private = by_shortcode.get(shortcode, {})
+        items.append({
+            **row,
+            "gate_keyword": private.get("gate_keyword"),
+            "gate_resource": private.get("gate_resource"),
+            "status_label": private.get("status_label"),
+            "notion_url": private.get("url"),
+        })
+    return {"items": items, "count": len(items)}
+
+
+@app.get("/api/admin/overview")
+def admin_overview(request: Request) -> dict:
+    """One call backing the whole admin dashboard: health + corpus stats +
+    the backlog counters. Bundled deliberately -- the dashboard would
+    otherwise fan out to four endpoints on every load, and this API runs on a
+    free-tier instance that cold-starts."""
+    _check_rate_limit(request)
+    _check_admin_header(request)
+
+    reels = public_api.load_public_reels()
+    return {
+        "health": health(),
+        "stats": public_api.build_stats(reels),
+        "scout_queue_size": len(public_api.build_scout_queue(reels, limit=1000)),
+    }
 
 
 if __name__ == "__main__":

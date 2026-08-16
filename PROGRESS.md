@@ -3136,3 +3136,98 @@ rediscovering the same outage.
 - `backfill_named_entities` was deliberately left on Gemini (not in the user's five-task list for
   this session) despite also being text-only -- worth a future look given the same local-routing
   logic would apply.
+
+---
+
+# Session 2026-08-16 (part 2) — Mycelium: public frontend + read-only public API
+
+The project got a public face. Renamed to **Mycelium** at the user-visible boundary, and
+given a Next.js frontend on Vercel reading a new read-only API on the existing Render
+backend.
+
+## Naming decision
+`reelbrain` survives as the internal codename — Python package, repo directory, Render
+service, SQLite filename. Renaming those would touch nearly every file in the repo for
+zero user-visible benefit, and this project has been bitten before by large mechanical
+changes. Everything a visitor can READ says Mycelium: page titles, metadata, README,
+FastAPI's `title` (it renders on the public `/docs` page), the iOS Shortcut names.
+The one residue is the API hostname in network requests, which a custom domain on Render
+would remove; documented in `FRONTEND_DEPLOY.md` §7.
+
+## Backend — `app/public_api.py` (new)
+Five read-only endpoints under `/api/public/`, each rate-limited on its own per-IP bucket
+(120/min, separate from main.py's tighter write-path limiter so browsing cannot lock out
+`/capture`) and served from one shared 5-minute TTL cache (a full Notion corpus query is
+~3 paginated round trips; a public URL can be hit arbitrarily often).
+
+**Redaction is an allow-list, not a deny-list.** `_public_reel` names the exact fields
+that go out, so a new private property added to the Notion schema later cannot leak by
+being forgotten. Private: comment-gate keyword, gate resource URL, raw transcript, the
+user's own capture notes. Also excluded from publication entirely: archived, low-signal
+and failed rows, plus placeholder/bare-permalink titles (nothing to show a visitor).
+
+`/graph` defaults to the **category level** (~13 nodes) rather than 200+ reel nodes,
+because the hairball is the single most common way a graph visualisation communicates
+nothing. `?expand=<slug>` adds one category's reels.
+
+**One real bug the tests caught:** category membership was initially the reel's single
+*primary* category, so a category appearing only as a secondary topic vanished from the
+graph — taking its co-occurrence edge with it. Fixed by splitting the two concepts
+explicitly: `_primary_category` PARTITIONS the corpus (stats sum to the total),
+`categories_of` is the MEMBERSHIP set the graph uses (a reel about Claude MCP servers for
+web designers genuinely belongs to both parents). A test now asserts the invariant that
+keeps the UI honest: a node saying "12" must expand into exactly 12 reels.
+
+Admin equivalents (`/api/admin/overview`, `/api/admin/scout-queue`) return the same data
+UNREDACTED behind the existing `CAPTURE_SECRET`, passed as `x-admin-secret`.
+
+## Frontend — `web/` (new)
+Next.js 14 App Router + Tailwind + shadcn/ui, Magic UI (BlurFade, NumberTicker),
+Aceternity UI (Spotlight, used exactly once), `react-force-graph-2d`. All three component
+libraries are copy-in-source rather than npm packages, so they live in `web/src/components/`
+as files this repo owns.
+
+Five pages: landing (graph as centrepiece), how-it-works (4-stage animated pipeline),
+library (searchable/filterable grid), scout queue, admin (login + dashboard).
+
+Below 768px the graph degrades to a tappable list rather than a cramped canvas — a force
+simulation in a 360px viewport overlaps its own nodes and fights pinch-zoom.
+
+**Admin auth never puts a secret in the browser.** Password → httpOnly session cookie
+(HMAC of a fixed payload keyed by `ADMIN_PASSWORD`, so unforgeable and stateless);
+`/api/admin/*` route handlers attach `ADMIN_API_SECRET` server-side. Middleware gates the
+dashboard route, and each handler re-checks the session itself rather than trusting
+middleware — a function forwarding a real credential shouldn't delegate its own authz.
+
+## Verification
+- **1031 passed, 1 xfailed** (37 new tests in `tests/test_public_api.py`).
+- Built and ran against the live backend: all 5 pages 200, real data rendering
+  (157 saves, 13 categories, 28 scout items), `/admin/dashboard` 307s to login when
+  logged out, all three admin APIs return 401 without a session.
+- **Live redaction audit against real Notion data**: 0 of 28 real gate-resource URLs
+  leaked; 0 private notes leaked; 0 private-looking keys in any of 157 public reel
+  objects + 14 scout items. An initial naive scan appeared to show ~60 "leaked gate
+  keywords" — all false positives from substring-matching common English words
+  (`GUIDE`, `link`, `design`) against a 104KB text corpus. A gate keyword is not secret
+  anyway: the creator broadcasts "comment GUIDE" in their own public caption. The
+  private thing is the resource the DM delivers, and none leaked. Both facts are now
+  pinned by tests so they are not re-litigated.
+- One genuine hardening found by that audit: `named_entities` is the only public field
+  carrying free-form model output, and a real row had `github.com` in it. Now filtered —
+  a quality fix (a bare hostname is not the NAME of anything) that also closes the only
+  theoretical route a URL could reach a public response.
+
+## Security note
+`next` is pinned to `14.2.35`. npm reports a transitive `postcss` advisory inside Next's
+own tree; it concerns parsing attacker-controlled CSS at BUILD time and all CSS here is
+authored in this repo. Next 15 does not fix it — it relocates the advisory to `sharp`
+(image optimization, unused; the site ships no images). The only offered fix is Next 16,
+a major breaking change.
+
+## Still ahead
+- Deploy: `FRONTEND_DEPLOY.md` has the click-by-click. Needs `PUBLIC_CORS_ORIGINS` on
+  Render and three vars on Vercel. **Not yet deployed — no live URLs to report.**
+- The 111 remaining taxonomy-collapse rows (previous session) now also affect this
+  frontend: the "Other" category holds 26 saves, which is exactly that backlog showing
+  through. Draining it via `scripts/retag_singleton_rows.py` will visibly improve the
+  graph.
