@@ -3379,3 +3379,95 @@ fires 0 times, so react-force-graph cannot paint there and screenshots time out.
 multiple reloads and a fresh tab; the *pixel output* of the paint functions was verified
 by executing them directly against real API data on an offscreen canvas. Stated plainly
 because it is a genuine limit on what was observed rather than inferred.
+
+---
+
+# Session 2026-08-17 (part 2) — graph clumping: the forces were never being applied
+
+## Root cause (not what the brief assumed, and worth recording)
+
+The brief read the symptom as "repulsion too weak / no collision". Running the **real**
+d3 simulation headless against the live payload showed the previous parameters
+(charge -420, link distance 190) already produced **0 overlapping pairs** and a
+1005x437px spread. So those values were fine — they simply **were never in effect**.
+
+`react-force-graph` only allows custom forces to be installed imperatively, i.e. in a
+`useEffect` after mount — by which point its simulation has already been running and
+cooling on **d3's defaults**. The old code set the forces and stopped there. With alpha
+already near zero, nothing moved. Reproduced exactly, with d3's real defaults
+(charge -30, link 30):
+
+| | overlapping pairs | min edge gap | avg nearest-neighbour | layout bbox |
+|---|---|---|---|---|
+| d3 defaults (what actually shipped) | **16 / 78** | **-18.3px** (intersecting) | 34px | 254 x 101 |
+| old params, *if* they had applied | 0 / 78 | 44.4px | 147px | 1005 x 437 |
+| **new params (shipped)** | **0 / 78** | **109.2px** | **196px** | **764 x 780** |
+
+The one-line fix is `fg.d3ReheatSimulation()`. Everything else is tuning on top.
+
+## A second, subtler trap in the same area
+
+`d3AlphaDecay` / `d3VelocityDecay` are declarative **props**, not methods on the
+imperative handle (confirmed in `react-force-graph-2d.d.ts`: they sit in the props
+interface, while `d3Force` / `d3ReheatSimulation` / `zoomToFit` sit in
+`ForceGraphMethods`). The ref is typed `any`, so calling `fg.d3AlphaDecay(...)` compiles
+cleanly and then **throws at runtime** — aborting the effect *before* the reheat and
+silently preserving the exact bug being fixed. Moved to props.
+
+## Parameters, before -> after
+
+| Setting | Before | After |
+|---|---|---|
+| charge strength | -420 (never applied; effectively -30) | **-1150**, `distanceMax(620)` |
+| link distance | 190 / 55 | **240** co-occurrence / **70** membership |
+| link strength | d3 default (~0.1 uniform) | **`min(0.09, 0.012 x weight)`** |
+| collide | none | **`radius = val + 13`, strength 0.92, 2 iterations** |
+| d3AlphaDecay | 0.0228 (default) | **0.0115** (prop) |
+| d3VelocityDecay | 0.4 (default) | **0.3** (prop) |
+| warmupTicks | none | **80** |
+| cooldownTicks | 120 | **320** |
+| zoomToFit | `(420, 60)` on engine stop only | **`(400, 40)`** on engine stop **and** a 900ms timer |
+| reheat after setting forces | **none** | **`d3ReheatSimulation()`** |
+
+Link *strength* mattered more than charge here: at category level this is a near-complete
+graph (52 of a possible 66 edges across 12 connected nodes), so d3's default of
+`1/min(degree)` gave ~0.1 to all 52 edges, which summed into an inward pull that no
+plausible charge could beat. Weighting by co-occurrence keeps real pairings tight and
+mutes the mesh.
+
+## Labels
+Every category label used to draw unconditionally — 13 stacked labels. Now: always for
+`val >= 15` (the 6 largest, which are also the best-separated), on hover for anything,
+and all of them past `globalScale >= 1.45`. Measured at the default post-`zoomToFit`
+scale of **0.651**: widest rendered label is **178px** against a **196px** average
+nearest-neighbour distance. Nothing is hidden from the visitor — the legend under the
+canvas lists all 13 with counts, and a `nodeLabel` tooltip covers the unlabelled ones
+(which also exposes them to assistive tech, unlike canvas-painted text).
+
+## "Other" floating loose
+Confirmed against the live API rather than assumed: **degree 0, and structurally always
+will be**. A reel only lands in `other` when none of its topics map to a parent, so its
+category set is the single element `{other}` — and co-occurrence edges are built from
+*pairs* within that set. One element yields no pairs. Correct data, not a bug. With no
+link force, charge alone flung it off. Now pinned via `fx/fy` to the lower-left,
+generalised to any zero-degree node.
+
+## Node sizing (verified, no change needed)
+`val = 4 + sqrt(count) * 2`. Largest/smallest is 65 vs 4 saves — a 16.2x count ratio
+compressed to **2.52x radius / 6.3x area**. Linear radius would have been 16.2x / 264x.
+The brief's "Business Building 123" appears to be a misread of `Business Building · 23`.
+
+## Verification honesty
+The test browser pane does not composite (rAF fires 0 times), so **no screenshot was
+possible** — same limitation recorded last session. Substituted: the real d3 simulation
+run headless on the live payload for the overlap/spread table above, real canvas
+`measureText` for the label-width numbers, and live DOM checks on the deployed site
+(canvas 1102x560, "157 saves / 13 categories", 13 legend entries, zero console errors).
+An eyeball check by a human is still the one thing not done.
+
+Also corrected mid-session: I briefly blamed `warmupTicks` for the canvas not mounting
+and removed it with a confident comment. The real cause was the test tab reporting
+`innerWidth: 0` because the pane was not displayed. `warmupTicks` was restored once
+that was established, rather than shipping a false justification.
+
+**1031 passed, 1 xfailed.**
