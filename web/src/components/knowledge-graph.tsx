@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { forceCollide } from "d3-force";
 import { ArrowLeft, Loader2 } from "lucide-react";
 
 import { getGraph } from "@/lib/api";
@@ -35,6 +36,24 @@ const GRAPH_MIN_WIDTH = 768;
  *  dropping frames -- see paintNode. Tuned against the real corpus: 13
  *  category nodes by default, up to ~66 when the largest category expands. */
 const GLOW_NODE_BUDGET = 90;
+
+/** Extra clearance added to each node's radius for collision, so circles not
+ *  only avoid overlapping but leave room for a label to sit between them. */
+const COLLIDE_PADDING = 13;
+
+/** Where a zero-edge node gets parked, in simulation coordinates (the layout
+ *  centres on roughly 0,0). Lower-left, close enough that framing the graph
+ *  does not have to zoom out much to include it. */
+const ISOLATED_ANCHOR = { x: -430, y: 215 };
+
+/** Label policy at the category level. Showing all 13 at once is the
+ *  unreadable-stack problem; showing none makes the graph a guessing game.
+ *  So: the biggest nodes are always labelled, anything is labelled on hover,
+ *  and zooming in past the threshold reveals the rest. Nothing is actually
+ *  hidden from the visitor either way -- the legend under the canvas lists
+ *  every category with its count. */
+const LABEL_ALWAYS_MIN_VAL = 15;
+const LABEL_SHOW_ALL_ZOOM = 1.45;
 
 export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
   const [data, setData] = useState<GraphPayload>(initial);
@@ -130,14 +149,131 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
     [expanded, load],
   );
 
-  // Give the simulation more breathing room than the default so ~13 nodes
-  // spread across the canvas instead of clumping in the middle.
+  /**
+   * Force tuning.
+   *
+   * The clumping had a specific cause that charge alone could not fix: at the
+   * category level this is a near-COMPLETE graph. 12 of the 13 nodes share at
+   * least one reel with almost every other, giving 52 co-occurrence edges out
+   * of a possible 66. d3's link force pulls on every one of those, so the
+   * previous -420 charge was fighting 52 springs and lost -- everything
+   * collapsed to a ball with labels stacked on top of each other.
+   *
+   * So the fix is three-part, not just "more charge":
+   *   - forceCollide gives a HARD non-overlap constraint (charge is a soft
+   *     inverse-square falloff and never guarantees separation),
+   *   - link strength is weighted DOWN so a dense mesh of weak
+   *     co-occurrences cannot out-pull the repulsion, while a genuinely
+   *     strong pairing still reads as closer,
+   *   - charge goes up and decay goes down so the layout has both the force
+   *     and the time to actually expand before it freezes.
+   */
   useEffect(() => {
     const fg = fgRef.current;
     if (!fg) return;
-    fg.d3Force("charge")?.strength(-420);
-    fg.d3Force("link")?.distance((l: any) => (l.type === "membership" ? 55 : 190));
+
+    fg.d3Force("charge")
+      ?.strength(-1150)
+      // Without a cap, repulsion between the far-apart nodes keeps inflating
+      // the layout every tick and zoomToFit just scales everything back down
+      // -- net effect is a small clump again, just after a longer wait.
+      .distanceMax(620);
+
+    fg.d3Force("link")
+      ?.distance((l: any) => (l.type === "membership" ? 70 : 240))
+      // d3's default link strength is 1/min(degree of endpoints). With
+      // near-uniform high degree that lands around 0.1 for EVERY edge, so 52
+      // of them sum into one strong inward pull. Scaling by co-occurrence
+      // weight keeps the meaningful pairings and mutes the noise.
+      .strength((l: any) =>
+        l.type === "membership" ? 0.55 : Math.min(0.09, 0.012 * (l.value ?? 1)),
+      );
+
+    // The hard constraint. Radius is the node's own radius plus padding, so
+    // two circles can never intersect and there is room for a label between
+    // them. 2 iterations resolves chains of contacts (a node squeezed between
+    // two others) that a single pass leaves overlapping.
+    fg.d3Force(
+      "collide",
+      forceCollide()
+        .radius((n: any) => (n.val ?? 6) + COLLIDE_PADDING)
+        .strength(0.92)
+        .iterations(2),
+    );
+
+    // THE ACTUAL BUG FIX. Custom forces can only be installed imperatively,
+    // i.e. after mount -- by which point the simulation has already been
+    // running (and cooling) on d3's DEFAULTS. Without a reheat, everything
+    // set above lands on a sim whose alpha is ~0 and therefore changes
+    // nothing: the layout stays at d3's defaults of charge -30 / link 30.
+    // Reproduced with the real payload -- those defaults give 16 overlapping
+    // pairs in a 254x101px clump, which is precisely the reported screenshot.
+    //
+    // d3AlphaDecay / d3VelocityDecay are deliberately NOT set here: they are
+    // declarative PROPS on the component, not methods on the imperative
+    // handle. Calling them here throws, which would abort this effect before
+    // the reheat below and silently preserve the very bug it fixes.
+    fg.d3ReheatSimulation();
   }, [data]);
+
+  /**
+   * Nodes with zero edges get no link force at all, so charge alone flings
+   * them to wherever the repulsion gradient points -- which is why "Other"
+   * drifted off on its own and read as "the graph is broken".
+   *
+   * Confirmed against the live API rather than assumed: "Other" genuinely has
+   * degree 0, and structurally always will. A reel only lands in `other` when
+   * NONE of its topics map to a parent category, so its category set is the
+   * single element {other} -- and co-occurrence edges are built from PAIRS
+   * within that set. A one-element set yields no pairs, so the bucket can
+   * never earn an edge. It is correct data, not a bug.
+   *
+   * Given that, it gets a deliberate home: pinned to the lower-left, reading
+   * as a parked miscellaneous bucket rather than an escapee. Generalised to
+   * any isolated node so a future zero-degree category behaves the same.
+   */
+  useEffect(() => {
+    if (data.level !== "category") return;
+    const degree = new Map<string, number>();
+    for (const l of data.links) {
+      const s = typeof l.source === "string" ? l.source : (l.source as GraphNode).id;
+      const t = typeof l.target === "string" ? l.target : (l.target as GraphNode).id;
+      degree.set(s, (degree.get(s) ?? 0) + 1);
+      degree.set(t, (degree.get(t) ?? 0) + 1);
+    }
+    for (const n of data.nodes as any[]) {
+      if ((degree.get(n.id) ?? 0) === 0) {
+        // Close enough that zoomToFit does not have to zoom way out to
+        // include it, far enough to read as deliberately set apart.
+        n.fx = ISOLATED_ANCHOR.x;
+        n.fy = ISOLATED_ANCHOR.y;
+      } else {
+        n.fx = undefined;
+        n.fy = undefined;
+      }
+    }
+  }, [data]);
+
+  /**
+   * Auto-frame every node. 400ms ease, 40px padding.
+   *
+   * Wired to BOTH onEngineStop and a timer after any data change, because
+   * onEngineStop only fires when a running simulation cools -- it does not
+   * fire if the sim is already cold, which happens on a re-render with
+   * unchanged data. Relying on it alone leaves initial zoom/pan to chance,
+   * which is how a correctly-spread layout can still arrive off-screen.
+   */
+  const frameGraph = useCallback(() => {
+    fgRef.current?.zoomToFit(400, 40);
+  }, []);
+
+  useEffect(() => {
+    if (!data.nodes.length) return;
+    // Mid-flight fit so the graph is framed while it is still expanding;
+    // onEngineStop re-fits once it settles.
+    const t = setTimeout(frameGraph, 900);
+    return () => clearTimeout(t);
+  }, [data, frameGraph]);
 
   const cheapMode = data.nodes.length > GLOW_NODE_BUDGET;
 
@@ -218,10 +354,23 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
       ctx.stroke();
       ctx.restore();
 
-      // Labels only for categories (and the hovered reel). Drawing 50 reel
-      // labels at once is exactly the unreadable-hairball failure the
-      // category-first design exists to avoid.
-      if (!isCategory && !isHovered) return;
+      /**
+       * Label policy -- the other half of the unreadable-mess fix.
+       *
+       * Previously EVERY category label drew unconditionally, so 13 of them
+       * stacked into an illegible pile the moment the layout was even
+       * slightly tight. Now a label draws when it has earned the space:
+       *   - hovered (always, any node),
+       *   - the biggest categories, which are also the best separated,
+       *   - everything, once zoomed in far enough for the room to exist.
+       * Reel labels stay hover-only; 65 of them at once is the hairball the
+       * category-first design exists to avoid.
+       */
+      const showLabel =
+        isHovered ||
+        (isCategory &&
+          (globalScale >= LABEL_SHOW_ALL_ZOOM || r >= LABEL_ALWAYS_MIN_VAL));
+      if (!showLabel) return;
 
       ctx.save();
       if (dim) ctx.globalAlpha = 0.35;
@@ -386,9 +535,27 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
                 }}
                 onNodeClick={handleNodeClick}
                 onNodeHover={(n: any) => setHovered(n ?? null)}
+                // Native tooltip, so the categories that do not draw a
+                // permanent label are still identifiable by pointing at them
+                // (and are exposed to assistive tech, which a canvas-painted
+                // label is not).
+                nodeLabel={(n: any) =>
+                  n.type === "category" ? `${n.label} — ${n.count} saves` : n.label
+                }
                 linkCanvasObject={paintLink}
-                cooldownTicks={120}
-                onEngineStop={() => fgRef.current?.zoomToFit(420, 60)}
+                // Simulation pacing lives here, as PROPS -- these are not
+                // available on the imperative handle (see the note in the
+                // force effect). Defaults are 0.0228 / 0.4, which freeze a
+                // 13-node layout while it is still mid-expansion.
+                d3AlphaDecay={0.0115}
+                d3VelocityDecay={0.3}
+                // Ticks run before the first paint, so the graph arrives
+                // already spread rather than visibly exploding outward from
+                // a central clump.
+                warmupTicks={80}
+                // Longer runway to match the slower decay above.
+                cooldownTicks={320}
+                onEngineStop={frameGraph}
                 enableNodeDrag={false}
               />
             )
