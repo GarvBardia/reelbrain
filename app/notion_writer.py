@@ -319,7 +319,14 @@ def _build_properties(
     gate_resource_url: Optional[str],
     related_page_ids: Optional[list[str]] = None,
 ) -> dict:
-    title = (extraction.main_point if extraction else reel.caption or reel.permalink)[:100]
+    # main_point is capped at 200 chars in extraction (CHEAP_MODEL_GUIDE §1), so
+    # a 100-char title cut two-thirds of them off mid-word -- 110 of 164 live
+    # rows ended like "...single-feature, cheaper version of" with the rest only
+    # in the page-body callout. The public library surfaced that raw. 200 keeps
+    # the whole sentence for new captures (Notion titles have no hard length
+    # limit); the caption fallback stays bounded for the same reason it was.
+    # Existing rows keep their stored 100-char title until a title backfill runs.
+    title = (extraction.main_point if extraction else reel.caption or reel.permalink)[:200]
     props: dict = {
         "Title": {"title": [{"text": {"content": title}}]},
         "Status": {"select": {"name": STATUS_LABELS[status]}},

@@ -2,12 +2,15 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { useState } from "react";
 
+import type { Reel } from "@/lib/types";
 import { EMPTY_STATS, getReels, getStats } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 import { ApiErrorState } from "@/components/api-error-state";
 import { BlurFade } from "@/components/magic/blur-fade";
 import { ReelCard } from "@/components/reel-card";
+import { ReelDetail } from "@/components/reel-detail";
 import { LibraryFilters } from "@/components/library-filters";
 import { Skeleton } from "@/components/skeleton";
 import { Button } from "@/components/ui/button";
@@ -29,6 +32,35 @@ export function LibraryClient() {
     EMPTY_REELS,
     [q, category, page, minValue],
   );
+
+  // The open reel is tracked by shortcode and synced to ?reel= so a detail
+  // view is shareable and the browser Back button closes it. history.replaceState
+  // (not router.push) keeps it off the filter-navigation stack -- opening and
+  // closing a reel shouldn't bury the search the visitor did to find it. The
+  // reel object itself is whatever's already loaded in the list, so there's no
+  // second fetch and no need for a single-reel endpoint.
+  const [selectedCode, setSelectedCode] = useState<string | null>(
+    () => searchParams.get("reel"),
+  );
+  const selected: Reel | null =
+    data.items.find((r) => r.shortcode === selectedCode) ?? null;
+
+  const syncReelParam = (code: string | null) => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (code) url.searchParams.set("reel", code);
+    else url.searchParams.delete("reel");
+    window.history.replaceState(null, "", url);
+  };
+
+  const openReel = (reel: Reel) => {
+    setSelectedCode(reel.shortcode);
+    syncReelParam(reel.shortcode);
+  };
+  const closeReel = () => {
+    setSelectedCode(null);
+    syncReelParam(null);
+  };
 
   const qs = (over: Record<string, string | number | undefined>) => {
     const p = new URLSearchParams();
@@ -85,7 +117,7 @@ export function LibraryClient() {
         <div className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {data.items.map((reel, i) => (
             <BlurFade key={reel.shortcode} delay={Math.min(0.03 * i, 0.3)}>
-              <ReelCard reel={reel} />
+              <ReelCard reel={reel} onSelect={openReel} />
             </BlurFade>
           ))}
         </div>
@@ -108,6 +140,8 @@ export function LibraryClient() {
           )}
         </div>
       )}
+
+      <ReelDetail reel={selected} onClose={closeReel} />
     </div>
   );
 }

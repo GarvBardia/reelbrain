@@ -7,7 +7,6 @@ import { useApi } from "@/lib/use-api";
 import { ApiErrorState } from "@/components/api-error-state";
 import { BlurFade } from "@/components/magic/blur-fade";
 import { Skeleton } from "@/components/skeleton";
-import { Card, CardContent } from "@/components/ui/card";
 
 export function ScoutClient() {
   const { data, loading, error, retry } = useApi(() => getScoutQueue(40), {
@@ -56,8 +55,13 @@ export function ScoutClient() {
         <ol className="mt-12 space-y-4">
           {items.map((item, i) => (
             <BlurFade key={item.shortcode} delay={Math.min(0.04 * i, 0.35)}>
-              <Card className="border-slate-200/80 transition-shadow hover:shadow-md">
-                <CardContent className="flex gap-5 p-6">
+              {/* Borderless with a shadow tinted to the item's category
+                  colour -- same card language as the library grid and the
+                  landing page, instead of the generic border+gray-shadow. */}
+              <div
+                className="flex gap-5 rounded-xl bg-white p-6 shadow-sm transition-all hover:-translate-y-0.5"
+                style={{ boxShadow: `0 10px 28px -18px ${item.color}59` }}
+              >
                   <div className="shrink-0">
                     <span className="flex h-9 w-9 items-center justify-center rounded-xl text-sm font-semibold tabular-nums text-white"
                       style={{ backgroundColor: item.color }}>
@@ -91,10 +95,11 @@ export function ScoutClient() {
                       </p>
                     )}
 
-                    <div className="mt-4 rounded-lg border-l-2 bg-slate-50 py-2.5 pl-4 pr-3"
-                      style={{ borderColor: item.color }}>
+                    <div className="mt-4 rounded-lg bg-slate-50 px-4 py-2.5">
                       <p className="text-sm leading-snug text-slate-800">
-                        <span className="font-semibold">Next step: </span>
+                        <span className="font-semibold" style={{ color: item.color }}>
+                          Next step:{" "}
+                        </span>
                         {item.suggested_action}
                       </p>
                     </div>
@@ -121,8 +126,7 @@ export function ScoutClient() {
                       )}
                     </div>
                   </div>
-                </CardContent>
-              </Card>
+              </div>
             </BlurFade>
           ))}
         </ol>
