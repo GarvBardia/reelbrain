@@ -13,7 +13,6 @@ import { Spotlight } from "@/components/aceternity/spotlight";
 import { LightLines } from "@/components/obsidian/light-lines";
 import { Skeleton } from "@/components/skeleton";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 
 // Client-fetched, not server-rendered: GitHub Pages serves static files with
 // no server to run against, so every data-driven page fetches the public API
@@ -158,35 +157,48 @@ export default function LandingPage() {
           </p>
         </BlurFade>
 
+        {/* Deliberately not three matched shadcn Cards -- borderless tinted
+            chips instead, each with a shadow tinted to its own accent, and
+            the middle one nudged up a few pixels so the row reads as three
+            considered pieces rather than a stamped-out grid. */}
         <div className="mt-14 grid gap-6 md:grid-cols-3">
           {[
             {
               icon: Layers,
               title: "It organizes itself",
               body: "Every save is read and filed against a shared vocabulary — not whatever tag came to mind that day. The taxonomy converges instead of sprawling.",
-              tint: "text-orange-500",
+              accent: "#FF5A1F",
+              tint: "bg-orange-50 text-orange-600",
+              shadow: "hover:shadow-[0_16px_40px_-20px_rgba(255,90,31,0.45)]",
             },
             {
               icon: Sparkles,
               title: "It improves itself",
               body: "New saves are matched against everything already there. Near-duplicates get flagged, related items get linked, and thin entries get re-processed later.",
-              tint: "text-violet-600",
+              accent: "#7C3AED",
+              tint: "bg-violet-50 text-violet-600",
+              shadow: "hover:shadow-[0_16px_40px_-20px_rgba(124,58,237,0.45)]",
+              offset: "md:-translate-y-3",
             },
             {
               icon: Compass,
               title: "It tells you what to do",
               body: "Each item carries one concrete next step. The highest-value ones get promoted into a queue, so the network hands you work instead of a reading list.",
-              tint: "text-blue-600",
+              accent: "#2563EB",
+              tint: "bg-blue-50 text-blue-600",
+              shadow: "hover:shadow-[0_16px_40px_-20px_rgba(37,99,235,0.45)]",
             },
           ].map((f, i) => (
             <BlurFade key={f.title} delay={0.08 * i}>
-              <Card className="h-full border-slate-200/80 transition-shadow hover:shadow-md">
-                <CardContent className="p-7">
-                  <f.icon className={`h-6 w-6 ${f.tint}`} />
-                  <h3 className="mt-4 text-lg font-semibold text-slate-900">{f.title}</h3>
-                  <p className="mt-2.5 leading-relaxed text-slate-600">{f.body}</p>
-                </CardContent>
-              </Card>
+              <div
+                className={`h-full rounded-2xl p-7 shadow-sm transition-all duration-300 ${f.shadow} ${f.offset ?? ""}`}
+              >
+                <span className={`inline-flex h-11 w-11 items-center justify-center rounded-xl ${f.tint}`}>
+                  <f.icon className="h-5 w-5" />
+                </span>
+                <h3 className="mt-5 text-lg font-semibold text-slate-900">{f.title}</h3>
+                <p className="mt-2.5 leading-relaxed text-slate-600">{f.body}</p>
+              </div>
             </BlurFade>
           ))}
         </div>
@@ -209,19 +221,23 @@ export default function LandingPage() {
               {stats.top_categories.map((c, i) => (
                 <BlurFade key={c.slug} delay={0.05 * i}>
                   <Link href={`/library?category=${c.slug}`}>
-                    <Card className="group h-full border-slate-200/80 transition-all hover:-translate-y-0.5 hover:shadow-md">
-                      <CardContent className="flex items-center gap-4 p-6">
-                        <span
-                          className="h-10 w-1.5 shrink-0 rounded-full"
-                          style={{ backgroundColor: c.color }}
-                        />
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate font-medium text-slate-900">{c.label}</p>
-                          <p className="text-sm text-slate-500">{c.count} saves</p>
-                        </div>
-                        <ArrowRight className="h-4 w-4 shrink-0 text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-slate-500" />
-                      </CardContent>
-                    </Card>
+                    {/* Borderless, shadow tinted to the category's own color
+                        instead of the generic border+gray-shadow default --
+                        the same accent language as the graph nodes below. */}
+                    <div
+                      className="group flex h-full items-center gap-4 rounded-xl bg-white p-6 shadow-sm transition-all hover:-translate-y-0.5"
+                      style={{ boxShadow: `0 12px 30px -18px ${c.color}66` }}
+                    >
+                      <span
+                        className="h-10 w-1.5 shrink-0 rounded-full"
+                        style={{ backgroundColor: c.color }}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium text-slate-900">{c.label}</p>
+                        <p className="text-sm text-slate-500">{c.count} saves</p>
+                      </div>
+                      <ArrowRight className="h-4 w-4 shrink-0 text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-slate-500" />
+                    </div>
                   </Link>
                 </BlurFade>
               ))}

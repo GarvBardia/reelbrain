@@ -41,9 +41,9 @@ const config: Config = {
         sm: "calc(var(--radius) - 4px)",
       },
       fontFamily: {
-        // Inter via next/font in layout.tsx, with a system stack behind it so
-        // first paint never falls back to Times.
-        sans: ["var(--font-inter)", "ui-sans-serif", "system-ui", "sans-serif"],
+        // Manrope via next/font in layout.tsx, with a system stack behind it
+        // so first paint never falls back to Times.
+        sans: ["var(--font-sans)", "ui-sans-serif", "system-ui", "sans-serif"],
       },
       keyframes: {
         // Aceternity-style slow spotlight drift for the hero.

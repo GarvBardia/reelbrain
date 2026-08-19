@@ -1,11 +1,15 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Manrope } from "next/font/google";
 
 import "./globals.css";
 import { SiteHeader } from "@/components/site-header";
 import { SiteFooter } from "@/components/site-footer";
 
-const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
+// Manrope, not Inter: same "just works everywhere" reliability as a next/font
+// Google font, but with real character in the display weights -- Inter at
+// default settings is the single most common tell that a UI was AI-generated
+// rather than designed (redesign-existing-projects audit, 2026-08-19).
+const manrope = Manrope({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
   title: {
@@ -24,7 +28,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={inter.variable}>
+    <html lang="en" className={manrope.variable}>
       <body className="flex min-h-screen flex-col bg-white">
         <SiteHeader />
         <main className="flex-1">{children}</main>

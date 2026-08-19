@@ -1,0 +1,10 @@
+<svg width="32" height="32" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+  <!-- Same three-linked-node mark as SiteHeader's MyceliumMark, on a white
+       tile so it stays legible as a browser-tab favicon (dark tabs, small
+       sizes) rather than disappearing against a transparent background. -->
+  <rect width="24" height="24" rx="6" fill="#ffffff" />
+  <path d="M7 8.5 12 15.5 17 9.5" stroke="#cbd5e1" stroke-width="1.6" stroke-linecap="round" fill="none" />
+  <circle cx="7" cy="8.5" r="3" fill="#FF5A1F" />
+  <circle cx="17" cy="9.5" r="2.4" fill="#2563EB" />
+  <circle cx="12" cy="15.5" r="2.8" fill="#7C3AED" />
+</svg>
