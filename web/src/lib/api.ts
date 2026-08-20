@@ -8,8 +8,15 @@ import type { GraphPayload, ReelPage, ScoutItem, Stats } from "./types";
  * target, so this has always been "public" in practice; GitHub Pages just
  * makes that explicit instead of implicit.
  */
+// The default is the PRODUCTION backend, not localhost. This is deliberate:
+// on a static export the value is baked in at build time, and if the deploy
+// workflow ever dropped NEXT_PUBLIC_API_BASE, a localhost default would ship a
+// site that silently fetches 127.0.0.1 and shows empty state to every visitor.
+// Falling back to the real API means the worst case is "still works". Local
+// development against a local backend sets NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000
+// in .env.local, which overrides this.
 export const API_BASE = (
-  process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8000"
+  process.env.NEXT_PUBLIC_API_BASE || "https://reelbrain.onrender.com"
 ).replace(/\/$/, "");
 
 /**

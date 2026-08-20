@@ -169,51 +169,68 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
    *     and the time to actually expand before it freezes.
    */
   useEffect(() => {
-    const fg = fgRef.current;
-    if (!fg) return;
+    let cancelled = false;
+    let tries = 0;
 
-    fg.d3Force("charge")
-      ?.strength(-1150)
-      // Without a cap, repulsion between the far-apart nodes keeps inflating
-      // the layout every tick and zoomToFit just scales everything back down
-      // -- net effect is a small clump again, just after a longer wait.
-      .distanceMax(620);
+    const applyForces = () => {
+      if (cancelled) return;
+      const fg = fgRef.current;
 
-    fg.d3Force("link")
-      ?.distance((l: any) => (l.type === "membership" ? 70 : 240))
-      // d3's default link strength is 1/min(degree of endpoints). With
-      // near-uniform high degree that lands around 0.1 for EVERY edge, so 52
-      // of them sum into one strong inward pull. Scaling by co-occurrence
-      // weight keeps the meaningful pairings and mutes the noise.
-      .strength((l: any) =>
-        l.type === "membership" ? 0.55 : Math.min(0.09, 0.012 * (l.value ?? 1)),
+      // THE REAL BUG (found 2026-08-20, confirmed in the live console).
+      // ForceGraph2D is a dynamic(ssr:false) import, so on first load its
+      // chunk has NOT resolved when this effect first fires -- fgRef.current
+      // is still null. The previous version did `if (!fg) return;` and, since
+      // `data` never changed again, NEVER re-ran: every force below was
+      // silently skipped and d3ReheatSimulation() never fired. The graph ran
+      // on d3's raw defaults (charge -30 / link 30) the entire time -- the
+      // exact collapsed clump every prior "fix" was trying to solve. The math
+      // was always right; it just never reached a live simulation. So instead
+      // of no-opping, wait for the ref to mount, then apply.
+      if (!fg) {
+        if (tries++ < 60) setTimeout(applyForces, 50); // up to ~3s
+        return;
+      }
+
+      fg.d3Force("charge")
+        ?.strength(-1150)
+        // Without a cap, repulsion between the far-apart nodes keeps inflating
+        // the layout every tick and zoomToFit just scales everything back down
+        // -- net effect is a small clump again, just after a longer wait.
+        .distanceMax(620);
+
+      fg.d3Force("link")
+        ?.distance((l: any) => (l.type === "membership" ? 70 : 240))
+        // d3's default link strength is 1/min(degree of endpoints). With
+        // near-uniform high degree that lands around 0.1 for EVERY edge, so 52
+        // of them sum into one strong inward pull. Scaling by co-occurrence
+        // weight keeps the meaningful pairings and mutes the noise.
+        .strength((l: any) =>
+          l.type === "membership" ? 0.55 : Math.min(0.09, 0.012 * (l.value ?? 1)),
+        );
+
+      // The hard constraint. Radius is the node's own radius plus padding, so
+      // two circles can never intersect and there is room for a label between
+      // them. 2 iterations resolves chains of contacts (a node squeezed between
+      // two others) that a single pass leaves overlapping.
+      fg.d3Force(
+        "collide",
+        forceCollide()
+          .radius((n: any) => (n.val ?? 6) + COLLIDE_PADDING)
+          .strength(0.92)
+          .iterations(2),
       );
 
-    // The hard constraint. Radius is the node's own radius plus padding, so
-    // two circles can never intersect and there is room for a label between
-    // them. 2 iterations resolves chains of contacts (a node squeezed between
-    // two others) that a single pass leaves overlapping.
-    fg.d3Force(
-      "collide",
-      forceCollide()
-        .radius((n: any) => (n.val ?? 6) + COLLIDE_PADDING)
-        .strength(0.92)
-        .iterations(2),
-    );
+      // Reheat so the forces above actually move a simulation that mounted and
+      // cooled on d3's defaults. d3AlphaDecay / d3VelocityDecay are set as
+      // PROPS on the component, not here -- they're not on the imperative
+      // handle and calling them would throw.
+      fg.d3ReheatSimulation();
+    };
 
-    // THE ACTUAL BUG FIX. Custom forces can only be installed imperatively,
-    // i.e. after mount -- by which point the simulation has already been
-    // running (and cooling) on d3's DEFAULTS. Without a reheat, everything
-    // set above lands on a sim whose alpha is ~0 and therefore changes
-    // nothing: the layout stays at d3's defaults of charge -30 / link 30.
-    // Reproduced with the real payload -- those defaults give 16 overlapping
-    // pairs in a 254x101px clump, which is precisely the reported screenshot.
-    //
-    // d3AlphaDecay / d3VelocityDecay are deliberately NOT set here: they are
-    // declarative PROPS on the component, not methods on the imperative
-    // handle. Calling them here throws, which would abort this effect before
-    // the reheat below and silently preserve the very bug it fixes.
-    fg.d3ReheatSimulation();
+    applyForces();
+    return () => {
+      cancelled = true;
+    };
   }, [data]);
 
   /**
@@ -512,6 +529,21 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
             isNarrow ? "h-auto" : "h-[560px]",
           )}
         >
+          {/* Soft radial depth glow behind the nodes, in the brand indigo->
+              violet. Pure CSS on a layer beneath the transparent canvas, so it
+              adds a sense of the graph sitting in a lit space rather than on
+              flat white -- and carries zero canvas-draw risk (no gradient math
+              that could throw and take the whole canvas down with it). */}
+          {!isNarrow && (
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-0"
+              style={{
+                background:
+                  "radial-gradient(ellipse 60% 55% at 50% 42%, rgba(99,102,241,0.12), rgba(139,92,246,0.05) 45%, transparent 72%)",
+              }}
+            />
+          )}
           {isNarrow ? (
             <GraphFallbackList
               data={data}
