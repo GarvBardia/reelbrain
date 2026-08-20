@@ -240,3 +240,35 @@ it, that one check is skipped (reported, but never a false alarm) — every othe
 check still runs.
 
 Manual run (never pushes): `python scripts\health_watchdog.py --dry-run`
+
+# Daily Capture Report (`daily_capture_report.py`) — already in the nightly .bat
+
+Tracks the one number that actually matters here: is the extraction backlog
+growing or shrinking? Capture has never been the bottleneck — Gemini quota is —
+so this reports capture-vs-processing rate, not a raw snapshot. It's already
+wired into `nightly_autonomous.bat` **after** `daily_runner.py` and
+`health_watchdog.py`, so the existing nightly Task Scheduler entry runs it too;
+there is no separate schedule to create.
+
+**Zero Gemini calls.** Pure Notion + vault + local-file read — it must never
+compete with the extraction backlog for the quota it's reporting on.
+
+Each run:
+- counts new rows captured in the last 24h, and how many of those already
+  finished extraction vs are still waiting;
+- computes the total backlog (`content_type=unknown` OR a `uncategorized` /
+  `pending-extraction` topic marker);
+- persists one line/day to `backlog_history.json` (gitignored) so it can say
+  the backlog **grew by 6** or **shrank by 12** vs the last recorded day;
+- estimates days-to-clear at the recent observed Gemini pace (read from
+  `daily_runner.log`), 3 calls/row for the multimodal recovery work;
+- confirms the Obsidian vault is still 1:1 with Notion (same check
+  `health_watchdog` uses).
+
+Output: one plain-English paragraph appended to `daily_capture_report.log`
+(gitignored), same voice as `daily_runner.log`. A single ntfy push fires **only
+when the backlog grew** — a shrinking or steady backlog stays silent, the same
+noise-means-look-now discipline as the watchdog. Uses the existing `NTFY_TOPIC`;
+no new config.
+
+Manual run (never pushes, never writes history): `python scripts\daily_capture_report.py --dry-run`

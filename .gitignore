@@ -16,6 +16,8 @@ __pycache__/
 venv/
 nightly_autonomous.log
 daily_runner.log
+daily_capture_report.log
+backlog_history.json
 taxonomy_snapshot_*.json
 TAXONOMY_DRIFT.md
 gemini_quota.json
