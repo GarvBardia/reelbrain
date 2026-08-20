@@ -1,11 +1,11 @@
 "use client";
 
-import dynamic from "next/dynamic";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { ComponentType } from "react";
 import { forceCollide } from "d3-force";
 import { ArrowLeft, Loader2 } from "lucide-react";
 
-import { getGraph } from "@/lib/api";
+import { EMPTY_GRAPH, getGraph } from "@/lib/api";
 import type { GraphNode, GraphPayload } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -13,16 +13,51 @@ import { Button } from "@/components/ui/button";
 import { GraphFallbackList } from "./graph-fallback-list";
 import { GlowingEffect } from "./obsidian/glowing-effect";
 
-// react-force-graph-2d reaches for `window` and a canvas at module scope, so
-// it can never be part of a server render. ssr:false is not optional here.
-const ForceGraph2D = dynamic(() => import("react-force-graph-2d"), {
-  ssr: false,
-  loading: () => (
-    <div className="flex h-full items-center justify-center text-muted-foreground">
-      <Loader2 className="h-5 w-5 animate-spin" />
-    </div>
-  ),
-});
+/**
+ * THE ACTUAL BUG behind every prior "the graph still looks bad" report
+ * (found 2026-08-21, confirmed against Next.js's own source, not theory).
+ *
+ * This used to be `next/dynamic(() => import("react-force-graph-2d"), {ssr:
+ * false})`. next/dynamic's ssr:false path returns `LoadableComponent`
+ * (node_modules/next/dist/shared/lib/lazy-dynamic/loadable.js) -- a PLAIN
+ * function component, never wrapped in React.forwardRef. React drops any
+ * `ref` passed to a plain function component (with a console warning:
+ * "Function components cannot be given refs"), so `<ForceGraph2D ref={fgRef}
+ * />` NEVER attached fgRef to the real react-force-graph-2d instance. Not
+ * intermittently -- structurally, every single render, in every build this
+ * project has ever shipped. Confirmed live: the warning fires in the
+ * console, and `fgRef.current` never leaves null no matter how long you wait
+ * or retry.
+ *
+ * This means every d3Force/d3ReheatSimulation/zoomToFit call in this
+ * component's entire history -- including the "reheat" fix from the
+ * previous commit -- was a no-op against a null ref. The graph has been
+ * running purely on d3-force's raw defaults (charge -30, link 30) this
+ * entire time, which is exactly the collapsed clump every session kept
+ * re-diagnosing as a tuning problem.
+ *
+ * Fix: don't put a ref through next/dynamic at all. Import the module
+ * manually inside a client-only effect and hold the resolved component in
+ * state instead. Once rendered, `<ForceGraph2D ref={fgRef} />` is a REAL ref
+ * on the REAL forwardRef component react-force-graph-2d exports -- no
+ * wrapper in between to drop it. The `import()` still only ever runs in the
+ * browser (useEffect never runs during the server/static-export build pass),
+ * so this preserves exactly the SSR-safety `ssr:false` was providing,
+ * without Next's HOC swallowing the ref.
+ */
+function useForceGraph2D() {
+  const [Comp, setComp] = useState<ComponentType<any> | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    import("react-force-graph-2d").then((mod) => {
+      if (!cancelled) setComp(() => mod.default);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return Comp;
+}
 
 /** Below this width the physics simulation stops being explorable -- nodes
  *  overlap, labels collide, and pinch-zoom fights the pan handler. The brief
@@ -56,6 +91,7 @@ const LABEL_ALWAYS_MIN_VAL = 15;
 const LABEL_SHOW_ALL_ZOOM = 1.45;
 
 export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
+  const ForceGraph2D = useForceGraph2D();
   const [data, setData] = useState<GraphPayload>(initial);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -67,6 +103,51 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const fgRef = useRef<any>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
+
+  /**
+   * Live force-state readout, gated behind ?debug=graph.
+   *
+   * Added 2026-08-21 because a headless d3 simulation and a console.log
+   * are not evidence the FIX works in the actual deployed page -- only a
+   * real screenshot of real state is. Canvas painting depends on rAF,
+   * which some environments never fire (documented tool-pane limitation),
+   * so this reads and displays the SAME numbers a screenshot would need
+   * to show as plain DOM text instead: what force values are actually
+   * installed on the live simulation, and where the real node objects
+   * (mutated in place by d3, not a re-derived copy) actually sit right
+   * now. If this box is wrong, the fix is wrong -- no interpretation
+   * required, and it shows up in a plain screenshot like anything else
+   * on the page.
+   */
+  const [debugInfo, setDebugInfo] = useState<string | null>(null);
+  const debugOn =
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("debug") === "graph";
+
+  /**
+   * THE SECOND real bug (found 2026-08-21, right after fixing the ref).
+   *
+   * force-graph's own update() runs `state.forceLayout.stop().alpha(1)
+   * .nodes(state.graphData.nodes)` -- and the synchronous warmupTicks loop
+   * that follows it -- SYNCHRONOUSLY DURING REACT'S RENDER PHASE, whenever
+   * the `graphData` prop changes. That happens BEFORE any useEffect runs,
+   * including the one below that installs our custom charge/collide/link
+   * forces. If the real API payload lands before ForceGraph2D's own chunk
+   * has resolved, the FIRST-EVER graphData assignment carrying real nodes
+   * can run its ENTIRE synchronous warmup against a freshly-created,
+   * DEFAULT-force simulation (charge -30, no collide) -- and once that
+   * warmup settles into ITS OWN local minimum, more ticks later don't move
+   * it (confirmed live: bumping warmupTicks 80 -> 400 changed nothing,
+   * because the sim had already converged under the WRONG forces).
+   *
+   * Fix: never let ForceGraph2D see the real graphData until our forces are
+   * confirmed installed at least once. Until then it gets EMPTY_GRAPH (0
+   * nodes, so whatever forces are or aren't attached is moot). Once the
+   * force effect below succeeds even a single time, this flips true and the
+   * real data flows through for the first time -- onto a simulation that
+   * already has the right forces on it before its warmup ever runs.
+   */
+  const [forcesReady, setForcesReady] = useState(false);
 
   // Keep the canvas in sync with whatever `initial` the parent last fetched --
   // otherwise a successful retry at the page level would leave this component
@@ -225,13 +306,69 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
       // PROPS on the component, not here -- they're not on the imperative
       // handle and calling them would throw.
       fg.d3ReheatSimulation();
+
+      // See the comment on forcesReady above: this is the moment forces are
+      // confirmed on the simulation, so it's the moment it's safe to let
+      // ForceGraph2D see the real graphData for the first time.
+      setForcesReady(true);
+
+      if (debugOn) snapshotDebug(fg, "reheat");
+    };
+
+    // Snapshot what's ACTUALLY installed and where the REAL node objects
+    // actually are -- not a re-derived copy, the exact objects d3 mutates via
+    // .tick(). Sampled at three points so the overlay shows progression
+    // (or the lack of it) rather than one moment that could be misleading:
+    // immediately after reheat (t=0, before rAF has had any chance to run
+    // more ticks), and twice more after real wall-clock time has passed, by
+    // which point a real browser's rAF loop should have run many cooldown
+    // ticks if the reheat genuinely took.
+    const snapshotDebug = (fg: any, label: string) => {
+      const charge = fg.d3Force("charge");
+      const collide = fg.d3Force("collide");
+      const cats = (data.nodes as any[]).filter((n) => n.type === "category");
+      let overlaps = 0,
+        pairs = 0,
+        minGap = Infinity;
+      for (let i = 0; i < cats.length; i++) {
+        for (let j = i + 1; j < cats.length; j++) {
+          const a = cats[i],
+            b = cats[j];
+          if (!Number.isFinite(a.x) || !Number.isFinite(b.x)) continue;
+          const d = Math.hypot(a.x - b.x, a.y - b.y);
+          const gap = d - (a.val + b.val);
+          pairs++;
+          if (gap < 0) overlaps++;
+          minGap = Math.min(minGap, gap);
+        }
+      }
+      const xs = cats.map((n) => n.x).filter(Number.isFinite);
+      const ys = cats.map((n) => n.y).filter(Number.isFinite);
+      const bbox =
+        xs.length > 1
+          ? `${Math.round(Math.max(...xs) - Math.min(...xs))}x${Math.round(Math.max(...ys) - Math.min(...ys))}`
+          : "n/a";
+      const line =
+        `[${label} @ ${new Date().toISOString().slice(11, 19)}] ` +
+        `charge=${charge?.strength()?.(cats[0], 0, cats) ?? "?"} distanceMax=${charge?.distanceMax?.() ?? "?"} ` +
+        `collide=${collide ? "present" : "MISSING"} nodes=${cats.length} ` +
+        `overlaps=${overlaps}/${pairs} minGap=${Number.isFinite(minGap) ? Math.round(minGap) : "n/a"}px bbox=${bbox}`;
+      setDebugInfo((prev) => (prev ? prev + "\n" + line : line));
     };
 
     applyForces();
+    let t1: ReturnType<typeof setTimeout> | undefined;
+    let t2: ReturnType<typeof setTimeout> | undefined;
+    if (debugOn) {
+      t1 = setTimeout(() => fgRef.current && snapshotDebug(fgRef.current, "+1.5s"), 1500);
+      t2 = setTimeout(() => fgRef.current && snapshotDebug(fgRef.current, "+4s"), 4000);
+    }
     return () => {
       cancelled = true;
+      clearTimeout(t1);
+      clearTimeout(t2);
     };
-  }, [data]);
+  }, [data, debugOn]);
 
   /**
    * Nodes with zero edges get no link force at all, so charge alone flings
@@ -485,6 +622,15 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
         </p>
       </div>
 
+      {/* Live force-state readout -- see the comment on debugInfo above.
+          Plain DOM text, ?debug=graph only, verifiable in a screenshot
+          without needing canvas paint or DevTools. */}
+      {debugOn && (
+        <pre className="mb-3 whitespace-pre-wrap rounded-lg border border-emerald-300 bg-emerald-50 p-3 font-mono text-xs text-emerald-900">
+          {debugInfo ?? "(waiting for fgRef to mount...)"}
+        </pre>
+      )}
+
       {expandError && (
         <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-900">
           <span>{expandError}</span>
@@ -550,11 +696,21 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
               expanded={expanded}
               onExpand={(slug) => void load(slug)}
             />
+          ) : !ForceGraph2D ? (
+            // Module still resolving (see useForceGraph2D above) -- same
+            // spinner next/dynamic's `loading` option used to show.
+            <div className="flex h-full items-center justify-center text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin" />
+            </div>
           ) : (
             size.width > 0 && (
               <ForceGraph2D
                 ref={fgRef}
-                graphData={data as any}
+                // Gated on forcesReady -- see the comment above. Ensures
+                // ForceGraph2D never runs its synchronous warmup against
+                // real nodes before our custom forces are actually on the
+                // simulation.
+                graphData={(forcesReady ? data : EMPTY_GRAPH) as any}
                 width={size.width}
                 height={size.height}
                 backgroundColor="rgba(0,0,0,0)"
@@ -581,12 +737,22 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
                 // 13-node layout while it is still mid-expansion.
                 d3AlphaDecay={0.0115}
                 d3VelocityDecay={0.3}
-                // Ticks run before the first paint, so the graph arrives
-                // already spread rather than visibly exploding outward from
-                // a central clump.
-                warmupTicks={80}
-                // Longer runway to match the slower decay above.
-                cooldownTicks={320}
+                // Ticks run SYNCHRONOUSLY before the first paint (a plain
+                // for-loop over forceLayout.tick() -- see
+                // force-graph/src/canvas-force-graph.js), so the graph
+                // arrives already spread rather than visibly un-clumping
+                // over the next few seconds. 400 matches the tick count a
+                // headless run of these exact force params needed to reach
+                // 0 overlaps (789x827, 141px min gap) against the live
+                // corpus -- warmup and cooldown ticks are the same
+                // forceLayout.tick() call either way, so this makes the
+                // FIRST paint do the convergence work that used to depend on
+                // cooldownTicks running via requestAnimationFrame.
+                warmupTicks={400}
+                // Interactive re-settling only now (category expand/collapse
+                // changes graphData) -- the initial layout no longer needs
+                // this to converge.
+                cooldownTicks={200}
                 onEngineStop={frameGraph}
                 enableNodeDrag={false}
               />
