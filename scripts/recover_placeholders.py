@@ -116,8 +116,23 @@ def find_placeholder_rows() -> list[dict]:
         Render's datacenter IP is blocked — the home-IP path may well work)
       - any row still showing the literal placeholder title, whatever its
         status (a non-photo row whose extraction degraded)
-    Broader than recover_photo_captions.find_placeholder_rows, which only
-    looked at photo_manual rows."""
+      - Content type == "unknown"/empty (2026-08-21, health-audit finding):
+        a row can fail extraction while still capturing a real caption --
+        e.g. a transient Gemini error, or a 429 mid-capture -- landing with a
+        genuine Title but no content_type, main_point, or summary. None of
+        the three conditions above ever matched that shape (the title isn't
+        the placeholder string or a bare permalink, and the status is
+        whatever the capture flow left it at, not Photo-manual or
+        Failed-retry), so 68 of 132 backlogged rows were invisible to every
+        retry agent -- reachable=64/132 in the audit, verified via a live
+        Notion query, not assumed. `content_type` isn't on
+        extract_saves_fields's return shape, so it's read directly here
+        rather than widening that shared helper for every other caller.
+        Archived rows are excluded on purpose: archiving is a deliberate
+        "stop touching this" signal elsewhere in the codebase (see
+        HIDDEN_STATUS_LABELS in app/public_api.py), and a retry loop
+        silently un-archiving something would be a real, surprising side
+        effect the archiving script never intended."""
     from app import notion_writer
 
     pages = notion_writer.find_saves_pages_since("1970-01-01T00:00:00")
@@ -126,10 +141,17 @@ def find_placeholder_rows() -> list[dict]:
         fields = notion_writer.extract_saves_fields(page)
         if not fields["shortcode"]:
             continue
+        props = page.get("properties", {})
+        content_type = (((props.get("Content type") or {}).get("select")) or {}).get("name", "")
+        needs_extraction = (
+            content_type.strip().lower() in ("", "unknown")
+            and fields["status_label"] != "🗄 Archived"
+        )
         if (
             fields["status_label"] in RECOVERABLE_STATUSES
             or fields["title"] == PLACEHOLDER_TITLE
             or _title_is_bare_permalink(fields["title"], fields["shortcode"])
+            or needs_extraction
         ):
             rows.append(fields)
     return rows

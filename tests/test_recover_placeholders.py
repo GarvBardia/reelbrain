@@ -6,7 +6,11 @@ from scripts import recover_placeholders as rp
 
 # --- selection query ------------------------------------------------------------
 
-def _page(shortcode, title, status):
+def _page(shortcode, title, status, content_type="tutorial"):
+    # content_type defaults to a REAL value (not "unknown"/empty) so every
+    # existing call site -- none of which cares about this dimension -- keeps
+    # behaving exactly as before now that find_placeholder_rows also checks
+    # it. Pass content_type="" or "unknown" explicitly to exercise that path.
     return {
         "id": f"pg-{shortcode}", "url": f"https://notion.so/pg-{shortcode}",
         "properties": {
@@ -17,6 +21,7 @@ def _page(shortcode, title, status):
             "Reel URL": {"url": f"https://www.instagram.com/reel/{shortcode}/"},
             "Gate keyword": {"rich_text": []},
             "Topics": {"multi_select": []},
+            "Content type": {"select": {"name": content_type}},
         },
     }
 
@@ -69,6 +74,37 @@ def test_selection_matches_photo_manual_or_placeholder_title(monkeypatch):
 
     rows = rp.find_placeholder_rows()
     assert [r["shortcode"] for r in rows] == ["PHOTO1", "PLACE1", "BOTH1"]
+
+
+def test_selection_catches_unknown_content_type_with_a_real_title(monkeypatch):
+    """2026-08-21 health-audit finding: a row can fail extraction while still
+    capturing a real caption (a transient Gemini error, or a 429 mid-capture)
+    -- landing with a genuine title, ordinary status, and content_type never
+    set. None of the other three conditions ever matched that shape, so 68 of
+    132 backlogged rows were invisible to every retry agent."""
+    from app import notion_writer
+
+    pages = [
+        _page("UNK1", "A real caption, not a placeholder", "📥 Inbox", content_type="unknown"),
+        _page("EMPTY1", "Another real caption", "⏳ Awaiting DM", content_type=""),
+        _page("FINE1", "A real title", "📥 Inbox"),  # content_type="tutorial" default -- no
+    ]
+    monkeypatch.setattr(notion_writer, "find_saves_pages_since", lambda iso: pages)
+
+    rows = rp.find_placeholder_rows()
+    assert sorted(r["shortcode"] for r in rows) == ["EMPTY1", "UNK1"]
+
+
+def test_unknown_content_type_excludes_archived_rows(monkeypatch):
+    """Archiving is a deliberate 'stop touching this' signal elsewhere in the
+    codebase (HIDDEN_STATUS_LABELS) -- a retry loop silently un-archiving
+    something would be a surprising side effect the archiving script never
+    intended, so it's excluded even when content_type is unknown."""
+    from app import notion_writer
+
+    pages = [_page("ARCH1", "A real title", "🗄 Archived", content_type="unknown")]
+    monkeypatch.setattr(notion_writer, "find_saves_pages_since", lambda iso: pages)
+    assert rp.find_placeholder_rows() == []
 
 
 # --- run_worker loop ------------------------------------------------------------

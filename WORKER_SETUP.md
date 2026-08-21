@@ -84,6 +84,20 @@ Every remaining backlog item is quota-bound (the Gemini free tier is ~20
 requests/day/model) and, until now, needed a human to run a script and remember
 which one stopped where. This replaces that with one scheduled pass.
 
+## Ollama check (`ensure_ollama.py`), first step in the .bat
+
+Added 2026-08-21 after a pipeline health audit found Ollama wasn't running
+when the nightly job fired, so the local-routed `plain_summary` step silently
+processed 0 of 160 pending rows that night — every other step degrades cleanly
+around a single missing local provider, which is exactly why it went
+unnoticed. `nightly_autonomous.bat` now runs `ensure_ollama.py` first: it
+checks `http://localhost:11434/api/tags`, starts Ollama if it's down, and
+polls (up to 30s) for a real response before letting `daily_runner.py` run.
+It **always exits 0** — if Ollama genuinely can't be started, `plain_summary`
+degrades exactly as before (`ollama_stopped=True`) and every Gemini-routed
+step still runs untouched; this only makes that outcome logged instead of
+silent. Manual run: `python scripts\ensure_ollama.py`.
+
 ## Priority order
 
 | # | Step | Cost/row | Why here |
