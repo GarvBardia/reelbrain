@@ -64,7 +64,11 @@ export default function LandingPage() {
         <Spotlight className="-top-40 left-0 text-indigo-500 md:-top-20 md:left-60" />
         <div className="pointer-events-none absolute inset-0 bg-dot-grid mask-radial-fade" />
 
-        <div className="relative mx-auto max-w-6xl px-6 pb-16 pt-20 md:pt-28">
+        {/* max-w-[1440px], not max-w-6xl -- widened specifically so the graph
+            (the section's centerpiece) gets real room. The headline/subtext
+            below keep their own tighter max-w-3xl/max-w-2xl, so this only
+            gives the graph more space, not longer text lines. */}
+        <div className="relative mx-auto max-w-[1440px] px-6 pb-16 pt-20 md:pt-28">
           <BlurFade className="mx-auto max-w-3xl text-center">
             <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/70 px-3.5 py-1.5 text-xs font-medium text-slate-600 shadow-sm">
               <Sparkles className="h-3.5 w-3.5 text-indigo-500" />

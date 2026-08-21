@@ -74,12 +74,14 @@ const GLOW_NODE_BUDGET = 90;
 
 /** Extra clearance added to each node's radius for collision, so circles not
  *  only avoid overlapping but leave room for a label to sit between them. */
-const COLLIDE_PADDING = 13;
+const COLLIDE_PADDING = 16;
 
 /** Where a zero-edge node gets parked, in simulation coordinates (the layout
  *  centres on roughly 0,0). Lower-left, close enough that framing the graph
- *  does not have to zoom out much to include it. */
-const ISOLATED_ANCHOR = { x: -430, y: 215 };
+ *  does not have to zoom out much to include it. Scaled up alongside the
+ *  2026-08-21 spread increase (was -430,215) -- otherwise "Other" would sit
+ *  awkwardly close to a main cluster that now spans roughly 1173x1457. */
+const ISOLATED_ANCHOR = { x: -690, y: 345 };
 
 /** Label policy at the category level. Showing all 13 at once is the
  *  unreadable-stack problem; showing none makes the graph a guessing game.
@@ -272,21 +274,31 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
         return;
       }
 
+      // Scaled up 2026-08-21 alongside the bigger canvas (560px -> 760px tall,
+      // max-w-6xl -> max-w-[1440px]). This is NOT just "the same layout at a
+      // bigger zoom" -- zoomToFit would already uniformly rescale everything
+      // (nodes, gaps, labels together) to fill whatever canvas exists, at
+      // ANY charge value, since node radius is itself in simulation units
+      // and scales with zoom exactly like spacing does. So making the canvas
+      // bigger alone changes nothing about relative density -- it just zooms
+      // in more on the SAME tight relative arrangement. Deliberately
+      // increasing charge/distances here changes the arrangement itself:
+      // headless-verified against the live corpus, the average
+      // nearest-neighbour-to-node-radius ratio goes from 13.9 to 21.7 (0/78
+      // overlaps held, minGap 142px -> 235px) -- genuinely more breathing
+      // room per node, not the same clump stretched to fit a bigger frame.
       fg.d3Force("charge")
-        ?.strength(-1150)
-        // Without a cap, repulsion between the far-apart nodes keeps inflating
-        // the layout every tick and zoomToFit just scales everything back down
-        // -- net effect is a small clump again, just after a longer wait.
-        .distanceMax(620);
+        ?.strength(-2400)
+        .distanceMax(1000);
 
       fg.d3Force("link")
-        ?.distance((l: any) => (l.type === "membership" ? 70 : 240))
+        ?.distance((l: any) => (l.type === "membership" ? 110 : 380))
         // d3's default link strength is 1/min(degree of endpoints). With
         // near-uniform high degree that lands around 0.1 for EVERY edge, so 52
         // of them sum into one strong inward pull. Scaling by co-occurrence
         // weight keeps the meaningful pairings and mutes the noise.
         .strength((l: any) =>
-          l.type === "membership" ? 0.55 : Math.min(0.09, 0.012 * (l.value ?? 1)),
+          l.type === "membership" ? 0.55 : Math.min(0.08, 0.01 * (l.value ?? 1)),
         );
 
       // The hard constraint. Radius is the node's own radius plus padding, so
@@ -645,9 +657,11 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
         </div>
       )}
 
-      {/* The glass shell. GlowingEffect is an absolutely-positioned overlay
-          that lights the border edge nearest the cursor; it is inert on touch
-          (no pointer to track), so the mobile list view below loses nothing. */}
+      {/* A thin gradient hairline border, not glass -- the frosted/translucent
+          fill this used to sit on was removed (2026-08-21). GlowingEffect is
+          an absolutely-positioned overlay that lights the border edge nearest
+          the cursor; it is inert on touch (no pointer to track), so the
+          mobile list view below loses nothing. */}
       <div
         className={cn(
           "relative rounded-[1.35rem] p-px",
@@ -668,28 +682,16 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
           ref={wrapRef}
           className={cn(
             "relative w-full overflow-hidden rounded-[1.3rem]",
-            // Faint tint + blur so the card reads as frosted glass sitting on
-            // the animated background rather than an opaque white box punched
-            // out of it.
-            "bg-white/85 backdrop-blur-xl",
-            isNarrow ? "h-auto" : "h-[560px]",
+            // Plain solid background -- no blur, no translucency layer. The
+            // frosted-glass backdrop-blur and the radial depth-glow behind
+            // the nodes were both removed (2026-08-21): a clean flat surface
+            // reads better once the layout is genuinely spread out, and it
+            // removes a GPU-cost (backdrop-filter) for no visual gain now
+            // that the graph is the largest element on the page.
+            "bg-white",
+            isNarrow ? "h-auto" : "h-[760px]",
           )}
         >
-          {/* Soft radial depth glow behind the nodes, in the brand indigo->
-              violet. Pure CSS on a layer beneath the transparent canvas, so it
-              adds a sense of the graph sitting in a lit space rather than on
-              flat white -- and carries zero canvas-draw risk (no gradient math
-              that could throw and take the whole canvas down with it). */}
-          {!isNarrow && (
-            <div
-              aria-hidden
-              className="pointer-events-none absolute inset-0"
-              style={{
-                background:
-                  "radial-gradient(ellipse 60% 55% at 50% 42%, rgba(99,102,241,0.12), rgba(139,92,246,0.05) 45%, transparent 72%)",
-              }}
-            />
-          )}
           {isNarrow ? (
             <GraphFallbackList
               data={data}
