@@ -461,25 +461,12 @@ def create_daily_notion_page(markdown: str) -> Optional[dict]:
         return None
 
 
-# TEMPORARY (2026-08-21) — audit found ntfy_sent has been False for at least
-# 4 consecutive days despite NTFY_TOPIC being confirmed correct on Render;
-# the exception is only ever logger.warning'd server-side, invisible from
-# outside. Stashes the last failure's type+message so run_daily() can surface
-# it in the response ONE time to diagnose, then this whole mechanism gets
-# removed -- see the matching TEMPORARY block in run_daily() below. Do not
-# leave this wired into the response permanently: it's debug detail on an
-# endpoint reachable with just the capture secret, not a real auth boundary.
-_last_ntfy_error: Optional[str] = None
-
-
 def send_daily_ntfy(save_count: int, synthesis_line: Optional[str]) -> bool:
     """POST to ntfy.sh/{NTFY_TOPIC} — same topic as the cookie-health alert
     (app/alerts.py), since that's the only ntfy topic this app configures.
     Best-effort: returns False (never raises) if NTFY_TOPIC isn't set or the
     request fails."""
-    global _last_ntfy_error
     if not NTFY_TOPIC:
-        _last_ntfy_error = "NTFY_TOPIC not set"
         return False
     try:
         import httpx
@@ -497,11 +484,9 @@ def send_daily_ntfy(save_count: int, synthesis_line: Optional[str]) -> bool:
             timeout=NTFY_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
-        _last_ntfy_error = None
         return True
-    except Exception as exc:  # noqa: BLE001 - best-effort notification, never the critical path
+    except Exception:  # noqa: BLE001 - best-effort notification, never the critical path
         logger.warning("daily digest ntfy.sh push failed", exc_info=True)
-        _last_ntfy_error = f"{type(exc).__name__}: {exc}"
         return False
 
 
@@ -514,16 +499,10 @@ def run_daily() -> dict:
     high_count = sum(1 for s in saves if s["priority"] == "High")
     synthesis_line = _daily_synthesis_line(saves) if saves else None
     ntfy_sent = send_daily_ntfy(save_count=len(saves), synthesis_line=synthesis_line)
-    result = {
+    return {
         "markdown": markdown,
         "save_count": len(saves),
         "high_priority_count": high_count,
         "notion_page": page,
         "ntfy_sent": ntfy_sent,
     }
-    # TEMPORARY (2026-08-21) — see the matching block on send_daily_ntfy
-    # above. Remove this once the root cause is diagnosed; it doesn't belong
-    # permanently on a response reachable with just the capture secret.
-    if not ntfy_sent and _last_ntfy_error:
-        result["ntfy_error"] = _last_ntfy_error
-    return result
