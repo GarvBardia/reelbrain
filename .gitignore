@@ -19,6 +19,7 @@ daily_runner.log
 daily_capture_report.log
 backlog_history.json
 pipeline_health.log
+pipeline_health_task.log
 PIPELINE_ALERT_*.txt
 taxonomy_snapshot_*.json
 TAXONOMY_DRIFT.md

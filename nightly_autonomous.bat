@@ -18,11 +18,10 @@ python scripts\ensure_ollama.py >> nightly_autonomous.log 2>&1
 python scripts\daily_runner.py >> nightly_autonomous.log 2>&1
 python scripts\health_watchdog.py >> nightly_autonomous.log 2>&1
 python scripts\daily_capture_report.py >> nightly_autonomous.log 2>&1
-REM Consolidates every check above (plus Task Scheduler's own last-result,
-REM Ollama, vault sync, Gemini quota, and verified ntfy delivery) into ONE
-REM report -- see WORKER_SETUP.md for the important caveat: this runs LAST
-REM in the SAME task as everything above it, so if Task Scheduler refuses to
-REM start this task at all (exactly what happened 2026-08-22..26), this
-REM check doesn't run either and the outage stays silent regardless. That
-REM gap needs a SEPARATE Task Scheduler entry to close; not done here.
-python scripts\pipeline_health.py >> nightly_autonomous.log 2>&1
+REM pipeline_health.py deliberately does NOT run here (2026-08-27). It's on
+REM its own separate "ReelBrain Pipeline Health" Task Scheduler entry every
+REM 4h, with no battery restriction -- the whole point is that it must keep
+REM checking even when THIS task can't run at all (which is exactly what
+REM caused the 6-day silent outage this script was built to catch). Wiring
+REM it in here too would put it right back inside the single point of
+REM failure it exists to sit outside of. See WORKER_SETUP.md.

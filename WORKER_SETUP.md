@@ -306,14 +306,60 @@ response when it actually sends an alert, not just "our code didn't raise."
 **Zero Gemini calls.** Every check is a read against already-existing state
 or a live service ping.
 
-**⚠️ Known gap, not fixed here:** it's wired as the *last* step in
-`nightly_autonomous.bat` — the same task Task Scheduler refused outright
-during the incident. If that refusal happens again, this check doesn't run
-either, and the outage stays just as silent. Closing that gap needs a
-**separate** Task Scheduler entry for `pipeline_health.py` alone (ideally
-*without* the battery restriction, since it's a handful of lightweight reads
-and pings, not a real workload) — flagged here, not created, since it's a new
-standing schedule the user should approve rather than one this doc assumes.
+**Runs on its own Task Scheduler entry, "ReelBrain Pipeline Health" — deliberately
+separate from `nightly_autonomous.bat`/"ReelBrain Nightly Runner."** It does
+NOT run inside `nightly_autonomous.bat` (it briefly did, for one commit, before
+this was created — removed again 2026-08-27) precisely because that's the task
+Task Scheduler refused outright during the incident. If this check lived inside
+the same task, a repeat of that refusal would silence it too, defeating the
+entire point. Its own task has:
+
+- Every 4 hours, indefinitely.
+- **No battery restriction** — `DisallowStartIfOnBatteries` and
+  `StopIfGoingOnBatteries` both `False` (this is a handful of lightweight
+  reads and pings, not a real workload, so there's no real battery cost to
+  running it unplugged).
+- `StartWhenAvailable` on, so a missed run (machine asleep/off) fires as soon
+  as it's back, rather than silently skipping to the next slot.
+
+Created via (PowerShell, run once — already done on this machine 2026-08-27):
+
+```powershell
+$action = New-ScheduledTaskAction -Execute "C:\Users\garvb\reelbrain\pipeline_health.bat"
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+    -RepetitionInterval (New-TimeSpan -Hours 4) `
+    -RepetitionDuration (New-TimeSpan -Days 3650)   # ~10 years; [TimeSpan]::MaxValue
+                                                      # overflows the task XML's duration format
+$settings = New-ScheduledTaskSettingsSet `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -StartWhenAvailable `
+    -MultipleInstances IgnoreNew `
+    -ExecutionTimeLimit (New-TimeSpan -Hours 1)
+$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+
+Register-ScheduledTask -TaskName "ReelBrain Pipeline Health" `
+    -Action $action -Trigger $trigger -Settings $settings -Principal $principal `
+    -Description "Consolidated pipeline health check ... runs every 4h, independent of the Nightly Runner task, with no battery restriction." `
+    -Force
+```
+
+Note the parameter names: it's `-AllowStartIfOnBatteries` / `-DontStopIfGoingOnBatteries`
+on `New-ScheduledTaskSettingsSet` — **not** `-DisallowStartIfOnBatteries:$false` /
+`-StopIfGoingOnBatteries:$false`, which don't exist on this cmdlet and fail with
+"A parameter cannot be found." After creating any task like this, verify the
+settings actually landed rather than trusting the switches blindly:
+
+```powershell
+(Get-ScheduledTask -TaskName "ReelBrain Pipeline Health").Settings |
+    Select-Object DisallowStartIfOnBatteries, StopIfGoingOnBatteries
+# both must read False
+```
+
+Trigger it on demand any time: `Start-ScheduledTask -TaskName "ReelBrain Pipeline Health"`.
+Raw stdout/stderr from each run goes to `pipeline_health_task.log` (gitignored,
+via the `pipeline_health.bat` launcher) — separate from `pipeline_health.log`,
+which is the script's own structured report.
 
 **Output:** one consolidated block — `ALL GREEN — 7/7 checks passing.` when
 healthy, or an itemized `[OK]`/`[WARN]`/`[FAIL]` list naming exactly what
