@@ -286,3 +286,46 @@ noise-means-look-now discipline as the watchdog. Uses the existing `NTFY_TOPIC`;
 no new config.
 
 Manual run (never pushes, never writes history): `python scripts\daily_capture_report.py --dry-run`
+
+# Pipeline Health (`pipeline_health.py`) — the ONE "is everything OK" check
+
+Built 2026-08-27 after a real 6-day silent outage: Task Scheduler refused to
+even start the Nightly Runner task (Win32 error 4320, "The operator or
+administrator has refused the request" — this machine's task has
+`DisallowStartIfOnBatteries`/`StopIfGoingOnBatteries` set, and it's a laptop),
+and `health_watchdog.py` — which would normally catch staleness — runs
+*inside that same nightly job*, so it never got a chance to raise the alarm.
+Consolidates every check from that incident's manual audit into one script so
+the audit never has to happen by hand again: backend `/health`, Task
+Scheduler's own last-result (decoded, not a bare number), Ollama reachability,
+the Notion backlog trend (reuses `daily_capture_report`'s logic directly, not
+re-implemented), Obsidian vault/Notion count match, Gemini quota remaining,
+and **ntfy delivery verified end-to-end** — it reads ntfy.sh's own HTTP
+response when it actually sends an alert, not just "our code didn't raise."
+
+**Zero Gemini calls.** Every check is a read against already-existing state
+or a live service ping.
+
+**⚠️ Known gap, not fixed here:** it's wired as the *last* step in
+`nightly_autonomous.bat` — the same task Task Scheduler refused outright
+during the incident. If that refusal happens again, this check doesn't run
+either, and the outage stays just as silent. Closing that gap needs a
+**separate** Task Scheduler entry for `pipeline_health.py` alone (ideally
+*without* the battery restriction, since it's a handful of lightweight reads
+and pings, not a real workload) — flagged here, not created, since it's a new
+standing schedule the user should approve rather than one this doc assumes.
+
+**Output:** one consolidated block — `ALL GREEN — 7/7 checks passing.` when
+healthy, or an itemized `[OK]`/`[WARN]`/`[FAIL]` list naming exactly what
+needs attention. Appended to `pipeline_health.log` (gitignored). A single
+ntfy push fires if *anything* is degraded or broken (not failure-only like
+`health_watchdog` — backlog growth alone counts here too). **Backup channel
+that doesn't depend on ntfy being healthy:** whenever something needs
+attention, it also writes a dated `PIPELINE_ALERT_<date>.txt` in the repo
+root (gitignored, auto-cleaned after 14 days) — so a broken ntfy path is
+never the *only* way this gets noticed, which is exactly the failure mode
+that hid the original outage's ntfy problem too.
+
+Manual run (real alert if something's wrong): `python scripts\pipeline_health.py`
+Dry run (prints the report, never pushes, never writes files):
+`python scripts\pipeline_health.py --dry-run`

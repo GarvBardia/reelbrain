@@ -18,3 +18,11 @@ python scripts\ensure_ollama.py >> nightly_autonomous.log 2>&1
 python scripts\daily_runner.py >> nightly_autonomous.log 2>&1
 python scripts\health_watchdog.py >> nightly_autonomous.log 2>&1
 python scripts\daily_capture_report.py >> nightly_autonomous.log 2>&1
+REM Consolidates every check above (plus Task Scheduler's own last-result,
+REM Ollama, vault sync, Gemini quota, and verified ntfy delivery) into ONE
+REM report -- see WORKER_SETUP.md for the important caveat: this runs LAST
+REM in the SAME task as everything above it, so if Task Scheduler refuses to
+REM start this task at all (exactly what happened 2026-08-22..26), this
+REM check doesn't run either and the outage stays silent regardless. That
+REM gap needs a SEPARATE Task Scheduler entry to close; not done here.
+python scripts\pipeline_health.py >> nightly_autonomous.log 2>&1
