@@ -92,6 +92,14 @@ const ISOLATED_ANCHOR = { x: -690, y: 345 };
 const LABEL_ALWAYS_MIN_VAL = 15;
 const LABEL_SHOW_ALL_ZOOM = 1.45;
 
+/** Dark radial backdrop (2026-08-31), replacing the plain white panel.
+ *  Deepest/most saturated purple at the graph's own visual centre, fading to
+ *  near-black at the edges -- reads as depth/glow behind the nodes rather
+ *  than a flat card. Five stops so the falloff has a shoulder rather than a
+ *  single hard-edged blend. */
+const GRAPH_GRADIENT_STOPS =
+  "#3b0764 0%, #2a0a4a 25%, #1a0a30 50%, #0d0618 75%, #050208 100%";
+
 export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
   const ForceGraph2D = useForceGraph2D();
   const [data, setData] = useState<GraphPayload>(initial);
@@ -441,6 +449,55 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
     return () => clearTimeout(t);
   }, [data, frameGraph]);
 
+  /**
+   * The gradient's centre tracks the graph's own visual centre, not the
+   * container's fixed geometric centre -- those coincide right after
+   * zoomToFit (which always frames and centres the full node set), but
+   * diverge the moment a visitor pans or zooms by hand.
+   *
+   * Applied via direct DOM mutation on wrapRef, not React state: onZoom
+   * fires continuously during a drag-pan gesture, and re-rendering the whole
+   * component (which also holds the canvas) on every tick of that would be
+   * real, needless cost for a value nothing else in the render tree reads.
+   */
+  const centroid = useMemo(() => {
+    const cats = data.nodes.filter((n) => n.type === "category") as any[];
+    if (!cats.length) return { x: 0, y: 0 }; // d3-force's own natural centre
+    return {
+      x: cats.reduce((s, n) => s + (n.x ?? 0), 0) / cats.length,
+      y: cats.reduce((s, n) => s + (n.y ?? 0), 0) / cats.length,
+    };
+  }, [data]);
+
+  const paintGradient = useCallback(() => {
+    const el = wrapRef.current;
+    if (!el || isNarrow) return; // GraphFallbackList keeps bg-white -- see its className comment
+    const fg = fgRef.current;
+    // graph2ScreenCoords needs a live simulation with real coordinates;
+    // before that (or before centroid nodes have ticked at all), "center" is
+    // both correct and the only sane default -- zoomToFit hasn't run yet
+    // either, so the container's own centre IS the graph's centre.
+    let pos = "center";
+    if (fg && Number.isFinite(centroid.x) && Number.isFinite(centroid.y)) {
+      try {
+        const { x, y } = fg.graph2ScreenCoords(centroid.x, centroid.y);
+        if (Number.isFinite(x) && Number.isFinite(y)) pos = `${Math.round(x)}px ${Math.round(y)}px`;
+      } catch {
+        // graph2ScreenCoords can throw before the internal zoom transform
+        // exists yet -- "center" already covers that case.
+      }
+    }
+    el.style.background = `radial-gradient(circle at ${pos}, ${GRAPH_GRADIENT_STOPS})`;
+  }, [centroid, isNarrow]);
+
+  useEffect(() => {
+    paintGradient();
+    // zoomToFit above animates over 400ms; catch the settled position too,
+    // not just the pre-animation one.
+    const t = setTimeout(paintGradient, 450);
+    return () => clearTimeout(t);
+  }, [paintGradient]);
+
   const cheapMode = data.nodes.length > GLOW_NODE_BUDGET;
 
   /**
@@ -505,14 +562,25 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
         ctx.lineWidth = Math.max(0.8, r * 0.13);
         ctx.stroke();
       } else {
+        // Single cheap glow pass (2026-08-31) rather than the full 3-layer
+        // bloom above -- still one shadowBlur cheaper than the full
+        // treatment, but a FLAT fill with no glow at all reads as dull/dead
+        // against the new dark backdrop at high node counts. Reset before
+        // the fill below the same way the full path does; shadow state is
+        // global to the context and would otherwise leak into the rim
+        // stroke and labels that follow.
+        ctx.shadowColor = node.color;
+        ctx.shadowBlur = (isHovered ? 14 : 8) / Math.max(globalScale, 0.6);
         ctx.beginPath();
         ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
         ctx.fillStyle = `${node.color}D9`;
         ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.shadowColor = "transparent";
       }
 
-      // Crisp rim keeps the shape legible against white where the glass body
-      // fades out to near-transparent.
+      // Crisp rim keeps the shape legible against the dark backdrop where
+      // the glass body fades out to near-transparent.
       ctx.beginPath();
       ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
       ctx.strokeStyle = isHovered ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.7)";
@@ -548,11 +616,15 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
       const label = isCategory ? `${node.label} · ${node.count}` : node.label;
       const y = node.y + r + 6 / globalScale;
 
-      // Halo behind the text keeps it legible where it crosses an edge.
+      // Flipped for the dark backdrop (2026-08-31): light fill, dark halo --
+      // the old dark-fill/white-halo pairing was built for a white panel and
+      // would have gone straight to unreadable here. The halo colour matches
+      // the gradient's own darkest stop rather than plain black, so it reads
+      // as part of the same surface instead of a mismatched patch.
       ctx.lineWidth = 3.5 / globalScale;
-      ctx.strokeStyle = "rgba(255,255,255,0.95)";
+      ctx.strokeStyle = "rgba(5,2,8,0.85)";
       ctx.strokeText(label, node.x, y);
-      ctx.fillStyle = isCategory ? "#0f172a" : "#475569";
+      ctx.fillStyle = isCategory ? "#f8fafc" : "#cbd5e1";
       ctx.fillText(label, node.x, y);
       ctx.restore();
     },
@@ -682,13 +754,12 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
           ref={wrapRef}
           className={cn(
             "relative w-full overflow-hidden rounded-[1.3rem]",
-            // Plain solid background -- no blur, no translucency layer. The
-            // frosted-glass backdrop-blur and the radial depth-glow behind
-            // the nodes were both removed (2026-08-21): a clean flat surface
-            // reads better once the layout is genuinely spread out, and it
-            // removes a GPU-cost (backdrop-filter) for no visual gain now
-            // that the graph is the largest element on the page.
-            "bg-white",
+            // The dark radial gradient (2026-08-31, see GRAPH_GRADIENT_STOPS
+            // and paintGradient) is applied via inline style below, only for
+            // the canvas view -- GraphFallbackList (the <768px view) is
+            // styled entirely in dark text for a light background and was
+            // out of scope for this pass, so it deliberately keeps bg-white.
+            isNarrow && "bg-white",
             isNarrow ? "h-auto" : "h-[760px]",
           )}
         >
@@ -756,6 +827,11 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
                 // this to converge.
                 cooldownTicks={200}
                 onEngineStop={frameGraph}
+                // Keeps the gradient's centre following the graph's actual
+                // visual centre while a visitor pans/zooms by hand -- see
+                // paintGradient. Cheap: just a DOM style write, not a
+                // re-render, and pan/zoom already fires plenty of these.
+                onZoom={paintGradient}
                 enableNodeDrag={false}
               />
             )
