@@ -24,7 +24,13 @@ export default function LandingPage() {
     loading: graphLoading,
     error: graphError,
     retry: retryGraph,
-  } = useApi(() => getGraph(), EMPTY_GRAPH);
+    // "all" (2026-09-02): every reel as a node in one payload, for the
+    // dense default nebula view -- see app/public_api.py's expand="all"
+    // and the block comment at the top of knowledge-graph.tsx. Previously
+    // this fetched category-level-only data and KnowledgeGraph re-fetched
+    // a single category's reels on click; that network round-trip is gone
+    // now that the very first payload already contains everything.
+  } = useApi(() => getGraph("all"), EMPTY_GRAPH);
 
   return (
     <>

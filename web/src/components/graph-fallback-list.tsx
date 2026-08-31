@@ -12,7 +12,13 @@ import { Button } from "@/components/ui/button";
  * a 360px viewport overlaps its own nodes, collides its labels, and fights the
  * browser's pinch-zoom. The information the graph carries -- which categories
  * exist, how big each is, what's inside one -- survives a list intact, and the
- * tap targets are far better. Same data, same colours, same expand model.
+ * tap targets are far better. Same data, same colours.
+ *
+ * `onExpand` is a LOCAL state setter now (2026-09-02), not a network refetch --
+ * the desktop canvas moved to fetching every reel at once (expand="all"), so
+ * `data` already contains everything; drilling into one category on mobile is
+ * just filtering what's already in hand, same as the desktop view dimming
+ * everything outside the focused category instead of re-fetching.
  */
 export function GraphFallbackList({
   data,
@@ -23,7 +29,12 @@ export function GraphFallbackList({
   expanded: string | null;
   onExpand: (slug: string | null) => void;
 }) {
-  const reelNodes = data.nodes.filter((n) => n.type === "reel");
+  // Filtered by category, not just by type=="reel" -- with `data` now holding
+  // every reel across every category (expand="all"), the unfiltered set used
+  // to work by coincidence: the OLD model re-fetched a payload scoped to just
+  // one category, so "every reel node in `data`" and "this category's reels"
+  // were the same list. They no longer are.
+  const reelNodes = data.nodes.filter((n) => n.type === "reel" && n.category === expanded);
   const current = data.categories.find((c) => c.slug === expanded);
 
   if (expanded && current) {

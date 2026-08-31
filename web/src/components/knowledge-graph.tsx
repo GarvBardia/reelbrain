@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType } from "react";
-import { forceCollide } from "d3-force";
+import { forceCenter, forceCollide } from "d3-force";
 import { ArrowLeft, Loader2 } from "lucide-react";
 
-import { EMPTY_GRAPH, getGraph } from "@/lib/api";
+import { EMPTY_GRAPH } from "@/lib/api";
 import type { GraphNode, GraphPayload } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -65,49 +65,89 @@ function useForceGraph2D() {
  *  breakpoint we render the same data as a tappable list instead. */
 const GRAPH_MIN_WIDTH = 768;
 
-/** Above this many nodes the per-node glow (three stacked arcs + a canvas
- *  shadow each) costs more than it adds. Expanding a big category can push
- *  past it, so the renderer drops to a cheaper single-arc path rather than
- *  dropping frames -- see paintNode. Tuned against the real corpus: 13
- *  category nodes by default, up to ~66 when the largest category expands. */
-const GLOW_NODE_BUDGET = 90;
+/**
+ * Dense "nebula" default view (2026-09-02), replacing the 13-category
+ * click-to-expand model entirely. The backend's expand="all" mode (see
+ * app/public_api.py) returns every reel as a node plus every category as a
+ * node, category<->reel membership links, and category<->category
+ * co-occurrence links -- the SAME data shape a single-category expand
+ * always returned, just for every category simultaneously. Category nodes
+ * stay IN the simulation (their membership links are what pulls same-
+ * category reels toward a shared anchor, which is the entire mechanism that
+ * produces per-category clustering) but are never drawn -- see the isType
+ * checks in paintNode/paintLink. Reusing the existing membership-link
+ * physics for clustering, rather than inventing reel-to-reel links the
+ * backend doesn't provide, is what keeps this a frontend-only change plus
+ * one small backend addition instead of a new graph algorithm.
+ */
 
-/** Extra clearance added to each node's radius for collision, so circles not
- *  only avoid overlapping but leave room for a label to sit between them. */
-const COLLIDE_PADDING = 16;
+/** Extra clearance added to each node's radius for collision. Much smaller
+ *  than the old category-only value (16) -- reel nodes are themselves much
+ *  smaller (radius ~1.5-6px vs a category's ~8-20px), and the "tight,
+ *  roughly spherical" nebula look the reference calls for needs nodes that
+ *  can sit close together, not spaced as if they were still 13 large
+ *  bubbles. */
+const COLLIDE_PADDING = 1.5;
 
-/** Where a zero-edge node gets parked, in simulation coordinates (the layout
- *  centres on roughly 0,0). Lower-left, close enough that framing the graph
- *  does not have to zoom out much to include it. Scaled up alongside the
- *  2026-08-21 spread increase (was -430,215) -- otherwise "Other" would sit
- *  awkwardly close to a main cluster that now spans roughly 1173x1457. */
-const ISOLATED_ANCHOR = { x: -690, y: 345 };
+/** Where a zero-edge node gets parked, in simulation coordinates. Still
+ *  needed: category anchors with zero co-occurrence links (the "Other"
+ *  bucket) still exist in the simulation even though they're never drawn,
+ *  and an anchor with charge but no links would fling off exactly like a
+ *  visible isolated node used to. Scaled down from the category-only
+ *  layout's -690,345 to match the much smaller default charge/spread below. */
+const ISOLATED_ANCHOR = { x: -180, y: 90 };
 
-/** Label policy at the category level. Showing all 13 at once is the
- *  unreadable-stack problem; showing none makes the graph a guessing game.
- *  So: the biggest nodes are always labelled, anything is labelled on hover,
- *  and zooming in past the threshold reveals the rest. Nothing is actually
- *  hidden from the visitor either way -- the legend under the canvas lists
- *  every category with its count. */
-const LABEL_ALWAYS_MIN_VAL = 15;
-const LABEL_SHOW_ALL_ZOOM = 1.45;
+/** Reel labels stay hover-only regardless of node count -- 190 permanent
+ *  labels would be the exact unreadable-stack problem the category view was
+ *  built to avoid, just at a much larger scale. Category labels never draw
+ *  at all in this view (category nodes aren't drawn), so the always-on
+ *  threshold constants from the category-only view no longer apply. */
 
-/** Dark radial backdrop (2026-08-31), replacing the plain white panel.
- *  Deepest/most saturated purple at the graph's own visual centre, fading to
- *  near-black at the edges -- reads as depth/glow behind the nodes rather
- *  than a flat card. Five stops so the falloff has a shoulder rather than a
- *  single hard-edged blend. */
-const GRAPH_GRADIENT_STOPS =
-  "#3b0764 0%, #2a0a4a 25%, #1a0a30 50%, #0d0618 75%, #050208 100%";
+/** Palette anchors for the reference's "nebula" look: category hues get
+ *  pulled toward one of these (never fully replaced -- "shift toward", per
+ *  the brief, keeps each category still identifiably itself) rather than
+ *  staying at full saturation, and value_score 5 reels get pulled toward
+ *  the yellow accent instead, sparingly (5 is the top of the 1-5 scale, the
+ *  smallest slice of the real corpus). */
+const NEBULA_PALETTE = ["#8b5cf6", "#ec4899", "#3b82f6"]; // purple, pink, blue
+const NEBULA_ACCENT = "#fbbf24"; // warm yellow, high-value reels only
+const NEBULA_MIX_AMOUNT = 0.55;
+
+/** Blends a #rrggbb hex colour toward another by `amount` (0 = original,
+ *  1 = fully the target) -- used to shift each reel's category colour
+ *  toward the nebula palette without discarding its original hue entirely. */
+function mixHex(hex: string, toward: string, amount: number): string {
+  const h = hex.replace("#", "");
+  const t = toward.replace("#", "");
+  const hr = parseInt(h.slice(0, 2), 16), hg = parseInt(h.slice(2, 4), 16), hb = parseInt(h.slice(4, 6), 16);
+  const tr = parseInt(t.slice(0, 2), 16), tg = parseInt(t.slice(2, 4), 16), tb = parseInt(t.slice(4, 6), 16);
+  const mix = (a: number, b: number) => Math.round(a + (b - a) * amount);
+  const toHex = (n: number) => n.toString(16).padStart(2, "0");
+  return `#${toHex(mix(hr, tr))}${toHex(mix(hg, tg))}${toHex(mix(hb, tb))}`;
+}
+
+/** Deterministic per-node palette pick (not random per frame -- a node
+ *  flickering between purple and blue on every repaint would look broken,
+ *  not organic). Hashes the node id into one of the three anchors. */
+function nebulaAnchorFor(id: string): string {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  return NEBULA_PALETTE[hash % NEBULA_PALETTE.length];
+}
+
+/** Dark backdrop, near-black -- the nebula's own glow supplies the colour;
+ *  the background just needs to stay out of the way and give the glow
+ *  somewhere dark to bloom into. */
+const NEBULA_BACKGROUND = "#050208";
 
 export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
   const ForceGraph2D = useForceGraph2D();
   const [data, setData] = useState<GraphPayload>(initial);
+  // "Focused" category, purely local now (2026-09-02) -- see focusCategory
+  // below. No loading/error state needed anymore: there's no network call
+  // left in this component to fail, since `initial` already carries every
+  // reel (expand="all", fetched once by the parent page).
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  // Expansion failures used to be swallowed entirely (a bare `catch {}`), so a
-  // failed click looked like an unresponsive UI. Now surfaced inline.
-  const [expandError, setExpandError] = useState<string | null>(null);
   const [hovered, setHovered] = useState<GraphNode | null>(null);
 
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -212,52 +252,52 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
 
   const isNarrow = size.width > 0 && size.width < GRAPH_MIN_WIDTH;
 
-  const load = useCallback(async (category: string | null) => {
-    setLoading(true);
-    setExpandError(null);
-    try {
-      setData(await getGraph(category ?? undefined));
-      setExpanded(category);
-    } catch (err) {
-      setExpandError(
-        err instanceof Error ? err.message : "Could not load that category.",
-      );
-    } finally {
-      setLoading(false);
+  /**
+   * Local-only focus (2026-09-02) -- no network call, no loading/error
+   * state. `data` already holds every reel across every category (the
+   * parent page fetches expand="all" once), so "focusing" a category is
+   * just dimming/filtering what's already in hand. Replaces the old
+   * `load(category)` re-fetch entirely; the mobile list (GraphFallbackList)
+   * uses this exact same setter for its drill-down view.
+   */
+  const focusCategory = useCallback((category: string | null) => {
+    setExpanded(category);
+  }, []);
+
+  const handleNodeClick = useCallback((node: any) => {
+    // Category-type nodes are never drawn or hit-testable in this view (see
+    // paintNode/nodePointerAreaPaint) -- there's nothing on canvas left to
+    // click to focus a category now; that's legend-only. A reel node still
+    // opens its source post.
+    if (node.type === "reel" && node.shortcode) {
+      window.open(`https://www.instagram.com/reel/${node.shortcode}/`, "_blank", "noopener");
     }
   }, []);
 
-  const handleNodeClick = useCallback(
-    (node: any) => {
-      if (node.type === "category" && node.category !== expanded) {
-        void load(node.category);
-        return;
-      }
-      if (node.type === "reel" && node.shortcode) {
-        window.open(`https://www.instagram.com/reel/${node.shortcode}/`, "_blank", "noopener");
-      }
-    },
-    [expanded, load],
-  );
-
   /**
-   * Force tuning.
+   * Force tuning for the dense nebula view (2026-09-02), retuned from the
+   * ground up for ~190 mostly-tiny reel nodes plus ~13 invisible category
+   * anchors, not 13 large visible category bubbles. The category-only
+   * tuning (charge -2400, link distance up to 380) was sized for nodes with
+   * radius 8-20px needing real separation from each other; reel nodes are
+   * radius ~1.5-6px and the brief explicitly wants them "tight and roughly
+   * spherical", so charge/link distance both come down by roughly an order
+   * of magnitude, and collide radius is now TYPE-AWARE: a category anchor
+   * keeps its full formula-derived `val` for correctly spacing category
+   * CLUSTERS apart from each other, but that same large radius would
+   * otherwise bulldoze the small reel dots away from their own cluster
+   * centre if collide treated it like a visible node -- so an anchor's
+   * effective collide radius is capped small. Same for charge: an anchor
+   * repels at a much gentler strength than reel nodes do, since its job is
+   * to be an attraction point (via its membership links), not an obstacle.
    *
-   * The clumping had a specific cause that charge alone could not fix: at the
-   * category level this is a near-COMPLETE graph. 12 of the 13 nodes share at
-   * least one reel with almost every other, giving 52 co-occurrence edges out
-   * of a possible 66. d3's link force pulls on every one of those, so the
-   * previous -420 charge was fighting 52 springs and lost -- everything
-   * collapsed to a ball with labels stacked on top of each other.
-   *
-   * So the fix is three-part, not just "more charge":
-   *   - forceCollide gives a HARD non-overlap constraint (charge is a soft
-   *     inverse-square falloff and never guarantees separation),
-   *   - link strength is weighted DOWN so a dense mesh of weak
-   *     co-occurrences cannot out-pull the repulsion, while a genuinely
-   *     strong pairing still reads as closer,
-   *   - charge goes up and decay goes down so the layout has both the force
-   *     and the time to actually expand before it freezes.
+   * forceCenter(0, 0) is new here too -- keeps the cluster's node POSITIONS
+   * anchored to the origin so repeated reheats (e.g. a future data change)
+   * can't let the average position cumulatively drift. This is a genuinely
+   * different problem from "the camera stays panned away after a user
+   * drags it", which forceCenter cannot fix at all (it only ever moves node
+   * positions, never the pan/zoom transform) -- see onUserZoomOrPan above
+   * for that half of the fix.
    */
   useEffect(() => {
     let cancelled = false;
@@ -282,44 +322,57 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
         return;
       }
 
-      // Scaled up 2026-08-21 alongside the bigger canvas (560px -> 760px tall,
-      // max-w-6xl -> max-w-[1440px]). This is NOT just "the same layout at a
-      // bigger zoom" -- zoomToFit would already uniformly rescale everything
-      // (nodes, gaps, labels together) to fill whatever canvas exists, at
-      // ANY charge value, since node radius is itself in simulation units
-      // and scales with zoom exactly like spacing does. So making the canvas
-      // bigger alone changes nothing about relative density -- it just zooms
-      // in more on the SAME tight relative arrangement. Deliberately
-      // increasing charge/distances here changes the arrangement itself:
-      // headless-verified against the live corpus, the average
-      // nearest-neighbour-to-node-radius ratio goes from 13.9 to 21.7 (0/78
-      // overlaps held, minGap 142px -> 235px) -- genuinely more breathing
-      // room per node, not the same clump stretched to fit a bigger frame.
+      // Retuned 2026-09-02 for ~190 mostly-tiny reel nodes instead of 13
+      // large category bubbles -- see the block comment above. Charge is
+      // TYPE-AWARE: reel nodes repel each other gently (just enough that
+      // collide has room to resolve contacts without a rigid packed grid),
+      // while category anchors repel at a much smaller magnitude so they
+      // behave as attraction points for their own membership links rather
+      // than pushing the reel cluster apart. distanceMax is pulled way in
+      // too -- 1000 was sized so 13 well-separated bubbles could feel each
+      // other's repulsion across the whole canvas; at reel scale that same
+      // range just flattens the whole nebula into one diffuse haze instead
+      // of a tight sphere with a bright, dense centre.
       fg.d3Force("charge")
-        ?.strength(-2400)
-        .distanceMax(1000);
+        ?.strength((n: any) => (n.type === "category" ? -18 : -34))
+        .distanceMax(220);
 
       fg.d3Force("link")
-        ?.distance((l: any) => (l.type === "membership" ? 110 : 380))
-        // d3's default link strength is 1/min(degree of endpoints). With
-        // near-uniform high degree that lands around 0.1 for EVERY edge, so 52
-        // of them sum into one strong inward pull. Scaling by co-occurrence
-        // weight keeps the meaningful pairings and mutes the noise.
+        // Short membership distance is what actually produces "tight and
+        // roughly spherical" -- it pulls each reel in close to its
+        // category anchor instead of letting charge push it out to where
+        // the old 110px separation used to land it. Co-occurrence links
+        // (category<->category) get a modest distance so category
+        // clusters still sit apart from each other rather than fully
+        // overlapping into one indistinguishable ball.
+        ?.distance((l: any) => (l.type === "membership" ? 18 : 70))
         .strength((l: any) =>
-          l.type === "membership" ? 0.55 : Math.min(0.08, 0.01 * (l.value ?? 1)),
+          l.type === "membership" ? 0.75 : Math.min(0.08, 0.01 * (l.value ?? 1)),
         );
 
-      // The hard constraint. Radius is the node's own radius plus padding, so
-      // two circles can never intersect and there is room for a label between
-      // them. 2 iterations resolves chains of contacts (a node squeezed between
-      // two others) that a single pass leaves overlapping.
+      // The hard constraint. Radius is TYPE-AWARE for the same reason charge
+      // is: a category anchor's `val` is the old category-sizing formula
+      // (4 + sqrt(count)*2, up to ~20px) meant for a VISIBLE bubble that
+      // needed its own clearance. Left as-is here, that large invisible
+      // radius would bulldoze the small reel dots parked around it away
+      // from their own cluster centre -- collide has no concept of
+      // "invisible", it just sees a big circle. So an anchor's collide
+      // radius is capped small; only real reel nodes use their full `val`.
       fg.d3Force(
         "collide",
         forceCollide()
-          .radius((n: any) => (n.val ?? 6) + COLLIDE_PADDING)
-          .strength(0.92)
+          .radius((n: any) => (n.type === "category" ? 3 : (n.val ?? 3) + COLLIDE_PADDING))
+          .strength(0.85)
           .iterations(2),
       );
+
+      // New 2026-09-02: anchors node POSITIONS to the origin so the cluster's
+      // average position can't cumulatively drift across repeated reheats.
+      // This is simulation-space only -- it has no effect on a panned/zoomed
+      // CAMERA, which is the actual "stuck off-centre" bug; that half is
+      // handled by onUserZoomOrPan's idle re-`zoomToFit()` above, a camera
+      // behaviour that forceCenter structurally cannot provide.
+      fg.d3Force("center", forceCenter(0, 0));
 
       // Reheat so the forces above actually move a simulation that mounted and
       // cooled on d3's defaults. d3AlphaDecay / d3VelocityDecay are set as
@@ -344,35 +397,37 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
     // which point a real browser's rAF loop should have run many cooldown
     // ticks if the reheat genuinely took.
     const snapshotDebug = (fg: any, label: string) => {
-      const charge = fg.d3Force("charge");
       const collide = fg.d3Force("collide");
-      const cats = (data.nodes as any[]).filter((n) => n.type === "category");
+      const center = fg.d3Force("center");
+      // Reel nodes only -- these are the ones actually drawn, so their
+      // spread is what "tight and roughly spherical" needs verifying
+      // against, not the invisible category anchors.
+      const reels = (data.nodes as any[]).filter(
+        (n) => n.type === "reel" && Number.isFinite(n.x) && Number.isFinite(n.y),
+      );
+      const cx = reels.reduce((s, n) => s + n.x, 0) / (reels.length || 1);
+      const cy = reels.reduce((s, n) => s + n.y, 0) / (reels.length || 1);
+      const dists = reels.map((n) => Math.hypot(n.x - cx, n.y - cy));
+      const meanR = dists.reduce((s, d) => s + d, 0) / (dists.length || 1);
+      const maxR = dists.length ? Math.max(...dists) : 0;
       let overlaps = 0,
-        pairs = 0,
-        minGap = Infinity;
-      for (let i = 0; i < cats.length; i++) {
-        for (let j = i + 1; j < cats.length; j++) {
-          const a = cats[i],
-            b = cats[j];
-          if (!Number.isFinite(a.x) || !Number.isFinite(b.x)) continue;
+        pairs = 0;
+      for (let i = 0; i < reels.length; i++) {
+        for (let j = i + 1; j < Math.min(reels.length, i + 8); j++) {
+          const a = reels[i],
+            b = reels[j];
           const d = Math.hypot(a.x - b.x, a.y - b.y);
           const gap = d - (a.val + b.val);
           pairs++;
           if (gap < 0) overlaps++;
-          minGap = Math.min(minGap, gap);
         }
       }
-      const xs = cats.map((n) => n.x).filter(Number.isFinite);
-      const ys = cats.map((n) => n.y).filter(Number.isFinite);
-      const bbox =
-        xs.length > 1
-          ? `${Math.round(Math.max(...xs) - Math.min(...xs))}x${Math.round(Math.max(...ys) - Math.min(...ys))}`
-          : "n/a";
       const line =
         `[${label} @ ${new Date().toISOString().slice(11, 19)}] ` +
-        `charge=${charge?.strength()?.(cats[0], 0, cats) ?? "?"} distanceMax=${charge?.distanceMax?.() ?? "?"} ` +
-        `collide=${collide ? "present" : "MISSING"} nodes=${cats.length} ` +
-        `overlaps=${overlaps}/${pairs} minGap=${Number.isFinite(minGap) ? Math.round(minGap) : "n/a"}px bbox=${bbox}`;
+        `center=${center ? "present" : "MISSING"} collide=${collide ? "present" : "MISSING"} ` +
+        `reels=${reels.length} centroid=(${Math.round(cx)},${Math.round(cy)}) ` +
+        `meanRadiusFromCentroid=${Math.round(meanR)}px maxRadius=${Math.round(maxR)}px ` +
+        `overlaps(sampled)=${overlaps}/${pairs}`;
       setDebugInfo((prev) => (prev ? prev + "\n" + line : line));
     };
 
@@ -405,9 +460,15 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
    * Given that, it gets a deliberate home: pinned to the lower-left, reading
    * as a parked miscellaneous bucket rather than an escapee. Generalised to
    * any isolated node so a future zero-degree category behaves the same.
+   *
+   * The `data.level === "category"` guard this used to have is gone
+   * (2026-09-02): that only made sense when `data` was EITHER a
+   * category-level payload OR a single expanded category's reels, never
+   * both. Under expand="all" `data` always holds every reel plus every
+   * category anchor at once, and "Other" (or any future zero-degree
+   * category) still needs pinning regardless.
    */
   useEffect(() => {
-    if (data.level !== "category") return;
     const degree = new Map<string, number>();
     for (const l of data.links) {
       const s = typeof l.source === "string" ? l.source : (l.source as GraphNode).id;
@@ -450,222 +511,188 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
   }, [data, frameGraph]);
 
   /**
-   * The gradient's centre tracks the graph's own visual centre, not the
-   * container's fixed geometric centre -- those coincide right after
-   * zoomToFit (which always frames and centres the full node set), but
-   * diverge the moment a visitor pans or zooms by hand.
+   * Auto-recentre after a pause in interaction (2026-09-02) -- the actual
+   * fix for "scrolling gets stuck, has to fight to find centre".
    *
-   * Applied via direct DOM mutation on wrapRef, not React state: onZoom
-   * fires continuously during a drag-pan gesture, and re-rendering the whole
-   * component (which also holds the canvas) on every tick of that would be
-   * real, needless cost for a value nothing else in the render tree reads.
+   * forceCenter (installed in the force effect below) keeps NODE POSITIONS
+   * anchored to the origin -- that's simulation-space physics, and it's
+   * necessary so repeated reheats can't let the cluster's average position
+   * cumulatively drift. But panning/zooming the CANVAS doesn't touch node
+   * positions or alpha at all; it only moves the camera transform, which
+   * forceCenter has no power over. A user who drags the view away and stops
+   * would otherwise stay off-centre forever with no node-physics fix able
+   * to bring it back -- which is the actual reported symptom. So: debounce
+   * on every zoom/pan event, and once interaction has genuinely paused,
+   * call the SAME zoomToFit used on load. This is what makes the graph
+   * "gravitate back to centre" the way the brief describes -- a camera
+   * behaviour, achieved with a camera call, not a physics one.
    */
-  const centroid = useMemo(() => {
-    const cats = data.nodes.filter((n) => n.type === "category") as any[];
-    if (!cats.length) return { x: 0, y: 0 }; // d3-force's own natural centre
-    return {
-      x: cats.reduce((s, n) => s + (n.x ?? 0), 0) / cats.length,
-      y: cats.reduce((s, n) => s + (n.y ?? 0), 0) / cats.length,
-    };
-  }, [data]);
+  const idleRecentreTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const onUserZoomOrPan = useCallback(() => {
+    if (idleRecentreTimer.current) clearTimeout(idleRecentreTimer.current);
+    idleRecentreTimer.current = setTimeout(() => frameGraph(), 2500);
+  }, [frameGraph]);
 
-  const paintGradient = useCallback(() => {
-    const el = wrapRef.current;
-    if (!el || isNarrow) return; // GraphFallbackList keeps bg-white -- see its className comment
-    const fg = fgRef.current;
-    // graph2ScreenCoords needs a live simulation with real coordinates;
-    // before that (or before centroid nodes have ticked at all), "center" is
-    // both correct and the only sane default -- zoomToFit hasn't run yet
-    // either, so the container's own centre IS the graph's centre.
-    let pos = "center";
-    if (fg && Number.isFinite(centroid.x) && Number.isFinite(centroid.y)) {
-      try {
-        const { x, y } = fg.graph2ScreenCoords(centroid.x, centroid.y);
-        if (Number.isFinite(x) && Number.isFinite(y)) pos = `${Math.round(x)}px ${Math.round(y)}px`;
-      } catch {
-        // graph2ScreenCoords can throw before the internal zoom transform
-        // exists yet -- "center" already covers that case.
-      }
-    }
-    el.style.background = `radial-gradient(circle at ${pos}, ${GRAPH_GRADIENT_STOPS})`;
-  }, [centroid, isNarrow]);
-
-  useEffect(() => {
-    paintGradient();
-    // zoomToFit above animates over 400ms; catch the settled position too,
-    // not just the pre-animation one.
-    const t = setTimeout(paintGradient, 450);
-    return () => clearTimeout(t);
-  }, [paintGradient]);
-
-  const cheapMode = data.nodes.length > GLOW_NODE_BUDGET;
+  useEffect(() => () => clearTimeout(idleRecentreTimer.current), []);
 
   /**
-   * Glassmorphic node rendering.
+   * Nebula node rendering (2026-09-02), replacing the 3-layer glassmorphic
+   * bubble treatment entirely -- that was built for 13 large, well-spaced
+   * category discs; painted onto ~190 small reel nodes at once it would be
+   * both far too expensive (3 shadowBlur passes * 190 nodes every tick) and
+   * visually wrong, since the reference image is small glowing points of
+   * light, not frosted-glass spheres.
    *
-   * Canvas has no backdrop-filter, so "frosted glass" is composited by hand:
-   *   1. an outer bloom via ctx.shadowBlur in the node's own colour,
-   *   2. a translucent radial-gradient body (opaque-ish core -> transparent
-   *      rim) which is what reads as depth/blur rather than a flat disc,
-   *   3. a bright top-left specular arc, the highlight a glass sphere gets
-   *      from a light source, which is what stops it looking like a sticker.
-   * Shadows are always reset before the next primitive -- canvas shadow state
-   * is global and leaks into every later draw (including the labels) if left
-   * set, which shows up as muddy text.
+   * Category anchor nodes are never drawn here at all -- they stay in the
+   * simulation purely for their membership-link clustering effect (see the
+   * force-tuning comment above). Everything below only ever runs for reel
+   * nodes.
+   *
+   * Colour: each reel's own category colour is blended toward one of the
+   * three NEBULA_PALETTE anchors (purple/pink/blue), picked deterministically
+   * per node so the same reel is always the same hue. A high value_score
+   * (5, the top of the 1-5 scale) pulls further toward the warm yellow
+   * accent instead -- rare on purpose, since that is the smallest slice of
+   * the real corpus and the reference image uses yellow as an accent, not a
+   * primary.
+   *
+   * Brightness/size: single ctx.shadowBlur glow pass per node (one draw
+   * call, not three) with size and glow radius modulated by distance from
+   * the simulation origin -- forceCenter above keeps that origin genuinely
+   * at the cluster's centre, so "closer to (0,0)" reliably means "closer to
+   * the visual centre of the nebula", which is what lets nodes near the
+   * middle read as the bright, saturated core and nodes further out fade
+   * smaller and dimmer toward the edge, per the reference image.
    */
   const paintNode = useCallback(
     (node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
+      // Category anchors are simulation-only in this view -- nothing to draw.
+      if (node.type === "category") return;
+
       const r = node.val;
       // The force simulation assigns x/y on its first tick, so the very first
-      // paint can arrive with them still undefined. createRadialGradient
-      // THROWS on a non-finite argument (rather than no-opping), and that
-      // throw propagates out of the render loop and kills the canvas
-      // entirely -- the graph vanishes while everything around it renders
-      // fine. Caught live in a browser; this guard is the fix.
+      // paint can arrive with them still undefined. A non-finite arc radius
+      // or gradient argument throws and kills the whole canvas (confirmed
+      // live in an earlier session) -- guard against that.
       if (!Number.isFinite(node.x) || !Number.isFinite(node.y) || !Number.isFinite(r)) return;
 
-      const isCategory = node.type === "category";
       const isHovered = hovered?.id === node.id;
-      const dim = expanded !== null && isCategory && node.category !== expanded;
+      const dim = expanded !== null && node.category !== expanded;
+
+      // Distance-from-centre drives the "bright core, soft edge" look. 260
+      // is roughly the outer radius the retuned forces settle the cluster
+      // into (verified against the debug overlay, not guessed) -- past that,
+      // brightness/size bottom out rather than continuing to fade to nothing.
+      const dist = Math.hypot(node.x, node.y);
+      const coreT = Math.max(0, 1 - dist / 260); // 1 at centre, 0 at/past the edge
+
+      const baseColor =
+        node.value_score >= 5
+          ? mixHex(node.color, NEBULA_ACCENT, 0.7)
+          : mixHex(node.color, nebulaAnchorFor(node.id), NEBULA_MIX_AMOUNT);
+
+      // Size: mostly the backend's own val (already value_score-weighted),
+      // nudged up slightly for centre nodes so the middle of the cluster
+      // reads as visibly denser/bigger, per the brief's "brightest/biggest
+      // at centre" instruction.
+      const drawR = r * (0.85 + coreT * 0.35);
 
       ctx.save();
-      if (dim) ctx.globalAlpha = 0.28;
+      if (dim) ctx.globalAlpha = 0.22;
 
-      if (!cheapMode) {
-        // 1. Outer bloom. Sits under everything else.
-        ctx.shadowColor = node.color;
-        ctx.shadowBlur = (isHovered ? 26 : 16) / Math.max(globalScale, 0.6);
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, r * 0.92, 0, 2 * Math.PI);
-        ctx.fillStyle = `${node.color}55`;
-        ctx.fill();
-        ctx.shadowBlur = 0;
-        ctx.shadowColor = "transparent";
-
-        // 2. Translucent glass body.
-        const body = ctx.createRadialGradient(
-          node.x - r * 0.35, node.y - r * 0.35, r * 0.1,
-          node.x, node.y, r,
-        );
-        body.addColorStop(0, `${node.color}F2`);
-        body.addColorStop(0.55, `${node.color}CC`);
-        body.addColorStop(1, `${node.color}66`);
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
-        ctx.fillStyle = body;
-        ctx.fill();
-
-        // 3. Specular highlight.
-        ctx.beginPath();
-        ctx.arc(node.x - r * 0.3, node.y - r * 0.34, r * 0.42, Math.PI * 1.05, Math.PI * 1.95);
-        ctx.strokeStyle = "rgba(255,255,255,0.75)";
-        ctx.lineWidth = Math.max(0.8, r * 0.13);
-        ctx.stroke();
-      } else {
-        // Single cheap glow pass (2026-08-31) rather than the full 3-layer
-        // bloom above -- still one shadowBlur cheaper than the full
-        // treatment, but a FLAT fill with no glow at all reads as dull/dead
-        // against the new dark backdrop at high node counts. Reset before
-        // the fill below the same way the full path does; shadow state is
-        // global to the context and would otherwise leak into the rim
-        // stroke and labels that follow.
-        ctx.shadowColor = node.color;
-        ctx.shadowBlur = (isHovered ? 14 : 8) / Math.max(globalScale, 0.6);
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
-        ctx.fillStyle = `${node.color}D9`;
-        ctx.fill();
-        ctx.shadowBlur = 0;
-        ctx.shadowColor = "transparent";
-      }
-
-      // Crisp rim keeps the shape legible against the dark backdrop where
-      // the glass body fades out to near-transparent.
+      // Single glow pass. Blur and fill alpha both scale with coreT so
+      // centre nodes genuinely read as "white-hot" and edge nodes fade
+      // toward a dim, small point rather than every node having identical
+      // presence regardless of position.
+      ctx.shadowColor = baseColor;
+      ctx.shadowBlur = ((isHovered ? 22 : 10) + coreT * 10) / Math.max(globalScale, 0.6);
       ctx.beginPath();
-      ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
-      ctx.strokeStyle = isHovered ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.7)";
-      ctx.lineWidth = (isHovered ? 2.4 : 1.4) / globalScale;
-      ctx.stroke();
+      ctx.arc(node.x, node.y, drawR, 0, 2 * Math.PI);
+      ctx.fillStyle = isHovered ? "#ffffff" : baseColor;
+      ctx.globalAlpha *= 0.55 + coreT * 0.4;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = "transparent";
+      ctx.globalAlpha = dim ? 0.22 : 1;
+
+      // A brighter, near-white core disc on top -- the "white-hot centre"
+      // the reference calls out, applied to individual high-coreT nodes
+      // rather than the whole cluster, so it reads as texture within the
+      // nebula rather than a flat wash.
+      if (coreT > 0.55 || isHovered) {
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, drawR * 0.45, 0, 2 * Math.PI);
+        ctx.fillStyle = `rgba(255,255,255,${(isHovered ? 0.9 : coreT * 0.6).toFixed(2)})`;
+        ctx.fill();
+      }
       ctx.restore();
 
       /**
-       * Label policy -- the other half of the unreadable-mess fix.
-       *
-       * Previously EVERY category label drew unconditionally, so 13 of them
-       * stacked into an illegible pile the moment the layout was even
-       * slightly tight. Now a label draws when it has earned the space:
-       *   - hovered (always, any node),
-       *   - the biggest categories, which are also the best separated,
-       *   - everything, once zoomed in far enough for the room to exist.
-       * Reel labels stay hover-only; 65 of them at once is the hairball the
-       * category-first design exists to avoid.
+       * Label policy: hover-only, always -- with ~190 nodes on screen at
+       * once there is no zoom-dependent threshold that avoids either an
+       * illegible permanent pile (low zoom) or a still-crowded label field
+       * (high zoom, since reels cluster tightly by design here). A single
+       * hover-only rule is simpler and matches what the mobile list already
+       * provides as the browsable alternative.
        */
-      const showLabel =
-        isHovered ||
-        (isCategory &&
-          (globalScale >= LABEL_SHOW_ALL_ZOOM || r >= LABEL_ALWAYS_MIN_VAL));
-      if (!showLabel) return;
+      if (!isHovered) return;
 
       ctx.save();
-      if (dim) ctx.globalAlpha = 0.35;
-      const fontSize = isCategory ? Math.max(12, 13 / globalScale) : Math.max(10, 11 / globalScale);
-      ctx.font = `${isCategory ? 600 : 400} ${fontSize}px ui-sans-serif, system-ui, sans-serif`;
+      const fontSize = Math.max(11, 12 / globalScale);
+      ctx.font = `500 ${fontSize}px ui-sans-serif, system-ui, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
 
-      const label = isCategory ? `${node.label} · ${node.count}` : node.label;
-      const y = node.y + r + 6 / globalScale;
+      const label = node.label;
+      const y = node.y + drawR + 6 / globalScale;
 
-      // Flipped for the dark backdrop (2026-08-31): light fill, dark halo --
-      // the old dark-fill/white-halo pairing was built for a white panel and
-      // would have gone straight to unreadable here. The halo colour matches
-      // the gradient's own darkest stop rather than plain black, so it reads
-      // as part of the same surface instead of a mismatched patch.
       ctx.lineWidth = 3.5 / globalScale;
-      ctx.strokeStyle = "rgba(5,2,8,0.85)";
+      ctx.strokeStyle = "rgba(5,2,8,0.9)";
       ctx.strokeText(label, node.x, y);
-      ctx.fillStyle = isCategory ? "#f8fafc" : "#cbd5e1";
+      ctx.fillStyle = "#f8fafc";
       ctx.fillText(label, node.x, y);
       ctx.restore();
     },
-    [hovered, expanded, cheapMode],
+    [hovered, expanded],
   );
 
   /**
-   * Edges as soft colour-blended gradients rather than flat grey: each line is
-   * a linear gradient running from its source node's colour to its target's,
-   * so a link between Claude Ecosystem (orange) and Web & Design (magenta)
-   * visibly carries both. Weight still drives width, so the co-occurrence
-   * signal survives the restyle.
+   * Links are deliberately near-invisible in the nebula view (2026-09-02).
+   *
+   * The reference image is a field of small glowing points with NO visible
+   * line mesh -- density comes entirely from the dots. Every link in this
+   * data model touches at least one category anchor (membership links run
+   * reel<->anchor; co-occurrence links run anchor<->anchor), and anchors are
+   * never drawn, so a fully-opaque link would visibly draw a line from a
+   * bright dot out to nowhere, which reads as broken rather than as
+   * structure. So:
+   *   - co-occurrence links (anchor<->anchor) are skipped entirely -- both
+   *     endpoints are invisible, so drawing them can only ever look wrong,
+   *     never informative.
+   *   - membership links (reel<->anchor) draw only extremely faintly, and
+   *     only when a category is focused/hovered-relevant, as a subtle cue
+   *     that a group of nearby dots belongs together, without reading as a
+   *     grid or web the way the old category view's edges did.
    */
   const paintLink = useCallback(
     (link: any, ctx: CanvasRenderingContext2D) => {
+      if (link.type !== "membership") return;
+
       const s = link.source;
       const t = link.target;
-      // Before the simulation's first tick these are still id strings, and
-      // even once resolved to objects their coordinates can briefly be
-      // undefined. createLinearGradient throws on non-finite input exactly
-      // like createRadialGradient does -- same crash, same vanished canvas.
       if (!s || !t || typeof s !== "object" || typeof t !== "object") return;
       if (!Number.isFinite(s.x) || !Number.isFinite(s.y)) return;
       if (!Number.isFinite(t.x) || !Number.isFinite(t.y)) return;
 
-      const membership = link.type === "membership";
-      const focussed =
-        expanded !== null &&
-        (s.category === expanded || t.category === expanded);
-      const alpha = expanded === null ? (membership ? "40" : "38") : focussed ? "5A" : "14";
-
-      const grad = ctx.createLinearGradient(s.x, s.y, t.x, t.y);
-      grad.addColorStop(0, `${s.color}${alpha}`);
-      grad.addColorStop(1, `${t.color}${alpha}`);
+      const reel = s.type === "reel" ? s : t;
+      const focussed = expanded !== null && reel.category === expanded;
+      if (expanded !== null && !focussed) return;
 
       ctx.beginPath();
       ctx.moveTo(s.x, s.y);
       ctx.lineTo(t.x, t.y);
-      ctx.strokeStyle = grad;
-      ctx.lineWidth = membership ? 0.9 : Math.min(3.2, 0.6 + (link.value ?? 1) * 0.24);
-      ctx.lineCap = "round";
+      ctx.strokeStyle = `${reel.color}${focussed ? "22" : "0C"}`;
+      ctx.lineWidth = 0.5;
       ctx.stroke();
     },
     [expanded],
@@ -681,25 +708,31 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
       {/* Controls sit above the canvas so they stay reachable while panning. */}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          {expanded ? (
+          {expanded && currentCategory ? (
             <>
-              <Button size="sm" variant="outline" onClick={() => void load(null)}>
+              <Button size="sm" variant="outline" onClick={() => focusCategory(null)}>
                 <ArrowLeft className="h-3.5 w-3.5" />
                 All categories
               </Button>
               <Badge
                 className="border-transparent text-white"
-                style={{ backgroundColor: currentCategory?.color }}
+                style={{ backgroundColor: currentCategory.color }}
               >
-                {currentCategory?.label} · {currentCategory?.count}
+                {currentCategory.label} · {currentCategory.count}
               </Badge>
             </>
           ) : (
             <p className="text-sm text-muted-foreground">
-              {isNarrow ? "Tap a category to explore it." : "Click a category to expand it."}
+              {isNarrow
+                ? "Tap a category below to explore it."
+                : /* 2026-09-02: wheel-zoom used to trap the page scroll the
+                     moment the cursor crossed the canvas -- see
+                     enableZoomInteraction below. This is the one-line fix
+                     for a visitor who scrolls straight into that and finds
+                     the page won't move: tell them the escape hatch. */
+                  "Scroll to keep browsing · hold Ctrl/⌘ + scroll to zoom the graph"}
             </p>
           )}
-          {loading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
         </div>
         <p className="text-sm tabular-nums text-muted-foreground">
           {data.total_reels.toLocaleString()} saves · {data.categories.length} categories
@@ -713,20 +746,6 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
         <pre className="mb-3 whitespace-pre-wrap rounded-lg border border-emerald-300 bg-emerald-50 p-3 font-mono text-xs text-emerald-900">
           {debugInfo ?? "(waiting for fgRef to mount...)"}
         </pre>
-      )}
-
-      {expandError && (
-        <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-900">
-          <span>{expandError}</span>
-          <Button
-            size="sm"
-            variant="outline"
-            className="shrink-0 bg-white"
-            onClick={() => void load(expanded)}
-          >
-            Retry
-          </Button>
-        </div>
       )}
 
       {/* A thin gradient hairline border, not glass -- the frosted/translucent
@@ -754,21 +773,23 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
           ref={wrapRef}
           className={cn(
             "relative w-full overflow-hidden rounded-[1.3rem]",
-            // The dark radial gradient (2026-08-31, see GRAPH_GRADIENT_STOPS
-            // and paintGradient) is applied via inline style below, only for
-            // the canvas view -- GraphFallbackList (the <768px view) is
-            // styled entirely in dark text for a light background and was
+            // Flat near-black backdrop for the canvas view (2026-09-02) --
+            // applied via inline style below, since it needs to match
+            // NEBULA_BACKGROUND exactly. GraphFallbackList (the <768px view)
+            // is styled entirely in dark text for a light background and was
             // out of scope for this pass, so it deliberately keeps bg-white.
             isNarrow && "bg-white",
-            isNarrow ? "h-auto" : "h-[760px]",
+            // Shrunk from 760px (2026-09-02): the brief asked for the section
+            // to stop dominating the viewport. 480px still comfortably shows
+            // the whole nebula at a normal zoomToFit framing, while leaving
+            // page content above/below visible without scrolling through an
+            // oversized graph first.
+            isNarrow ? "h-auto" : "h-[480px]",
           )}
+          style={isNarrow ? undefined : { backgroundColor: NEBULA_BACKGROUND }}
         >
           {isNarrow ? (
-            <GraphFallbackList
-              data={data}
-              expanded={expanded}
-              onExpand={(slug) => void load(slug)}
-            />
+            <GraphFallbackList data={data} expanded={expanded} onExpand={focusCategory} />
           ) : !ForceGraph2D ? (
             // Module still resolving (see useForceGraph2D above) -- same
             // spinner next/dynamic's `loading` option used to show.
@@ -827,11 +848,35 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
                 // this to converge.
                 cooldownTicks={200}
                 onEngineStop={frameGraph}
-                // Keeps the gradient's centre following the graph's actual
-                // visual centre while a visitor pans/zooms by hand -- see
-                // paintGradient. Cheap: just a DOM style write, not a
-                // re-render, and pan/zoom already fires plenty of these.
-                onZoom={paintGradient}
+                // Debounced idle re-`zoomToFit()` -- see onUserZoomOrPan
+                // above. Fires on every pan/zoom event; the actual
+                // recentring only happens once interaction has paused.
+                onZoom={onUserZoomOrPan}
+                // THE SCROLL-TRAP FIX (2026-09-02). Reported bug: a visitor
+                // scrolling the page with the cursor over the canvas got
+                // stuck zooming the graph instead of scrolling the page --
+                // react-force-graph-2d's default wheel handler calls
+                // preventDefault() unconditionally to zoom on every wheel
+                // event, cursor-over-canvas or not.
+                //
+                // Chose the modifier-key gate (Ctrl/Cmd+scroll = zoom, plain
+                // scroll = page) over the other two options considered:
+                // disabling zoom entirely would remove a real, useful
+                // interaction for exploring ~190 dots with no other zoom
+                // affordance offered in its place; capturing wheel only
+                // while actively dragging doesn't fix the actual complaint,
+                // since a visitor scrolling the page never has the mouse
+                // button down over the canvas in the first place. The
+                // modifier gate is also the one directly supported by
+                // react-force-graph-2d's own typed prop
+                // (`enableZoomInteraction?: boolean |
+                // ((event: MouseEvent) => boolean)`, confirmed against
+                // node_modules/react-force-graph-2d/dist/react-force-graph-2d.d.ts)
+                // rather than needing a manual wheel-listener workaround,
+                // and it's a familiar convention (Google Maps, Figma, most
+                // canvas-based editors use the same gate for the same
+                // reason).
+                enableZoomInteraction={(event: any) => event.ctrlKey || event.metaKey}
                 enableNodeDrag={false}
               />
             )
@@ -845,7 +890,7 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
         {data.categories.map((c) => (
           <button
             key={c.slug}
-            onClick={() => void load(c.slug === expanded ? null : c.slug)}
+            onClick={() => focusCategory(c.slug === expanded ? null : c.slug)}
             className={cn(
               "group flex items-center gap-2 text-sm transition-opacity",
               expanded && expanded !== c.slug ? "opacity-40 hover:opacity-100" : "opacity-100",

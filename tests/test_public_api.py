@@ -268,6 +268,70 @@ def test_every_category_node_count_matches_what_expanding_it_reveals(monkeypatch
         assert len(revealed) == node["count"], node["category"]
 
 
+# --- expand="all" (2026-09-01): every reel at once, for the dense default view --------
+
+def test_expand_all_includes_every_reel_regardless_of_category(monkeypatch):
+    pages = [
+        _page("A1", "Claude one", topics=("claude-ai",)),
+        _page("B1", "Design one", topics=("web-design",)),
+        _page("C1", "Other one", topics=()),
+    ]
+    reels = _load(monkeypatch, pages)
+    graph = public_api.build_graph(reels, expand="all")
+
+    assert graph["level"] == "expanded"
+    reel_nodes = {n["shortcode"] for n in graph["nodes"] if n["type"] == "reel"}
+    assert reel_nodes == {"A1", "B1", "C1"}
+
+
+def test_expand_all_gives_a_multi_category_reel_one_node_and_every_membership_link(monkeypatch):
+    """A reel touching two categories still gets exactly one node (never
+    duplicated), but a membership link to EACH category -- the same
+    cross-category signal a single-category expand already preserves."""
+    pages = [_page("A1", "Cross-cutting", topics=("claude-ai", "web-design"))]
+    graph = public_api.build_graph(_load(monkeypatch, pages), expand="all")
+
+    reel_nodes = [n for n in graph["nodes"] if n["type"] == "reel"]
+    assert len(reel_nodes) == 1
+    membership_targets = {
+        l["source"] for l in graph["links"] if l["type"] == "membership" and l["target"] == "reel:A1"
+    }
+    assert membership_targets == {"cat:claude-ecosystem", "cat:web-and-design"}
+
+
+def test_expand_all_reports_every_category_as_expanded(monkeypatch):
+    pages = [
+        _page("A1", "Claude one", topics=("claude-ai",)),
+        _page("B1", "Design one", topics=("web-design",)),
+    ]
+    graph = public_api.build_graph(_load(monkeypatch, pages), expand="all")
+    assert set(graph["expanded"]) == {"claude-ecosystem", "web-and-design"}
+
+
+def test_expand_all_reel_count_matches_single_category_expands_summed_with_overlap(monkeypatch):
+    """The same invariant test_every_category_node_count_matches_what_expanding_it_reveals
+    checks per-category, but for the all-at-once view: total unique reel nodes
+    must equal the real corpus size, not double-count a cross-category reel."""
+    pages = [
+        _page("A1", "One", topics=("claude-ai", "web-design")),
+        _page("B1", "Two", topics=("web-design",)),
+        _page("C1", "Three", topics=("claude-ai",)),
+    ]
+    reels = _load(monkeypatch, pages)
+    graph = public_api.build_graph(reels, expand="all")
+    reel_nodes = [n for n in graph["nodes"] if n["type"] == "reel"]
+    assert len(reel_nodes) == len(reels) == 3
+
+
+def test_expand_all_does_not_require_a_real_category_name(monkeypatch):
+    """"all" must never be validated as if it were a category slug -- it isn't
+    one, and the 404 branch (test_graph_expand_rejects_an_unknown_category)
+    must not fire for it."""
+    reels = _load(monkeypatch, [_page("A1", "A real title", topics=("claude-ai",))])
+    graph = public_api.build_graph(reels, expand="all")  # must not raise
+    assert graph["level"] == "expanded"
+
+
 def test_graph_has_no_co_occurrence_link_when_categories_never_share_a_reel(monkeypatch):
     pages = [
         _page("A1", "Claude one", topics=("claude-ai",)),

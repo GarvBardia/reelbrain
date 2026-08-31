@@ -339,31 +339,49 @@ def build_graph(reels: list[dict], expand: Optional[str] = None) -> dict:
     expanded: list[str] = []
     if expand:
         expand = expand.strip().lower()
-        if expand not in counts:
+        # expand="all" (2026-09-01): every reel as a node at once, for the
+        # frontend's dense default view -- distinct from a single expanded
+        # category, which stays the exact behaviour it always was (target is
+        # a one-element set, so a reel's categories_of() intersects it in at
+        # most the one membership link it used to get).
+        expand_all = expand == "all"
+        if not expand_all and expand not in counts:
             raise HTTPException(status_code=404, detail=f"unknown category: {expand}")
-        expanded.append(expand)
+        target = set(counts.keys()) if expand_all else {expand}
+        expanded.extend(sorted(target) if expand_all else [expand])
+
+        seen_reels: set[str] = set()
         for reel in reels:
-            if expand not in categories_of(reel):
+            # A reel can belong to several categories (categories_of, not
+            # just the primary) -- in "all" mode it gets one membership link
+            # PER category it touches (the real cross-category signal this
+            # graph exists to draw) but only ONE node, added the first time
+            # it's encountered.
+            reel_categories = categories_of(reel) & target
+            if not reel_categories:
                 continue
-            nodes.append({
-                "id": f"reel:{reel['shortcode']}",
-                # The SHORT readable label the graph draws next to the dot --
-                # plain_summary is written to be understandable cold, so it
-                # beats the (often jargon-heavy) title when present.
-                "label": _short_label(reel),
-                "type": "reel",
-                "category": reel["category"],
-                "color": reel["color"],
-                "value_score": reel["value_score"],
-                "shortcode": reel["shortcode"],
-                "val": round(1.5 + reel["value_score"] * 0.9, 2),
-            })
-            links.append({
-                "source": f"cat:{expand}",
-                "target": f"reel:{reel['shortcode']}",
-                "value": 1,
-                "type": "membership",
-            })
+            if reel["shortcode"] not in seen_reels:
+                seen_reels.add(reel["shortcode"])
+                nodes.append({
+                    "id": f"reel:{reel['shortcode']}",
+                    # The SHORT readable label the graph draws next to the dot --
+                    # plain_summary is written to be understandable cold, so it
+                    # beats the (often jargon-heavy) title when present.
+                    "label": _short_label(reel),
+                    "type": "reel",
+                    "category": reel["category"],
+                    "color": reel["color"],
+                    "value_score": reel["value_score"],
+                    "shortcode": reel["shortcode"],
+                    "val": round(1.5 + reel["value_score"] * 0.9, 2),
+                })
+            for cat in reel_categories:
+                links.append({
+                    "source": f"cat:{cat}",
+                    "target": f"reel:{reel['shortcode']}",
+                    "value": 1,
+                    "type": "membership",
+                })
 
     return {
         "nodes": nodes,
@@ -480,7 +498,9 @@ def build_scout_queue(reels: list[dict], limit: int = 25) -> list[dict]:
 @router.get("/graph")
 def public_graph(
     request: Request,
-    expand: Optional[str] = Query(None, description="category slug to expand into its reels"),
+    expand: Optional[str] = Query(
+        None, description="category slug to expand into its reels, or \"all\" for every reel at once",
+    ),
 ) -> dict:
     check_public_rate_limit(request)
     return build_graph(load_public_reels(), expand=expand)
