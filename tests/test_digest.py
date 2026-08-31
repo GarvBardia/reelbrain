@@ -492,3 +492,149 @@ def test_run_daily_survives_notion_failure(monkeypatch):
     result = digest.run_daily()
     assert result["notion_page"] is None
     assert "Sleep tip" in result["markdown"]
+
+
+# --- Discord webhook fallback (2026-08-28) -- ntfy failing from Render specifically ---
+
+def test_daily_push_content_zero_saves():
+    title, body = digest._daily_push_content(0, None)
+    assert title == "ReelBrain: nothing saved today"
+    assert body == "No reels saved in the last 24 hours."
+
+
+def test_daily_push_content_uses_synthesis_line_when_present():
+    title, body = digest._daily_push_content(3, "Three good ones about MCP servers.")
+    assert title == "ReelBrain: 3 saved today"
+    assert body == "Three good ones about MCP servers."
+
+
+def test_daily_push_content_falls_back_without_synthesis_line():
+    _, body = digest._daily_push_content(2, None)
+    assert body == "2 reels saved today."
+
+
+def test_send_discord_webhook_skipped_without_url(monkeypatch):
+    monkeypatch.setattr(digest, "DISCORD_WEBHOOK_URL", "")
+    assert digest.send_discord_webhook("hello") is False
+
+
+def test_send_discord_webhook_posts_when_configured(monkeypatch):
+    monkeypatch.setattr(digest, "DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/123/abc")
+    calls = []
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+    def _fake_post(url, json=None, timeout=None):
+        calls.append({"url": url, "json": json})
+        return _Resp()
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", _fake_post)
+
+    sent = digest.send_discord_webhook("**Title**\nBody text")
+
+    assert sent is True
+    assert len(calls) == 1
+    assert calls[0]["url"] == "https://discord.com/api/webhooks/123/abc?wait=true"
+    assert calls[0]["json"]["content"] == "**Title**\nBody text"
+    assert calls[0]["json"]["username"] == "ReelBrain"
+
+
+def test_send_discord_webhook_truncates_to_2000_chars(monkeypatch):
+    monkeypatch.setattr(digest, "DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/123/abc")
+    calls = []
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+    def _fake_post(url, json=None, timeout=None):
+        calls.append(json)
+        return _Resp()
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", _fake_post)
+
+    digest.send_discord_webhook("x" * 3000)
+    assert len(calls[0]["content"]) == 2000
+
+
+def test_send_discord_webhook_returns_false_on_http_error(monkeypatch):
+    monkeypatch.setattr(digest, "DISCORD_WEBHOOK_URL", "https://discord.com/api/webhooks/123/abc")
+
+    class _Resp:
+        def raise_for_status(self):
+            raise RuntimeError("429 Too Many Requests")
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp())
+
+    assert digest.send_discord_webhook("hello") is False
+
+
+def test_run_daily_uses_ntfy_when_it_succeeds_never_touches_discord(monkeypatch):
+    """ntfy is still the FIRST attempt and stays it when it works -- Discord
+    must not be attempted at all on a normal (ntfy-healthy) day."""
+    fake = FakeClient()
+    monkeypatch.setattr(notion_writer, "_client", lambda: fake)
+    monkeypatch.setattr(digest, "NOTION_PARENT_PAGE_ID", "parent-page-id")
+    monkeypatch.setattr(digest, "NTFY_TOPIC", "test-topic")
+    monkeypatch.setattr(digest, "send_daily_ntfy", lambda **k: True)
+
+    discord_calls = []
+    monkeypatch.setattr(digest, "send_discord_webhook", lambda msg: discord_calls.append(msg) or True)
+
+    result = digest.run_daily()
+
+    assert result["ntfy_sent"] is True
+    assert result["discord_sent"] is None  # never attempted
+    assert result["delivery_channel"] == "ntfy"
+    assert discord_calls == []
+
+
+def test_run_daily_falls_back_to_discord_when_ntfy_fails(monkeypatch):
+    monkeypatch.setattr(notion_writer, "_client", lambda: FakeClient())
+    monkeypatch.setattr(digest, "NOTION_PARENT_PAGE_ID", "parent-page-id")
+    monkeypatch.setattr(digest, "send_daily_ntfy", lambda **k: False)
+    monkeypatch.setattr(digest, "send_discord_webhook", lambda msg: True)
+
+    result = digest.run_daily()
+
+    assert result["ntfy_sent"] is False
+    assert result["discord_sent"] is True
+    assert result["delivery_channel"] == "discord"
+
+
+def test_run_daily_delivery_channel_none_when_both_fail(monkeypatch):
+    monkeypatch.setattr(notion_writer, "_client", lambda: FakeClient())
+    monkeypatch.setattr(digest, "NOTION_PARENT_PAGE_ID", "parent-page-id")
+    monkeypatch.setattr(digest, "send_daily_ntfy", lambda **k: False)
+    monkeypatch.setattr(digest, "send_discord_webhook", lambda msg: False)
+
+    result = digest.run_daily()
+
+    assert result["ntfy_sent"] is False
+    assert result["discord_sent"] is False
+    assert result["delivery_channel"] == "none"
+
+
+def test_run_daily_discord_fallback_gets_the_same_content_ntfy_would_have(monkeypatch):
+    """The fallback message must match what ntfy would have sent -- both
+    channels share _daily_push_content so they can't drift apart."""
+    monkeypatch.setattr(notion_writer, "_client", lambda: FakeClient())
+    monkeypatch.setattr(digest, "NOTION_PARENT_PAGE_ID", "parent-page-id")
+    monkeypatch.setattr(digest, "send_daily_ntfy", lambda **k: False)
+
+    captured = {}
+
+    def _fake_discord(message):
+        captured["message"] = message
+        return True
+
+    monkeypatch.setattr(digest, "send_discord_webhook", _fake_discord)
+
+    digest.run_daily()
+    assert "ReelBrain: nothing saved today" in captured["message"]
+    assert "No reels saved in the last 24 hours." in captured["message"]

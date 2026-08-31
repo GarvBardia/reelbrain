@@ -48,6 +48,13 @@ services:
         value: "3"
       - key: NTFY_TOPIC
         sync: false
+      # Daily-digest-only fallback (2026-08-28) -- ntfy.sh has been confirmed
+      # rate-limiting requests specifically from Render's shared egress IP for
+      # this one call site (app/digest.py's send_daily_ntfy). Tried only when
+      # ntfy fails that call; every local script's ntfy path is untouched and
+      # confirmed working. See WORKER_SETUP.md/.env.example.
+      - key: DISCORD_WEBHOOK_URL
+        sync: false
       # --- public frontend (GitHub Pages) — see FRONTEND_DEPLOY.md ---
       # Comma-separated origins allowed to read the public API from a browser.
       # Set to the GitHub Pages origin, e.g. https://<user>.github.io

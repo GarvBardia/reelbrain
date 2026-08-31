@@ -20,6 +20,10 @@ NOTION_PARENT_PAGE_ID = os.environ.get("NOTION_PARENT_PAGE_ID", "").strip()
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "").strip()
 NTFY_BASE_URL = "https://ntfy.sh"
 NTFY_TIMEOUT_SECONDS = 10.0
+# Fallback for the daily digest push specifically (2026-08-28) -- see
+# send_discord_webhook's docstring below for why this exists and why it's
+# scoped to only this one call site.
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
 
 DIGEST_DAYS = 7
 DAILY_DIGEST_HOURS = 24
@@ -461,6 +465,14 @@ def create_daily_notion_page(markdown: str) -> Optional[dict]:
         return None
 
 
+def _daily_push_content(save_count: int, synthesis_line: Optional[str]) -> tuple[str, str]:
+    """Shared title/body for BOTH push channels below, so the Discord
+    fallback can't drift out of sync with what ntfy sends on a normal day."""
+    if save_count == 0:
+        return "ReelBrain: nothing saved today", "No reels saved in the last 24 hours."
+    return f"ReelBrain: {save_count} saved today", synthesis_line or f"{save_count} reels saved today."
+
+
 def send_daily_ntfy(save_count: int, synthesis_line: Optional[str]) -> bool:
     """POST to ntfy.sh/{NTFY_TOPIC} — same topic as the cookie-health alert
     (app/alerts.py), since that's the only ntfy topic this app configures.
@@ -471,12 +483,7 @@ def send_daily_ntfy(save_count: int, synthesis_line: Optional[str]) -> bool:
     try:
         import httpx
 
-        if save_count == 0:
-            title = "ReelBrain: nothing saved today"
-            body = "No reels saved in the last 24 hours."
-        else:
-            title = f"ReelBrain: {save_count} saved today"
-            body = synthesis_line or f"{save_count} reels saved today."
+        title, body = _daily_push_content(save_count, synthesis_line)
         response = httpx.post(
             f"{NTFY_BASE_URL}/{NTFY_TOPIC}",
             content=body.encode("utf-8"),
@@ -490,6 +497,43 @@ def send_daily_ntfy(save_count: int, synthesis_line: Optional[str]) -> bool:
         return False
 
 
+def send_discord_webhook(message: str) -> bool:
+    """Fallback for the DAILY DIGEST push specifically (2026-08-28).
+
+    ntfy.sh has been confirmed rate-limiting requests from Render's shared
+    egress IP for this one call site (send_daily_ntfy above) -- it does work
+    some days (real phone screenshots confirmed delivery on Aug 15 and again
+    the morning of Aug 27), just not reliably from Render specifically. Every
+    LOCAL script's ntfy calls (health_watchdog, pipeline_health,
+    daily_capture_report -- all running on this machine, a different egress
+    IP entirely) are confirmed working and are deliberately NOT touched by
+    this; this function is only ever called from run_daily() below, and only
+    as a same-run fallback after ntfy has already failed, not a replacement.
+
+    Best-effort: returns False (never raises) if DISCORD_WEBHOOK_URL isn't
+    set or the request fails. `wait=true` makes Discord return the created
+    message with a 2xx body instead of a bare 204, so success is
+    unambiguous via raise_for_status() the same way the ntfy calls already
+    rely on it."""
+    if not DISCORD_WEBHOOK_URL:
+        return False
+    try:
+        import httpx
+
+        sep = "&" if "?" in DISCORD_WEBHOOK_URL else "?"
+        response = httpx.post(
+            f"{DISCORD_WEBHOOK_URL}{sep}wait=true",
+            # Discord's hard cap on a single message's content.
+            json={"content": message[:2000], "username": "ReelBrain"},
+            timeout=NTFY_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        return True
+    except Exception:  # noqa: BLE001 - best-effort notification, never the critical path
+        logger.warning("daily digest Discord webhook push failed", exc_info=True)
+        return False
+
+
 def run_daily() -> dict:
     data = collect_day()
     saves = data["saves"]
@@ -498,11 +542,23 @@ def run_daily() -> dict:
     page = create_daily_notion_page(markdown)
     high_count = sum(1 for s in saves if s["priority"] == "High")
     synthesis_line = _daily_synthesis_line(saves) if saves else None
+
     ntfy_sent = send_daily_ntfy(save_count=len(saves), synthesis_line=synthesis_line)
+    # Discord is only ever attempted THIS run if ntfy just failed -- not
+    # unconditionally, since ntfy genuinely does work some days and this is a
+    # fallback, not a replacement (see send_discord_webhook's docstring).
+    discord_sent: Optional[bool] = None
+    if not ntfy_sent:
+        title, body = _daily_push_content(len(saves), synthesis_line)
+        discord_sent = send_discord_webhook(f"**{title}**\n{body}")
+    delivery_channel = "ntfy" if ntfy_sent else ("discord" if discord_sent else "none")
+
     return {
         "markdown": markdown,
         "save_count": len(saves),
         "high_priority_count": high_count,
         "notion_page": page,
         "ntfy_sent": ntfy_sent,
+        "discord_sent": discord_sent,
+        "delivery_channel": delivery_channel,
     }
