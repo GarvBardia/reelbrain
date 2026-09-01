@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentType } from "react";
-import { forceCenter, forceCollide } from "d3-force";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { forceCollide, forceX, forceY } from "d3-force";
+import { ArrowLeft, Loader2, LocateFixed } from "lucide-react";
 
 import { EMPTY_GRAPH } from "@/lib/api";
 import type { GraphNode, GraphPayload } from "@/lib/types";
@@ -74,8 +74,10 @@ const GRAPH_MIN_WIDTH = 768;
  * always returned, just for every category simultaneously. Category nodes
  * stay IN the simulation (their membership links are what pulls same-
  * category reels toward a shared anchor, which is the entire mechanism that
- * produces per-category clustering) but are never drawn -- see the isType
- * checks in paintNode/paintLink. Reusing the existing membership-link
+ * produces per-category clustering) and, since 2026-09-XX, are drawn too --
+ * but only as small dim dots, not the large bubbles of the old category
+ * view; see the type checks in paintNode/paintLink. Reusing the existing
+ * membership-link
  * physics for clustering, rather than inventing reel-to-reel links the
  * backend doesn't provide, is what keeps this a frontend-only change plus
  * one small backend addition instead of a new graph algorithm.
@@ -91,7 +93,8 @@ const COLLIDE_PADDING = 1.5;
 
 /** Where a zero-edge node gets parked, in simulation coordinates. Still
  *  needed: category anchors with zero co-occurrence links (the "Other"
- *  bucket) still exist in the simulation even though they're never drawn,
+ *  bucket) are only ever drawn as faint dots, so nothing about their
+ *  position is self-correcting visually,
  *  and an anchor with charge but no links would fling off exactly like a
  *  visible isolated node used to. Scaled down from the category-only
  *  layout's -690,345 to match the much smaller default charge/spread below. */
@@ -99,19 +102,27 @@ const ISOLATED_ANCHOR = { x: -180, y: 90 };
 
 /** Reel labels stay hover-only regardless of node count -- 190 permanent
  *  labels would be the exact unreadable-stack problem the category view was
- *  built to avoid, just at a much larger scale. Category labels never draw
- *  at all in this view (category nodes aren't drawn), so the always-on
- *  threshold constants from the category-only view no longer apply. */
+ *  built to avoid, just at a much larger scale. Category anchors draw as
+ *  bare dots with no label at all (they are dust, not landmarks -- their
+ *  name is still reachable via the native tooltip on hover), so the
+ *  always-on threshold constants from the category-only view no longer
+ *  apply. */
 
 /** Palette anchors for the reference's "nebula" look: category hues get
  *  pulled toward one of these (never fully replaced -- "shift toward", per
  *  the brief, keeps each category still identifiably itself) rather than
  *  staying at full saturation, and value_score 5 reels get pulled toward
  *  the yellow accent instead, sparingly (5 is the top of the 1-5 scale, the
- *  smallest slice of the real corpus). */
+ *  smallest slice of the real corpus).
+ *
+ *  Mix lowered 0.55 -> 0.3 (2026-09-XX): at 0.55 the 13 real category hues
+ *  collapsed too far into just 3 visual buckets, so the field read as three
+ *  colours rather than a nebula with structure. 0.3 keeps noticeably more of
+ *  each category's own hue while still pulling everything into a coherent
+ *  purple/pink/blue range. */
 const NEBULA_PALETTE = ["#8b5cf6", "#ec4899", "#3b82f6"]; // purple, pink, blue
 const NEBULA_ACCENT = "#fbbf24"; // warm yellow, high-value reels only
-const NEBULA_MIX_AMOUNT = 0.55;
+const NEBULA_MIX_AMOUNT = 0.3;
 
 /** Blends a #rrggbb hex colour toward another by `amount` (0 = original,
  *  1 = fully the target) -- used to shift each reel's category colour
@@ -139,6 +150,18 @@ function nebulaAnchorFor(id: string): string {
  *  the background just needs to stay out of the way and give the glow
  *  somewhere dark to bloom into. */
 const NEBULA_BACKGROUND = "#050208";
+
+/** Fixed draw radius for a category anchor dot (2026-09-XX). Deliberately
+ *  NOT the node's own `val`: that is the old visible-bubble sizing formula
+ *  (4 + sqrt(count)*2, up to ~20px) and would make each anchor dwarf every
+ *  reel around it. Smaller than even the smallest reel radius, so anchors
+ *  read as background dust that thickens the field rather than as 13 things
+ *  competing for attention. 2.0 sits just under the smallest real reel
+ *  radius (backend val = 1.5 + value_score*0.9, so 2.4 at value_score 1) --
+ *  1.1 was tried first and was literally imperceptible at the default
+ *  zoomToFit framing, which defeated the point of drawing them at all. Their collide radius is tuned separately in the
+ *  force effect and is unrelated to this. */
+const ANCHOR_DOT_RADIUS = 2.0;
 
 export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
   const ForceGraph2D = useForceGraph2D();
@@ -265,10 +288,9 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
   }, []);
 
   const handleNodeClick = useCallback((node: any) => {
-    // Category-type nodes are never drawn or hit-testable in this view (see
-    // paintNode/nodePointerAreaPaint) -- there's nothing on canvas left to
-    // click to focus a category now; that's legend-only. A reel node still
-    // opens its source post.
+    // Category anchors are drawn (faintly) but carry no click action: at
+    // ~1px they are far too small to be a reliable target, so focusing a
+    // category stays legend-only. A reel node still opens its source post.
     if (node.type === "reel" && node.shortcode) {
       window.open(`https://www.instagram.com/reel/${node.shortcode}/`, "_blank", "noopener");
     }
@@ -276,8 +298,8 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
 
   /**
    * Force tuning for the dense nebula view (2026-09-02), retuned from the
-   * ground up for ~190 mostly-tiny reel nodes plus ~13 invisible category
-   * anchors, not 13 large visible category bubbles. The category-only
+   * ground up for ~190 mostly-tiny reel nodes plus ~13 barely-visible
+   * category anchors, not 13 large category bubbles. The category-only
    * tuning (charge -2400, link distance up to 380) was sized for nodes with
    * radius 8-20px needing real separation from each other; reel nodes are
    * radius ~1.5-6px and the brief explicitly wants them "tight and roughly
@@ -353,10 +375,11 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
       // The hard constraint. Radius is TYPE-AWARE for the same reason charge
       // is: a category anchor's `val` is the old category-sizing formula
       // (4 + sqrt(count)*2, up to ~20px) meant for a VISIBLE bubble that
-      // needed its own clearance. Left as-is here, that large invisible
-      // radius would bulldoze the small reel dots parked around it away
+      // needed its own clearance. Left as-is here, that large radius --
+      // still far bigger than the ~1px dot an anchor now draws as --
+      // would bulldoze the small reel dots parked around it away
       // from their own cluster centre -- collide has no concept of
-      // "invisible", it just sees a big circle. So an anchor's collide
+      // how small it is drawn, it just sees a big circle. So an anchor's collide
       // radius is capped small; only real reel nodes use their full `val`.
       fg.d3Force(
         "collide",
@@ -366,13 +389,24 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
           .iterations(2),
       );
 
-      // New 2026-09-02: anchors node POSITIONS to the origin so the cluster's
-      // average position can't cumulatively drift across repeated reheats.
-      // This is simulation-space only -- it has no effect on a panned/zoomed
-      // CAMERA, which is the actual "stuck off-centre" bug; that half is
-      // handled by onUserZoomOrPan's idle re-`zoomToFit()` above, a camera
-      // behaviour that forceCenter structurally cannot provide.
-      fg.d3Force("center", forceCenter(0, 0));
+      // Softened 2026-09-XX: forceCenter(0,0) was replaced with a weak
+      // forceX/forceY pull (strength 0.03, same idea as before but no longer
+      // a hard re-centering constraint every tick). forceCenter effectively
+      // recomputes and cancels the simulation's average position each tick,
+      // which fights a user-driven pan just as hard as it fights drift --
+      // there is no way to tell the two apart from inside forceCenter's own
+      // math. A weak per-node pull toward the origin still keeps the cluster
+      // from wandering off over repeated reheats, but is gentle enough that
+      // collide/charge/link dominate the actual layout shape; it also makes
+      // paintNode's coreT distance-from-centre falloff physically real
+      // (nodes truly do sit closer to (0,0) nearer the cluster's centre)
+      // rather than resting on forceCenter's much stronger pull. This is
+      // simulation-space only either way -- it has no effect on a
+      // panned/zoomed CAMERA, which forceX/forceY (like forceCenter before
+      // it) structurally cannot touch; see the Recenter button below for
+      // that half, now user-triggered instead of auto-firing on idle.
+      fg.d3Force("x", forceX(0).strength(0.03));
+      fg.d3Force("y", forceY(0).strength(0.03));
 
       // Reheat so the forces above actually move a simulation that mounted and
       // cooled on d3's defaults. d3AlphaDecay / d3VelocityDecay are set as
@@ -398,10 +432,11 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
     // ticks if the reheat genuinely took.
     const snapshotDebug = (fg: any, label: string) => {
       const collide = fg.d3Force("collide");
-      const center = fg.d3Force("center");
+      const centerX = fg.d3Force("x");
+      const centerY = fg.d3Force("y");
       // Reel nodes only -- these are the ones actually drawn, so their
       // spread is what "tight and roughly spherical" needs verifying
-      // against, not the invisible category anchors.
+      // against, not the faint category anchors.
       const reels = (data.nodes as any[]).filter(
         (n) => n.type === "reel" && Number.isFinite(n.x) && Number.isFinite(n.y),
       );
@@ -424,7 +459,7 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
       }
       const line =
         `[${label} @ ${new Date().toISOString().slice(11, 19)}] ` +
-        `center=${center ? "present" : "MISSING"} collide=${collide ? "present" : "MISSING"} ` +
+        `x/y=${centerX && centerY ? "present" : "MISSING"} collide=${collide ? "present" : "MISSING"} ` +
         `reels=${reels.length} centroid=(${Math.round(cx)},${Math.round(cy)}) ` +
         `meanRadiusFromCentroid=${Math.round(meanR)}px maxRadius=${Math.round(maxR)}px ` +
         `overlaps(sampled)=${overlaps}/${pairs}`;
@@ -499,7 +534,12 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
    * which is how a correctly-spread layout can still arrive off-screen.
    */
   const frameGraph = useCallback(() => {
-    fgRef.current?.zoomToFit(400, 40);
+    // Padding tightened 40 -> 12 (2026-09-XX): with only ~190 real nodes
+    // there is no way to reach a 2000-node reference image's grain, but the
+    // same nodes filling more of the 480px frame gets closer to its density
+    // without inventing data. 12 still keeps the outermost dots off the
+    // rounded corners.
+    fgRef.current?.zoomToFit(400, 12);
   }, []);
 
   useEffect(() => {
@@ -511,31 +551,6 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
   }, [data, frameGraph]);
 
   /**
-   * Auto-recentre after a pause in interaction (2026-09-02) -- the actual
-   * fix for "scrolling gets stuck, has to fight to find centre".
-   *
-   * forceCenter (installed in the force effect below) keeps NODE POSITIONS
-   * anchored to the origin -- that's simulation-space physics, and it's
-   * necessary so repeated reheats can't let the cluster's average position
-   * cumulatively drift. But panning/zooming the CANVAS doesn't touch node
-   * positions or alpha at all; it only moves the camera transform, which
-   * forceCenter has no power over. A user who drags the view away and stops
-   * would otherwise stay off-centre forever with no node-physics fix able
-   * to bring it back -- which is the actual reported symptom. So: debounce
-   * on every zoom/pan event, and once interaction has genuinely paused,
-   * call the SAME zoomToFit used on load. This is what makes the graph
-   * "gravitate back to centre" the way the brief describes -- a camera
-   * behaviour, achieved with a camera call, not a physics one.
-   */
-  const idleRecentreTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const onUserZoomOrPan = useCallback(() => {
-    if (idleRecentreTimer.current) clearTimeout(idleRecentreTimer.current);
-    idleRecentreTimer.current = setTimeout(() => frameGraph(), 2500);
-  }, [frameGraph]);
-
-  useEffect(() => () => clearTimeout(idleRecentreTimer.current), []);
-
-  /**
    * Nebula node rendering (2026-09-02), replacing the 3-layer glassmorphic
    * bubble treatment entirely -- that was built for 13 large, well-spaced
    * category discs; painted onto ~190 small reel nodes at once it would be
@@ -543,10 +558,12 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
    * visually wrong, since the reference image is small glowing points of
    * light, not frosted-glass spheres.
    *
-   * Category anchor nodes are never drawn here at all -- they stay in the
-   * simulation purely for their membership-link clustering effect (see the
-   * force-tuning comment above). Everything below only ever runs for reel
-   * nodes.
+   * Category anchor nodes take an early branch of their own: a small dim
+   * dot, no glow, no label (see ANCHOR_DOT_RADIUS). Their real job is still
+   * the membership-link clustering effect described in the force-tuning
+   * comment above; drawing them is just a way to add real points to a field
+   * that only has ~190 of them. Everything after that branch runs for reel
+   * nodes only.
    *
    * Colour: each reel's own category colour is blended toward one of the
    * three NEBULA_PALETTE anchors (purple/pink/blue), picked deterministically
@@ -558,16 +575,38 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
    *
    * Brightness/size: single ctx.shadowBlur glow pass per node (one draw
    * call, not three) with size and glow radius modulated by distance from
-   * the simulation origin -- forceCenter above keeps that origin genuinely
-   * at the cluster's centre, so "closer to (0,0)" reliably means "closer to
+   * the simulation origin -- the weak forceX/forceY pull toward (0,0) above
+   * keeps that origin genuinely at the cluster's centre, so "closer to
+   * (0,0)" reliably means "closer to
    * the visual centre of the nebula", which is what lets nodes near the
    * middle read as the bright, saturated core and nodes further out fade
    * smaller and dimmer toward the edge, per the reference image.
    */
   const paintNode = useCallback(
     (node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
-      // Category anchors are simulation-only in this view -- nothing to draw.
-      if (node.type === "category") return;
+      // Category anchors: drawn (2026-09-XX), but deliberately faint and
+      // small rather than at their formula-derived `val` (which is sized for
+      // the old visible-bubble view and would tower over every reel dot).
+      // They were skipped entirely before; showing them adds ~13 real points
+      // to the field at zero data cost, since the simulation already
+      // positions them at the centre of each category's own reel cluster.
+      // Kept as a separate early-return branch, not folded into the reel
+      // path, because almost none of the reel treatment below (value_score
+      // accent, coreT sizing, hover label) is meaningful for an anchor.
+      if (node.type === "category") {
+        if (!Number.isFinite(node.x) || !Number.isFinite(node.y)) return;
+        const dimmed = expanded !== null && node.category !== expanded;
+        ctx.save();
+        ctx.globalAlpha = dimmed ? 0.12 : 0.35;
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, ANCHOR_DOT_RADIUS, 0, 2 * Math.PI);
+        // Desaturated toward the backdrop so an anchor reads as part of the
+        // dust rather than competing with the reels it sits among.
+        ctx.fillStyle = mixHex(node.color, NEBULA_BACKGROUND, 0.45);
+        ctx.fill();
+        ctx.restore();
+        return;
+      }
 
       const r = node.val;
       // The force simulation assigns x/y on its first tick, so the very first
@@ -658,16 +697,18 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
 
   /**
    * Links are deliberately near-invisible in the nebula view (2026-09-02).
+   * (Anchors themselves became faintly visible later, but at ~1px they are
+   * still far too small to make a line drawn to them read as structure.)
    *
    * The reference image is a field of small glowing points with NO visible
    * line mesh -- density comes entirely from the dots. Every link in this
    * data model touches at least one category anchor (membership links run
    * reel<->anchor; co-occurrence links run anchor<->anchor), and anchors are
-   * never drawn, so a fully-opaque link would visibly draw a line from a
-   * bright dot out to nowhere, which reads as broken rather than as
-   * structure. So:
+   * barely visible, so a fully-opaque link would visibly draw a line from a
+   * bright dot out to what looks like nowhere, which reads as broken rather
+   * than as structure. So:
    *   - co-occurrence links (anchor<->anchor) are skipped entirely -- both
-   *     endpoints are invisible, so drawing them can only ever look wrong,
+   *     endpoints are ~1px dust, so drawing them can only ever look wrong,
    *     never informative.
    *   - membership links (reel<->anchor) draw only extremely faintly, and
    *     only when a category is focused/hovered-relevant, as a subtle cue
@@ -734,9 +775,28 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
             </p>
           )}
         </div>
-        <p className="text-sm tabular-nums text-muted-foreground">
-          {data.total_reels.toLocaleString()} saves · {data.categories.length} categories
-        </p>
+        <div className="flex items-center gap-3">
+          {!isNarrow && (
+            // Manual recenter (replaces the auto idle-recentre removed
+            // 2026-09-XX -- see the note on frameGraph below). Same
+            // zoomToFit() call as initial load/onEngineStop, just
+            // user-triggered instead of firing on its own a few seconds
+            // after the user stops panning.
+            <Button
+              size="sm"
+              variant="outline"
+              className="gap-1.5"
+              onClick={frameGraph}
+              title="Recenter the graph"
+            >
+              <LocateFixed className="h-3.5 w-3.5" />
+              Recenter
+            </Button>
+          )}
+          <p className="text-sm tabular-nums text-muted-foreground">
+            {data.total_reels.toLocaleString()} saves · {data.categories.length} categories
+          </p>
+        </div>
       </div>
 
       {/* Live force-state readout -- see the comment on debugInfo above.
@@ -848,10 +908,6 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
                 // this to converge.
                 cooldownTicks={200}
                 onEngineStop={frameGraph}
-                // Debounced idle re-`zoomToFit()` -- see onUserZoomOrPan
-                // above. Fires on every pan/zoom event; the actual
-                // recentring only happens once interaction has paused.
-                onZoom={onUserZoomOrPan}
                 // THE SCROLL-TRAP FIX (2026-09-02). Reported bug: a visitor
                 // scrolling the page with the cursor over the canvas got
                 // stuck zooming the graph instead of scrolling the page --
