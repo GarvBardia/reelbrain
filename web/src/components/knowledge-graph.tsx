@@ -151,17 +151,42 @@ function nebulaAnchorFor(id: string): string {
  *  somewhere dark to bloom into. */
 const NEBULA_BACKGROUND = "#050208";
 
-/** Fixed draw radius for a category anchor dot (2026-09-XX). Deliberately
- *  NOT the node's own `val`: that is the old visible-bubble sizing formula
- *  (4 + sqrt(count)*2, up to ~20px) and would make each anchor dwarf every
- *  reel around it. Smaller than even the smallest reel radius, so anchors
- *  read as background dust that thickens the field rather than as 13 things
- *  competing for attention. 2.0 sits just under the smallest real reel
- *  radius (backend val = 1.5 + value_score*0.9, so 2.4 at value_score 1) --
- *  1.1 was tried first and was literally imperceptible at the default
- *  zoomToFit framing, which defeated the point of drawing them at all. Their collide radius is tuned separately in the
- *  force effect and is unrelated to this. */
-const ANCHOR_DOT_RADIUS = 2.0;
+/**
+ * Drawn-radius scale for reel nodes (2026-09-XX) -- the actual lever for the
+ * reference image's fine grain, and the reason the earlier zoomToFit-padding
+ * change did not deliver it.
+ *
+ * Apparent grain is a RATIO: drawn node radius over inter-node spacing. Both
+ * zoomToFit padding and any uniform shrink of the simulation scale multiply
+ * the numerator and denominator by the same factor, so they change how big
+ * the cluster looks and nothing about how fine it looks -- tighter padding
+ * just magnified the same chunky bubbles. Only changing radius INDEPENDENTLY
+ * of spacing moves the ratio.
+ *
+ * Which is also why this lives here and not in the backend's `val`: `val`
+ * feeds forceCollide's radius as well as the drawing, so shrinking it would
+ * shrink the dots and the gaps between them together -- the cluster would
+ * contract, zoomToFit would zoom back in to fill the frame, and the grain
+ * would end up exactly where it started. Scaling at paint time leaves the
+ * physics (and therefore the cluster's footprint on screen) untouched, so
+ * the same 176 nodes spread over the same area as smaller points.
+ *
+ * The hit target deliberately does NOT get scaled -- nodePointerAreaPaint
+ * still uses the unscaled `val`, so shrinking the dots does not make them
+ * harder to hover or click.
+ */
+const NODE_RADIUS_SCALE = 0.6;
+
+/** Fixed draw radius for a category anchor dot. Deliberately NOT the node's
+ *  own `val` -- that is the old visible-bubble formula (4 + sqrt(count)*2,
+ *  up to ~20px) and would make each anchor dwarf every reel around it.
+ *  Anchors sit just under the smallest DRAWN reel so they read as the finest
+ *  dust in the field rather than as peers of the reel nodes: smallest reel
+ *  is val 2.4 (value_score 1) * 0.85 (edge coreT) * the scale above.
+ *  Derived rather than hand-tuned so it tracks NODE_RADIUS_SCALE instead of
+ *  silently becoming reel-sized the next time that changes. Their collide
+ *  radius is tuned separately in the force effect and is unrelated to this. */
+const ANCHOR_DOT_RADIUS = 2.4 * 0.85 * NODE_RADIUS_SCALE * 0.85;
 
 export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
   const ForceGraph2D = useForceGraph2D();
@@ -634,7 +659,7 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
       // nudged up slightly for centre nodes so the middle of the cluster
       // reads as visibly denser/bigger, per the brief's "brightest/biggest
       // at centre" instruction.
-      const drawR = r * (0.85 + coreT * 0.35);
+      const drawR = r * (0.85 + coreT * 0.35) * NODE_RADIUS_SCALE;
 
       ctx.save();
       if (dim) ctx.globalAlpha = 0.22;
