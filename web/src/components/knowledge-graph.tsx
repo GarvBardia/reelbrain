@@ -91,15 +91,6 @@ const GRAPH_MIN_WIDTH = 768;
  *  bubbles. */
 const COLLIDE_PADDING = 1.5;
 
-/** Where a zero-edge node gets parked, in simulation coordinates. Still
- *  needed: category anchors with zero co-occurrence links (the "Other"
- *  bucket) are only ever drawn as faint dots, so nothing about their
- *  position is self-correcting visually,
- *  and an anchor with charge but no links would fling off exactly like a
- *  visible isolated node used to. Scaled down from the category-only
- *  layout's -690,345 to match the much smaller default charge/spread below. */
-const ISOLATED_ANCHOR = { x: -180, y: 90 };
-
 /** Reel labels stay hover-only regardless of node count -- 190 permanent
  *  labels would be the exact unreadable-stack problem the category view was
  *  built to avoid, just at a much larger scale. Category anchors draw as
@@ -144,6 +135,19 @@ function nebulaAnchorFor(id: string): string {
   let hash = 0;
   for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
   return NEBULA_PALETTE[hash % NEBULA_PALETTE.length];
+}
+
+/** Stable per-link pseudo-random integer, from the link's own endpoint ids.
+ *  Used to jitter membership link distance so a hub's leaves don't all land
+ *  on one exact radius. Must be deterministic: recomputing it per tick would
+ *  make the layout shimmer instead of settle. */
+function linkJitter(l: any): number {
+  const s = typeof l.source === "object" ? l.source.id : l.source;
+  const t = typeof l.target === "object" ? l.target.id : l.target;
+  const key = `${s}>${t}`;
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+  return hash;
 }
 
 /** Dark backdrop, near-black -- the nebula's own glow supplies the colour;
@@ -392,7 +396,17 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
         // (category<->category) get a modest distance so category
         // clusters still sit apart from each other rather than fully
         // overlapping into one indistinguishable ball.
-        ?.distance((l: any) => (l.type === "membership" ? 18 : 70))
+        // Membership distance is jittered deterministically per link rather
+        // than fixed at 18. A hub whose leaves all sit at exactly one radius
+        // resolves into a geometrically perfect annulus once collide spaces
+        // them evenly -- which is what made the "other" bucket read as a
+        // machine-drawn ring rather than a cluster. +/- a few units is enough
+        // to break the symmetry without loosening the clustering. Hashed off
+        // the link's own endpoints so it is stable across reheats instead of
+        // shimmering every tick.
+        ?.distance((l: any) =>
+          l.type === "membership" ? 14 + (linkJitter(l) % 9) : 70,
+        )
         .strength((l: any) =>
           l.type === "membership" ? 0.75 : Math.min(0.08, 0.01 * (l.value ?? 1)),
         );
@@ -430,8 +444,16 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
       // panned/zoomed CAMERA, which forceX/forceY (like forceCenter before
       // it) structurally cannot touch; see the Recenter button below for
       // that half, now user-triggered instead of auto-firing on idle.
-      fg.d3Force("x", forceX(0).strength(0.03));
-      fg.d3Force("y", forceY(0).strength(0.03));
+      // 0.03 -> 0.09 (2026-09-03). forceX/forceY are the ONLY forces acting
+      // on a disconnected component apart from charge, which pushes it away.
+      // The "other" bucket is exactly that: cat:other carries 30 membership
+      // links and zero co-occurrence links, and each of its 30 reels has
+      // degree 1, so the whole star is structurally severed from the rest of
+      // the graph (verified against the live payload, not assumed). At 0.03
+      // charge won and it drifted off as a detached satellite, which both
+      // read as an artifact and forced zoomToFit to zoom out to include it.
+      fg.d3Force("x", forceX(0).strength(0.09));
+      fg.d3Force("y", forceY(0).strength(0.09));
 
       // Reheat so the forces above actually move a simulation that mounted and
       // cooled on d3's defaults. d3AlphaDecay / d3VelocityDecay are set as
@@ -482,8 +504,28 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
           if (gap < 0) overlaps++;
         }
       }
+      // Bounding box and its aspect ratio: the check for "is the equilibrium
+      // actually circular". 1.00 is a square bbox (circular blob); a detached
+      // satellite component shows up here as a ratio far from 1 long before
+      // it is obvious by eye.
+      const xs = reels.map((n) => n.x), ys = reels.map((n) => n.y);
+      const bw = xs.length ? Math.max(...xs) - Math.min(...xs) : 0;
+      const bh = ys.length ? Math.max(...ys) - Math.min(...ys) : 0;
+      const ratio = bh > 0 ? bw / bh : 0;
+      // Category anchors are measured separately because zoomToFit frames
+      // EVERY node, not just the drawn reels -- so a single anchor thrown
+      // wide is enough to make the fit zoom out until the whole nebula is a
+      // speck, while the reel-only numbers above still look perfectly healthy.
+      const cats = (data.nodes as any[]).filter(
+        (n) => n.type === "category" && Number.isFinite(n.x) && Number.isFinite(n.y),
+      );
+      const catMax = cats.length
+        ? Math.round(Math.max(...cats.map((n) => Math.hypot(n.x, n.y))))
+        : 0;
       const line =
         `[${label} @ ${new Date().toISOString().slice(11, 19)}] ` +
+        `bbox=${Math.round(bw)}x${Math.round(bh)} ratio=${ratio.toFixed(2)} ` +
+        `anchorMaxDist=${catMax}px ` +
         `x/y=${centerX && centerY ? "present" : "MISSING"} collide=${collide ? "present" : "MISSING"} ` +
         `reels=${reels.length} centroid=(${Math.round(cx)},${Math.round(cy)}) ` +
         `meanRadiusFromCentroid=${Math.round(meanR)}px maxRadius=${Math.round(maxR)}px ` +
@@ -506,48 +548,29 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
   }, [data, debugOn]);
 
   /**
-   * Nodes with zero edges get no link force at all, so charge alone flings
-   * them to wherever the repulsion gradient points -- which is why "Other"
-   * drifted off on its own and read as "the graph is broken".
+   * The zero-degree pinning effect that used to live here was REMOVED
+   * (2026-09-03) because it had silently become dead code, and the "detached
+   * ring" it was blamed for has a different cause entirely.
    *
-   * Confirmed against the live API rather than assumed: "Other" genuinely has
-   * degree 0, and structurally always will. A reel only lands in `other` when
-   * NONE of its topics map to a parent category, so its category set is the
-   * single element {other} -- and co-occurrence edges are built from PAIRS
-   * within that set. A one-element set yields no pairs, so the bucket can
-   * never earn an edge. It is correct data, not a bug.
+   * Its premise -- "cat:other has degree 0 and structurally always will" --
+   * was true of the OLD category-level payload, where the only links were
+   * co-occurrence edges and a one-element category set can never produce a
+   * pair. Under expand="all" every category also carries a membership link
+   * per reel, so cat:other now has degree 30 and NO node in the payload has
+   * degree 0 at all (checked against the live response: zero matches). The
+   * effect therefore pinned nothing, and re-homing ISOLATED_ANCHOR would
+   * have changed nothing either.
    *
-   * Given that, it gets a deliberate home: pinned to the lower-left, reading
-   * as a parked miscellaneous bucket rather than an escapee. Generalised to
-   * any isolated node so a future zero-degree category behaves the same.
-   *
-   * The `data.level === "category"` guard this used to have is gone
-   * (2026-09-02): that only made sense when `data` was EITHER a
-   * category-level payload OR a single expanded category's reels, never
-   * both. Under expand="all" `data` always holds every reel plus every
-   * category anchor at once, and "Other" (or any future zero-degree
-   * category) still needs pinning regardless.
+   * What actually produced the ring: cat:other has 30 membership links and
+   * zero co-occurrence links, and each of its 30 reels has degree exactly 1,
+   * so {cat:other + its reels} is a DISCONNECTED star component. Nothing
+   * links it to the rest of the graph, so only forceX/forceY hold it near
+   * the origin while charge pushes it away -- and 30 leaves at one identical
+   * link distance resolve into a geometrically perfect annulus. Both halves
+   * are addressed in the force effect above: forceX/forceY strength raised
+   * to 0.09 so the component is held in, and membership distance jittered
+   * per-link so the ring cannot be perfect.
    */
-  useEffect(() => {
-    const degree = new Map<string, number>();
-    for (const l of data.links) {
-      const s = typeof l.source === "string" ? l.source : (l.source as GraphNode).id;
-      const t = typeof l.target === "string" ? l.target : (l.target as GraphNode).id;
-      degree.set(s, (degree.get(s) ?? 0) + 1);
-      degree.set(t, (degree.get(t) ?? 0) + 1);
-    }
-    for (const n of data.nodes as any[]) {
-      if ((degree.get(n.id) ?? 0) === 0) {
-        // Close enough that zoomToFit does not have to zoom way out to
-        // include it, far enough to read as deliberately set apart.
-        n.fx = ISOLATED_ANCHOR.x;
-        n.fy = ISOLATED_ANCHOR.y;
-      } else {
-        n.fx = undefined;
-        n.fy = undefined;
-      }
-    }
-  }, [data]);
 
   /**
    * Auto-frame every node. 400ms ease, 40px padding.
@@ -746,7 +769,9 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
       // ~1.09x zoom: once 12/globalScale fell under 11 the constant won, and
       // rendered size (fontSize * globalScale) grew without bound -- 22px at
       // 2x, 44px at 4x. Zooming in to read a label made it balloon.
-      const fontSize = 11 / globalScale;
+      // 11 -> 7 screen px (2026-09-03): 11 read as oversized against ~3px
+      // dots even before the double-render above was making it worse.
+      const fontSize = 7 / globalScale;
       ctx.font = `400 ${fontSize}px ui-sans-serif, system-ui, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
@@ -758,7 +783,7 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
       // glyph read as a black outline rather than as separation from the
       // backdrop. Fill muted off near-white so a label sits quietly on the
       // field until it is the one being hovered.
-      ctx.lineWidth = 2 / globalScale;
+      ctx.lineWidth = 1.5 / globalScale;
       ctx.strokeStyle = "rgba(5,2,8,0.9)";
       ctx.strokeText(label, node.x, y);
       ctx.fillStyle = "rgba(226,232,240,0.72)";
@@ -805,8 +830,12 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
       ctx.beginPath();
       ctx.moveTo(s.x, s.y);
       ctx.lineTo(t.x, t.y);
-      ctx.strokeStyle = `${reel.color}${focussed ? "22" : "0C"}`;
-      ctx.lineWidth = 0.5;
+      // Raised 2026-09-03. "0C" is alpha 12/255 -- under 5% -- which is why
+      // edges read as noise rather than as connections. Staying thin is the
+      // right style, but thin and *visible* are independent knobs, and only
+      // the opacity was wrong.
+      ctx.strokeStyle = `${reel.color}${focussed ? "66" : "40"}`;
+      ctx.lineWidth = 0.7;
       ctx.stroke();
     },
     [expanded],
@@ -954,8 +983,19 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
                 // permanent label are still identifiable by pointing at them
                 // (and are exposed to assistive tech, which a canvas-painted
                 // label is not).
+                // Category anchors ONLY (2026-09-03). This prop drives
+                // force-graph's HTML tooltip (.float-tooltip-kap), which is a
+                // completely separate render path from the label paintNode
+                // draws on the canvas. Returning a string for reels meant a
+                // hovered reel printed its name TWICE -- the canvas copy under
+                // the node with its dark halo, and the tooltip copy tracking
+                // the cursor a few px away -- which read as one ghosted,
+                // double-printed label. Anchors keep the tooltip because they
+                // draw no canvas label at all and are only ~2px wide, so it is
+                // their only means of identification. "" is falsy, so no
+                // tooltip element is shown for reels.
                 nodeLabel={(n: any) =>
-                  n.type === "category" ? `${n.label} — ${n.count} saves` : n.label
+                  n.type === "category" ? `${n.label} — ${n.count} saves` : ""
                 }
                 linkCanvasObject={paintLink}
                 // Simulation pacing lives here, as PROPS -- these are not
