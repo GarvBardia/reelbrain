@@ -567,6 +567,44 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
     fgRef.current?.zoomToFit(400, 12);
   }, []);
 
+  /**
+   * Suppresses exactly ONE onEngineStop re-fit: the one caused by the user
+   * dragging a node (2026-09-02).
+   *
+   * Enabling enableNodeDrag brought back a camera move nobody asked for.
+   * force-graph's drag-end handler calls `d3AlphaTarget(0).resetCountdown()`
+   * to let the released node settle, and resetCountdown zeroes cntTicks --
+   * so once the sim cools, `if (++state.cntTicks > state.cooldownTicks)
+   * state.onEngineStop()` (force-graph.mjs:539) fires like any other engine
+   * stop. Wired straight to frameGraph, that re-fits the camera a couple of
+   * seconds after every node drag, which is indistinguishable to a user from
+   * the idle pan-snap that was deliberately removed earlier.
+   *
+   * The distinction worth preserving is WHO caused the motion. A data change
+   * or the initial load should frame the graph; a disturbance the user made
+   * on purpose should be left alone, and the node's own drift back to
+   * equilibrium is the whole point of allowing the drag. So the flag is set
+   * while dragging and consumed by the next engine stop.
+   *
+   * Set from onNodeDrag rather than a drag-start hook because
+   * react-force-graph-2d exposes no onNodeDragStart (confirmed against
+   * react-force-graph-2d.d.ts: only onNodeDrag and onNodeDragEnd). onNodeDrag
+   * fires on every drag move, so the flag is reliably true well before
+   * release -- and it is a ref, not state, precisely so setting it on every
+   * mousemove costs no re-render.
+   */
+  const skipNextEngineStopFit = useRef(false);
+
+  const handleEngineStop = useCallback(() => {
+    if (skipNextEngineStopFit.current) {
+      // Consume the flag rather than leaving it set: the NEXT engine stop
+      // (a data change, say) should still frame the graph normally.
+      skipNextEngineStopFit.current = false;
+      return;
+    }
+    frameGraph();
+  }, [frameGraph]);
+
   useEffect(() => {
     if (!data.nodes.length) return;
     // Mid-flight fit so the graph is framed while it is still expanding;
@@ -942,7 +980,12 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
                 // changes graphData) -- the initial layout no longer needs
                 // this to converge.
                 cooldownTicks={200}
-                onEngineStop={frameGraph}
+                onEngineStop={handleEngineStop}
+                // Marks the settle that follows a user's own drag so
+                // handleEngineStop skips its re-fit -- see the comment there.
+                onNodeDrag={() => {
+                  skipNextEngineStopFit.current = true;
+                }}
                 // THE SCROLL-TRAP FIX (2026-09-02). Reported bug: a visitor
                 // scrolling the page with the cursor over the canvas got
                 // stuck zooming the graph instead of scrolling the page --
