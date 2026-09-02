@@ -702,18 +702,28 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
       if (!isHovered) return;
 
       ctx.save();
-      const fontSize = Math.max(11, 12 / globalScale);
-      ctx.font = `500 ${fontSize}px ui-sans-serif, system-ui, sans-serif`;
+      // Text is drawn in GRAPH units and then scaled by globalScale, so
+      // `11 / globalScale` is what holds it at a constant 11 screen px. The
+      // old `Math.max(11, 12 / globalScale)` floor inverted that above
+      // ~1.09x zoom: once 12/globalScale fell under 11 the constant won, and
+      // rendered size (fontSize * globalScale) grew without bound -- 22px at
+      // 2x, 44px at 4x. Zooming in to read a label made it balloon.
+      const fontSize = 11 / globalScale;
+      ctx.font = `400 ${fontSize}px ui-sans-serif, system-ui, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
 
       const label = node.label;
       const y = node.y + drawR + 6 / globalScale;
 
-      ctx.lineWidth = 3.5 / globalScale;
+      // Halo thinned (3.5 -> 2 screen px): 3.5px of stroke around an 11px
+      // glyph read as a black outline rather than as separation from the
+      // backdrop. Fill muted off near-white so a label sits quietly on the
+      // field until it is the one being hovered.
+      ctx.lineWidth = 2 / globalScale;
       ctx.strokeStyle = "rgba(5,2,8,0.9)";
       ctx.strokeText(label, node.x, y);
-      ctx.fillStyle = "#f8fafc";
+      ctx.fillStyle = "rgba(226,232,240,0.72)";
       ctx.fillText(label, node.x, y);
       ctx.restore();
     },
@@ -958,7 +968,18 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
                 // canvas-based editors use the same gate for the same
                 // reason).
                 enableZoomInteraction={(event: any) => event.ctrlKey || event.metaKey}
-                enableNodeDrag={false}
+                // Enabled 2026-09-02 -- this, not any camera behaviour, is
+                // what makes a disturbed node "come back". force-graph's own
+                // drag-end handler un-pins the node it just dragged
+                // (`if (initPos.fx === undefined) obj.fx = undefined`) and
+                // then calls `d3AlphaTarget(0).resetCountdown()`, which
+                // re-warms the cooled simulation so charge/link/collide can
+                // pull the node back to equilibrium. That is the Obsidian
+                // behaviour, and it needs no onNodeDragEnd of our own -- the
+                // prop was simply gating it off. Distinct from the idle
+                // camera re-fit removed earlier: that one undid deliberate
+                // PANNING, which is navigation, not a disturbance.
+                enableNodeDrag={true}
               />
             )
           )}

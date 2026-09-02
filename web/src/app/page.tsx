@@ -74,7 +74,7 @@ export default function LandingPage() {
             (the section's centerpiece) gets real room. The headline/subtext
             below keep their own tighter max-w-3xl/max-w-2xl, so this only
             gives the graph more space, not longer text lines. */}
-        <div className="relative mx-auto max-w-[1440px] px-6 pb-16 pt-20 md:pt-28">
+        <div className="relative mx-auto max-w-[1440px] px-6 pb-10 pt-20 md:pt-28">
           <BlurFade className="mx-auto max-w-3xl text-center">
             <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/70 px-3.5 py-1.5 text-xs font-medium text-slate-600 shadow-sm">
               <Sparkles className="h-3.5 w-3.5 text-indigo-500" />
@@ -112,14 +112,14 @@ export default function LandingPage() {
               failed branch is the fix for the graph silently vanishing: it
               used to fall through to an empty node list, which renders as a
               blank canvas indistinguishable from success. */}
-          <BlurFade delay={0.15} className="mt-14">
+          <BlurFade delay={0.15} className="mt-8">
             {graphLoading ? (
-              <Skeleton className="h-[560px] w-full rounded-[1.35rem]" />
+              <Skeleton className="h-[480px] w-full rounded-[1.35rem]" />
             ) : graphError ? (
               <ApiErrorState
                 message={graphError}
                 onRetry={retryGraph}
-                className="h-[560px]"
+                className="h-[480px]"
               />
             ) : (
               <KnowledgeGraph initial={graph} />
