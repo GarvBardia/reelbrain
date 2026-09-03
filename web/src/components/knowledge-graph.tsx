@@ -100,25 +100,20 @@ const COLLIDE_PADDING = 1.5;
  *  always-on threshold constants from the category-only view no longer
  *  apply. */
 
-/** Palette anchors for the reference's "nebula" look: category hues get
- *  pulled toward one of these (never fully replaced -- "shift toward", per
- *  the brief, keeps each category still identifiably itself) rather than
- *  staying at full saturation, and value_score 5 reels get pulled toward
- *  the yellow accent instead, sparingly (5 is the top of the 1-5 scale, the
- *  smallest slice of the real corpus).
- *
- *  Mix lowered 0.55 -> 0.3 (2026-09-XX): at 0.55 the 13 real category hues
- *  collapsed too far into just 3 visual buckets, so the field read as three
- *  colours rather than a nebula with structure. 0.3 keeps noticeably more of
- *  each category's own hue while still pulling everything into a coherent
- *  purple/pink/blue range. */
-const NEBULA_PALETTE = ["#8b5cf6", "#ec4899", "#3b82f6"]; // purple, pink, blue
+/** Accent for the rare, deliberate per-node highlight -- value_score 5 reels
+ *  (the top of the 1-5 scale, the smallest slice of the real corpus) pull
+ *  toward this instead of staying their category's own colour. This is the
+ *  ONE colour-blend left after Section C1 (2026-09-06) reverted the
+ *  category-identity blend: a 3-anchor "nebula palette" every category's hue
+ *  used to be pulled toward used to make two DIFFERENT categories converge on
+ *  the same colour, which defeats "which category is this node" at a glance.
+ *  Categories are painted in their own real hex again; only this single
+ *  high-value accent still blends. */
 const NEBULA_ACCENT = "#fbbf24"; // warm yellow, high-value reels only
-const NEBULA_MIX_AMOUNT = 0.3;
 
 /** Blends a #rrggbb hex colour toward another by `amount` (0 = original,
- *  1 = fully the target) -- used to shift each reel's category colour
- *  toward the nebula palette without discarding its original hue entirely. */
+ *  1 = fully the target). Used for the value_score-5 accent above and for
+ *  dimming a category anchor dot toward the backdrop. */
 function mixHex(hex: string, toward: string, amount: number): string {
   const h = hex.replace("#", "");
   const t = toward.replace("#", "");
@@ -127,15 +122,6 @@ function mixHex(hex: string, toward: string, amount: number): string {
   const mix = (a: number, b: number) => Math.round(a + (b - a) * amount);
   const toHex = (n: number) => n.toString(16).padStart(2, "0");
   return `#${toHex(mix(hr, tr))}${toHex(mix(hg, tg))}${toHex(mix(hb, tb))}`;
-}
-
-/** Deterministic per-node palette pick (not random per frame -- a node
- *  flickering between purple and blue on every repaint would look broken,
- *  not organic). Hashes the node id into one of the three anchors. */
-function nebulaAnchorFor(id: string): string {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
-  return NEBULA_PALETTE[hash % NEBULA_PALETTE.length];
 }
 
 /** Stable per-link pseudo-random integer, from the link's own endpoint ids.
@@ -455,23 +441,22 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
           .iterations(2),
       );
 
-      // Softened 2026-09-XX: forceCenter(0,0) was replaced with a weak
-      // forceX/forceY pull (strength 0.03, same idea as before but no longer
-      // a hard re-centering constraint every tick). forceCenter effectively
-      // recomputes and cancels the simulation's average position each tick,
-      // which fights a user-driven pan just as hard as it fights drift --
-      // there is no way to tell the two apart from inside forceCenter's own
-      // math. A weak per-node pull toward the origin still keeps the cluster
-      // from wandering off over repeated reheats, but is gentle enough that
-      // collide/charge/link dominate the actual layout shape; it also makes
-      // paintNode's coreT distance-from-centre falloff physically real
-      // (nodes truly do sit closer to (0,0) nearer the cluster's centre)
-      // rather than resting on forceCenter's much stronger pull. This is
-      // simulation-space only either way -- it has no effect on a
-      // panned/zoomed CAMERA, which forceX/forceY (like forceCenter before
-      // it) structurally cannot touch; see the Recenter button below for
-      // that half, now user-triggered instead of auto-firing on idle.
-      // 0.03 -> 0.09 (2026-09-03). forceX/forceY are the ONLY forces acting
+      // Softened 2026-09-XX: forceCenter(0,0) was replaced with a
+      // forceX/forceY pull (same idea, no longer a hard re-centering
+      // constraint every tick). forceCenter effectively recomputes and
+      // cancels the simulation's average position each tick, which fights a
+      // user-driven pan just as hard as it fights drift -- there is no way
+      // to tell the two apart from inside forceCenter's own math. A per-node
+      // pull toward the origin keeps the cluster from wandering off over
+      // repeated reheats, and makes paintNode's coreT distance-from-centre
+      // falloff physically real (nodes truly do sit closer to (0,0) nearer
+      // the cluster's centre). This is simulation-space only either way --
+      // it has no effect on a panned/zoomed CAMERA, which forceX/forceY
+      // (like forceCenter before it) structurally cannot touch; see the
+      // Recenter button below for that half, user-triggered rather than
+      // auto-firing on idle.
+      //
+      // 0.03 -> 0.09 (2026-09-03): forceX/forceY are the ONLY forces acting
       // on a disconnected component apart from charge, which pushes it away.
       // The "other" bucket is exactly that: cat:other carries 30 membership
       // links and zero co-occurrence links, and each of its 30 reels has
@@ -479,8 +464,30 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
       // the graph (verified against the live payload, not assumed). At 0.03
       // charge won and it drifted off as a detached satellite, which both
       // read as an artifact and forced zoomToFit to zoom out to include it.
-      fg.d3Force("x", forceX(0).strength(0.09));
-      fg.d3Force("y", forceY(0).strength(0.09));
+      //
+      // 0.09 -> 1.0 (2026-09-06, Section C2 of the nav/security/graph audit).
+      // The brief's own reference point -- Obsidian's real graph settings,
+      // repel:center = 11.63:0.81, roughly 14:1 -- was explicitly NOT a
+      // literal value to copy (Obsidian's simulation units are its own,
+      // unrelated to d3-force's), only a directional signal that OUR
+      // repel:center ratio (charge magnitude 34 : centering strength 0.09,
+      // roughly 378:1) was far more repel-dominant than a graph most people
+      // already recognise as "circular". Tested iteratively against
+      // ?debug=graph's bbox ratio, not guessed at once: 0.09->0.20 barely
+      // moved it (1.19->1.20 -- isotropic centering alone can't fix an
+      // asymmetry baked into the link/charge topology, it can only shrink
+      // the whole shape uniformly), 0.20->0.4->0.7 progressively closed it
+      // (1.20->1.08->1.02), and 1.0 landed at 0.99 -- effectively the 1:1
+      // Obsidian-style circle the brief asked for. Pushed one step further
+      // to 1.4 to confirm 1.0 wasn't leaving gains on the table: ratio did
+      // NOT improve (1.01, no better than 1.0's 0.99) but collide started
+      // losing (2/1218 sampled overlaps, the first non-zero reading across
+      // every value tested) -- so 1.0 is the actual ceiling, not an
+      // arbitrary stop. Every reading held steady between the +1.5s and +4s
+      // debug snapshots at each step, confirming a real settled equilibrium,
+      // not a still-moving mid-simulation snapshot.
+      fg.d3Force("x", forceX(0).strength(1.0));
+      fg.d3Force("y", forceY(0).strength(1.0));
 
       // Reheat so the forces above actually move a simulation that mounted and
       // cooled on d3's defaults. d3AlphaDecay / d3VelocityDecay are set as
@@ -678,13 +685,17 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
    * that only has ~190 of them. Everything after that branch runs for reel
    * nodes only.
    *
-   * Colour: each reel's own category colour is blended toward one of the
-   * three NEBULA_PALETTE anchors (purple/pink/blue), picked deterministically
-   * per node so the same reel is always the same hue. A high value_score
-   * (5, the top of the 1-5 scale) pulls further toward the warm yellow
-   * accent instead -- rare on purpose, since that is the smallest slice of
-   * the real corpus and the reference image uses yellow as an accent, not a
-   * primary.
+   * Colour (reverted 2026-09-06, Section C1 of the nav/security/graph audit):
+   * each reel is painted in its OWN category's real hex, at full saturation
+   * -- no blending toward a shared 3-hue nebula palette. That blend (kept
+   * for reference in git history, not in this file any more) pulled every
+   * category toward whichever of purple/pink/blue its id happened to hash
+   * to, which is exactly what made two DIFFERENT categories start looking
+   * like the same colour -- fine for "one cohesive cloud", wrong for "which
+   * category is this node". A high value_score (5, the top of the 1-5
+   * scale) still pulls toward the warm yellow accent -- that is a distinct,
+   * deliberate per-node highlight, not the category-identity blend this
+   * reverts, so it stays.
    *
    * Brightness/size: single ctx.shadowBlur glow pass per node (one draw
    * call, not three) with size and glow radius modulated by distance from
@@ -738,10 +749,9 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
       const dist = Math.hypot(node.x, node.y);
       const coreT = Math.max(0, 1 - dist / 260); // 1 at centre, 0 at/past the edge
 
+      // Section C1: solid, at node.color directly -- no nebula-palette blend.
       const baseColor =
-        node.value_score >= 5
-          ? mixHex(node.color, NEBULA_ACCENT, 0.7)
-          : mixHex(node.color, nebulaAnchorFor(node.id), NEBULA_MIX_AMOUNT);
+        node.value_score >= 5 ? mixHex(node.color, NEBULA_ACCENT, 0.7) : node.color;
 
       // Size: mostly the backend's own val (already value_score-weighted),
       // nudged up slightly for centre nodes so the middle of the cluster
