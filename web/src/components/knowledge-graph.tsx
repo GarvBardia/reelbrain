@@ -1118,10 +1118,26 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
                 linkCanvasObject={paintLink}
                 // Simulation pacing lives here, as PROPS -- these are not
                 // available on the imperative handle (see the note in the
-                // force effect). Defaults are 0.0228 / 0.4, which freeze a
-                // 13-node layout while it is still mid-expansion.
-                d3AlphaDecay={0.0115}
-                d3VelocityDecay={0.3}
+                // force effect). Library defaults are 0.0228 / 0.4 (confirmed
+                // against node_modules/force-graph/dist/force-graph.mjs, not
+                // assumed); this codebase has never actually run at those --
+                // an earlier round already moved them to 0.0115 / 0.3 so a
+                // 13-node layout wouldn't freeze mid-expansion.
+                //
+                // 0.0115 -> 0.01 and 0.3 -> 0.2 (2026-09-08, damping/cooling
+                // sweep -- the one axis of force-tuning no prior round had
+                // touched; every earlier round adjusted force MAGNITUDE
+                // (charge/repel/link/center), never how slowly the
+                // simulation cools once released). Lower alphaDecay means
+                // more ticks pass before alpha decays toward its stopping
+                // point, i.e. slower cooling, a longer settle. Lower
+                // velocityDecay is friction on each node's own velocity
+                // (unrelated to alpha) -- less of it means a released node
+                // (drag-end, in particular, now that node drag is enabled)
+                // carries more momentum into its settle instead of damping
+                // out almost immediately.
+                d3AlphaDecay={0.01}
+                d3VelocityDecay={0.2}
                 // Ticks run SYNCHRONOUSLY before the first paint (a plain
                 // for-loop over forceLayout.tick() -- see
                 // force-graph/src/canvas-force-graph.js), so the graph
@@ -1132,12 +1148,25 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
                 // corpus -- warmup and cooldown ticks are the same
                 // forceLayout.tick() call either way, so this makes the
                 // FIRST paint do the convergence work that used to depend on
-                // cooldownTicks running via requestAnimationFrame.
+                // cooldownTicks running via requestAnimationFrame. NOT
+                // touched by this sweep -- it governs the one-time initial
+                // layout, a different concern from interactive re-settling.
                 warmupTicks={400}
-                // Interactive re-settling only now (category expand/collapse
-                // changes graphData) -- the initial layout no longer needs
-                // this to converge.
-                cooldownTicks={200}
+                // Interactive re-settling only (category expand/collapse,
+                // and now node-drag release). 200 -> 600 in the same sweep
+                // as the alphaDecay change above, and for the same reason:
+                // a lower alphaDecay means MORE ticks are needed to reach the
+                // same low-alpha stopping point (roughly 460 ticks at 0.0115
+                // vs. roughly 530 at 0.01, by alpha = (1-decay)^ticks), so
+                // raising cooldownTicks isn't just "let it settle longer" in
+                // the abstract -- it's what keeps this sweep's own slower
+                // decay from being cut off mid-settle by a tick budget sized
+                // for the old, faster decay. cooldownTime is left at its
+                // 15000ms library default (confirmed in force-graph.mjs,
+                // not assumed) -- 600 ticks is comfortably under that at any
+                // plausible frame rate, so it was never the binding
+                // constraint and doesn't need raising to matter here.
+                cooldownTicks={600}
                 onEngineStop={handleEngineStop}
                 // Marks the settle that follows a user's own drag so
                 // handleEngineStop skips its re-fit -- see the comment there.
