@@ -152,12 +152,31 @@ export default function LandingPage() {
             </div>
           </BlurFade>
 
+          {/* SECTION A (2026-09-06 nav audit) -- the graph previously had no
+              heading at all: the hero's copy explains the PRODUCT, then the
+              page cut straight to a bare black canvas with only a small grey
+              interaction hint ("hold Ctrl/⌘ + scroll to zoom the graph") that
+              itself assumes the reader already knows it's "the graph". A
+              first-time visitor had nothing bridging "here's the concept" to
+              "and this live thing below is that, running". Reuses the exact
+              eyebrow-label style the stats section already uses further down
+              (text-sm font-medium uppercase tracking-widest text-slate-400)
+              rather than inventing a new heading treatment. */}
+          <BlurFade delay={0.12} className="mt-8 text-center">
+            <h2 className="text-sm font-medium uppercase tracking-widest text-slate-400">
+              The live graph
+            </h2>
+            <p className="mt-1.5 text-sm text-slate-500">
+              Every save below is a real, connected node — drag, scroll, or click a category to explore.
+            </p>
+          </BlurFade>
+
           {/* THE CENTREPIECE. Three explicit states -- loading, failed,
               loaded -- all at the same height so the page never jumps. The
               failed branch is the fix for the graph silently vanishing: it
               used to fall through to an empty node list, which renders as a
               blank canvas indistinguishable from success. */}
-          <BlurFade delay={0.15} className="mt-8">
+          <BlurFade delay={0.15} className="mt-4">
             {graphLoading ? (
               <Skeleton className="h-[480px] w-full rounded-[1.35rem]" />
             ) : graphError ? (
