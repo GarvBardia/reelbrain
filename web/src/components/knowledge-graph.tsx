@@ -67,6 +67,35 @@ function useForceGraph2D() {
 const GRAPH_MIN_WIDTH = 768;
 
 /**
+ * Plain-scroll-to-zoom (2026-09-08), replacing the Ctrl/Cmd-gated scroll
+ * introduced 2026-09-02 -- a deliberate reversal, done on direct request, not
+ * a rediscovery of the same bug. That earlier fix traded "scroll always
+ * reaches the page" for "zooming needs a modifier"; this trade is now made
+ * the other way: scrolling over the canvas zooms the graph directly, and the
+ * page underneath is reachable by scrolling from outside the canvas instead.
+ *
+ * d3-zoom's OWN wheel handling is disabled entirely for this (see
+ * enableZoomInteraction below) and replaced with a manual listener, for a
+ * reason beyond "make plain scroll zoom": d3-zoom's default sensitivity
+ * (d3-zoom/src/zoom.js's defaultWheelDelta) is
+ * `-deltaY * (ctrlKey ? 0.02 : 0.002)` -- a demonstrable 10x multiplier
+ * whenever ctrlKey is set. The PREVIOUS gate required ctrlKey (or metaKey) to
+ * zoom at all, so every zoom this graph has ever done via Ctrl+scroll was
+ * ALREADY running through that 10x-sensitivity branch -- confirmed by
+ * reading node_modules/d3-zoom/dist/d3-zoom.js, not guessed. That is very
+ * likely the real source of "too sensitive": it was never merely "scroll
+ * zooms fast", it was specifically "scroll zooms at 10x the library's own
+ * baseline rate", every single time, because ctrlKey was mandatory. There is
+ * no public prop to override wheelDelta on react-force-graph-2d (checked
+ * against its .d.ts), so a manual handler is the only way to actually set
+ * sensitivity rather than inherit whichever of d3's two hard-coded rates a
+ * given modifier key happens to select.
+ */
+const WHEEL_ZOOM_SENSITIVITY = 0.0009; // exponent per deltaY unit -- see the effect below
+const WHEEL_ZOOM_MIN = 0.3;
+const WHEEL_ZOOM_MAX = 8;
+
+/**
  * Dense "nebula" default view (2026-09-02), replacing the 13-category
  * click-to-expand model entirely. The backend's expand="all" mode (see
  * app/public_api.py) returns every reel as a node plus every category as a
@@ -357,6 +386,44 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
   }, []);
 
   const isNarrow = size.width > 0 && size.width < GRAPH_MIN_WIDTH;
+
+  /**
+   * Manual wheel-to-zoom (2026-09-08) -- see WHEEL_ZOOM_SENSITIVITY above
+   * for why this exists instead of a prop. A plain, non-passive native
+   * listener (not React's onWheel, which React attaches passively by
+   * default and so cannot reliably preventDefault) on wrapRef, the exact
+   * element already measured for canvas sizing above -- reused rather than
+   * adding a second ref for the same DOM node.
+   *
+   * preventDefault() here is deliberate and reverses the earlier scroll-trap
+   * fix on purpose: scrolling over the canvas now zooms the graph instead of
+   * scrolling the page, matching the plain-scroll-to-zoom behaviour asked
+   * for. The page is still reachable by scrolling from outside the canvas.
+   *
+   * fg.zoom(k) (not d3-zoom's own scaleTo) is the only zoom entry point used
+   * -- it is force-graph's own public setter (confirmed against
+   * node_modules/force-graph/dist/force-graph.mjs), goes through the same
+   * d3-zoom instance underneath, and keeps this consistent with every other
+   * imperative zoom call in this component (zoomToFit, etc.).
+   */
+  useEffect(() => {
+    if (isNarrow) return;
+    const el = wrapRef.current;
+    if (!el) return;
+
+    const onWheel = (e: WheelEvent) => {
+      const fg = fgRef.current;
+      if (!fg) return;
+      e.preventDefault();
+      const current: number = fg.zoom();
+      const factor = Math.pow(2, -e.deltaY * WHEEL_ZOOM_SENSITIVITY);
+      const next = Math.min(WHEEL_ZOOM_MAX, Math.max(WHEEL_ZOOM_MIN, current * factor));
+      fg.zoom(next, 0); // 0ms transition -- an immediate response is what "scroll to zoom" needs
+    };
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [isNarrow]);
 
   /**
    * Local-only focus (2026-09-02) -- no network call, no loading/error
@@ -985,12 +1052,14 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
             <p className="text-sm text-muted-foreground">
               {isNarrow
                 ? "Tap a category below to explore it."
-                : /* 2026-09-02: wheel-zoom used to trap the page scroll the
-                     moment the cursor crossed the canvas -- see
-                     enableZoomInteraction below. This is the one-line fix
-                     for a visitor who scrolls straight into that and finds
-                     the page won't move: tell them the escape hatch. */
-                  "Scroll to keep browsing · hold Ctrl/⌘ + scroll to zoom the graph"}
+                : /* 2026-09-08: plain scroll now zooms the graph directly
+                     (see WHEEL_ZOOM_SENSITIVITY below) rather than requiring
+                     Ctrl/Cmd, reversing the earlier scroll-trap fix on
+                     purpose. The hint flips to match: it used to explain the
+                     escape hatch out of an accidental zoom-trap; now it
+                     tells a visitor who scrolls straight onto the canvas
+                     that this zooms rather than moving the page. */
+                  "Scroll to zoom the graph · drag a node or the canvas to move it"}
             </p>
           )}
         </div>
@@ -1173,31 +1242,31 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
                 onNodeDrag={() => {
                   skipNextEngineStopFit.current = true;
                 }}
-                // THE SCROLL-TRAP FIX (2026-09-02). Reported bug: a visitor
-                // scrolling the page with the cursor over the canvas got
-                // stuck zooming the graph instead of scrolling the page --
-                // react-force-graph-2d's default wheel handler calls
-                // preventDefault() unconditionally to zoom on every wheel
-                // event, cursor-over-canvas or not.
-                //
-                // Chose the modifier-key gate (Ctrl/Cmd+scroll = zoom, plain
-                // scroll = page) over the other two options considered:
-                // disabling zoom entirely would remove a real, useful
-                // interaction for exploring ~190 dots with no other zoom
-                // affordance offered in its place; capturing wheel only
-                // while actively dragging doesn't fix the actual complaint,
-                // since a visitor scrolling the page never has the mouse
-                // button down over the canvas in the first place. The
-                // modifier gate is also the one directly supported by
-                // react-force-graph-2d's own typed prop
-                // (`enableZoomInteraction?: boolean |
-                // ((event: MouseEvent) => boolean)`, confirmed against
-                // node_modules/react-force-graph-2d/dist/react-force-graph-2d.d.ts)
-                // rather than needing a manual wheel-listener workaround,
-                // and it's a familiar convention (Google Maps, Figma, most
-                // canvas-based editors use the same gate for the same
-                // reason).
-                enableZoomInteraction={(event: any) => event.ctrlKey || event.metaKey}
+                // Plain-scroll-to-zoom (2026-09-08) supersedes the earlier
+                // Ctrl/Cmd-gated scroll-trap fix -- see
+                // WHEEL_ZOOM_SENSITIVITY's comment above for the full
+                // reasoning and the two-part diagnosis (mandatory modifier +
+                // d3-zoom's own 10x ctrlKey multiplier) behind why the old
+                // setup felt "too sensitive". d3-zoom's own wheel handling
+                // is disabled outright (false, not a predicate) so it can
+                // never fire alongside the manual listener above and
+                // double-apply a zoom to the same wheel event; that manual
+                // listener is now the only path a wheel event reaches the
+                // graph's zoom through. enablePanInteraction is untouched --
+                // mouse-drag panning is a separate d3-zoom code path from
+                // wheel and was never part of either the old or new
+                // sensitivity issue.
+                enableZoomInteraction={false}
+                // Sane bounds on the zoom this component can reach, via
+                // either the manual wheel handler above or any imperative
+                // .zoom() call (zoomToFit, Recenter) -- react-force-graph-2d
+                // has no default limit (d3-zoom's own scaleExtent defaults
+                // to [0, Infinity], confirmed in d3-zoom's source), so
+                // without this a fast enough scroll could zoom the ~190-node
+                // cluster down to a single indistinguishable point or out
+                // past anything legible.
+                minZoom={WHEEL_ZOOM_MIN}
+                maxZoom={WHEEL_ZOOM_MAX}
                 // Enabled 2026-09-02 -- this, not any camera behaviour, is
                 // what makes a disturbed node "come back". force-graph's own
                 // drag-end handler un-pins the node it just dragged
