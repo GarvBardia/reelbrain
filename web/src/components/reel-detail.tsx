@@ -6,6 +6,7 @@ import { ExternalLink, X } from "lucide-react";
 
 import { getReelDetail } from "@/lib/api";
 import type { Reel, ReelDetail as ReelDetailData } from "@/lib/types";
+import { Skeleton } from "@/components/skeleton";
 import { cn } from "@/lib/utils";
 
 /**
@@ -38,6 +39,20 @@ import { cn } from "@/lib/utils";
  * title, the summary, the suggested action, and -- unlike the card -- every
  * topic, every named entity, the content type, the posted date, and a link
  * back to the original post.
+ *
+ * THE OPEN-TIME FLASH (2026-09-05) and why DetailSkeleton exists: for the
+ * fetch's duration, `detail` is null, and the sections below were previously
+ * gated on `detail && ...` with nothing rendered in their place -- so the
+ * modal spent that whole window showing EXACTLY the fields that existed
+ * before commit 904963d (title/summary/meta/topics only) and nothing else.
+ * That is not a rendering glitch or a stale cache; it is this component
+ * legitimately rendering its own pre-detail-fetch layout, then a moment
+ * later having new sections appear -- which reads as "opens in the old
+ * design, then flashes into the new one," because for that whole window it
+ * literally IS the old design. `detailLoading` now stays true until the
+ * fetch settles (success OR failure), and DetailSkeleton occupies exactly
+ * the slot the real sections render into, so the very first frame already
+ * carries the new layout's shape instead of omitting it.
  */
 export function ReelDetail({ reel, onClose }: { reel: Reel | null; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -46,10 +61,16 @@ export function ReelDetail({ reel, onClose }: { reel: Reel | null; onClose: () =
   // the instant the shortcode changes, and swallowed silently on failure --
   // this is genuinely optional enrichment of an otherwise-complete modal, so
   // a Notion hiccup here should never surface an error UI over content that
-  // is already fully usable without it.
+  // is already fully usable without it. `detailLoading` is tracked
+  // SEPARATELY from `detail === null`: a resolved detail with every array
+  // legitimately empty is a real, done state (show nothing further, not a
+  // skeleton), which `detail === null` alone can't distinguish from
+  // "still fetching".
   const [detail, setDetail] = useState<ReelDetailData | null>(null);
+  const [detailLoading, setDetailLoading] = useState(true);
   useEffect(() => {
     setDetail(null);
+    setDetailLoading(true);
     if (!reel) return;
     let cancelled = false;
     getReelDetail(reel.shortcode)
@@ -58,6 +79,9 @@ export function ReelDetail({ reel, onClose }: { reel: Reel | null; onClose: () =
       })
       .catch(() => {
         // Silent on purpose -- see the component docstring.
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
       });
     return () => {
       cancelled = true;
@@ -201,15 +225,18 @@ export function ReelDetail({ reel, onClose }: { reel: Reel | null; onClose: () =
                 </div>
               )}
 
-              {/* Block-derived sections (2026-09-04) -- see the component
-                  docstring. Each one is its own `length > 0` guard, not a
-                  single "detail && ..." wrapper, because these are genuinely
-                  independent: a reel can have steps but no listed resources,
-                  or resources but no numbered steps, and each combination is
-                  common in the real corpus. No loading indicator while
-                  `detail` is still null -- the modal is already fully usable
-                  on the fields it opened with, and these sections simply
-                  appear a moment later rather than blocking anything. */}
+              {/* Block-derived sections (2026-09-04, skeleton added
+                  2026-09-05 -- see the component docstring on THE OPEN-TIME
+                  FLASH). While the fetch is in flight this slot shows
+                  DetailSkeleton, shaped like the sections it precedes, so the
+                  modal never spends a frame looking like the pre-detail
+                  design. Once resolved, each section below is its own
+                  `length > 0` guard, not a single wrapper, because these are
+                  genuinely independent -- a reel can have steps but no listed
+                  resources, or the reverse, and both are common in the real
+                  corpus. */}
+              {detailLoading && <DetailSkeleton />}
+
               {detail && detail.supporting_points.length > 0 && (
                 <Section label="Supporting points">
                   <ul className="w-full space-y-1.5">
@@ -316,6 +343,42 @@ export function ReelDetail({ reel, onClose }: { reel: Reel | null; onClose: () =
         </motion.div>
       )}
     </AnimatePresence>
+  );
+}
+
+/**
+ * Placeholder for the block-derived sections while GET /reels/{shortcode}/
+ * detail is in flight -- see THE OPEN-TIME FLASH in the component docstring.
+ * Shaped like the sections it stands in for (a label-height bar + a few
+ * body-height bars, mimicking "Supporting points"; a label bar + a chip row,
+ * mimicking "Resources mentioned") rather than a single generic bar, so it
+ * reads as "this specific new layout is loading" and not as an unrelated
+ * spinner. Deliberately does NOT try to predict which real sections will
+ * actually appear (steps vs. resources vs. neither) -- that's unknowable
+ * before the fetch resolves; this only needs to look like the new design,
+ * not forecast its exact contents.
+ */
+function DetailSkeleton() {
+  return (
+    <div className="mt-5 space-y-5" aria-hidden>
+      <div>
+        <Skeleton className="h-3 w-28" />
+        <div className="mt-2.5 space-y-1.5">
+          <Skeleton className="h-3.5 w-full" />
+          <Skeleton className="h-3.5 w-11/12" />
+          <Skeleton className="h-3.5 w-4/5" />
+        </div>
+      </div>
+      <div>
+        <Skeleton className="h-3 w-32" />
+        <div className="mt-2.5 flex flex-wrap gap-1.5">
+          <Skeleton className="h-5 w-16 rounded-full" />
+          <Skeleton className="h-5 w-20 rounded-full" />
+          <Skeleton className="h-5 w-14 rounded-full" />
+        </div>
+      </div>
+      <span className="sr-only">Loading additional detail…</span>
+    </div>
   );
 }
 
