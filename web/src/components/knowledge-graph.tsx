@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { GraphFallbackList } from "./graph-fallback-list";
+import { HoverExpandCategories } from "./skiper/hover-expand-categories";
 import { GlowingEffect } from "./obsidian/glowing-effect";
 
 /**
@@ -1069,30 +1070,33 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
         </div>
       </div>
 
-      {/* Legend doubles as an alternate control surface: some people will
-          reach for a named list rather than clicking a dot. */}
-      <div className="mt-5 flex flex-wrap gap-x-4 gap-y-2">
-        {data.categories.map((c) => (
-          <button
-            key={c.slug}
-            onClick={() => focusCategory(c.slug === expanded ? null : c.slug)}
-            className={cn(
-              "group flex items-center gap-2 text-sm transition-opacity",
-              expanded && expanded !== c.slug ? "opacity-40 hover:opacity-100" : "opacity-100",
-            )}
-          >
-            <span
-              className="h-2.5 w-2.5 shrink-0 rounded-full"
-              style={{
-                backgroundColor: c.color,
-                boxShadow: `0 0 8px ${c.color}66`,
-              }}
-            />
-            <span className="text-slate-600 group-hover:text-slate-900">{c.label}</span>
-            <span className="tabular-nums text-slate-400">{c.count}</span>
-          </button>
-        ))}
-      </div>
+      {/* Legend/selector, now the Skiper UI hover-expand strip (2026-09-03).
+          Same job as the flat dot-row it replaces -- name every category, show
+          its size, and let you pin one -- but the colour swatch is the tile
+          itself, so hovering along the strip reads as browsing rather than as
+          scanning a key. Fed from `data.categories`, the exact array the
+          canvas already uses, so there is no second request. */}
+      <HoverExpandCategories
+        className="mt-5"
+        categories={data.categories}
+        selected={expanded}
+        onSelect={focusCategory}
+      />
+
+      {/* Attribution is a condition of Skiper UI's free licence ("Attribution
+          to Skiper UI is required when using the free version"). No format is
+          specified, so it sits here as a quiet footer line. */}
+      <p className="mt-2 text-[11px] text-slate-400">
+        Category strip by{" "}
+        <a
+          href="https://skiper-ui.com"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline decoration-slate-300 underline-offset-2 hover:text-slate-600"
+        >
+          Skiper UI
+        </a>
+      </p>
     </div>
   );
 }
