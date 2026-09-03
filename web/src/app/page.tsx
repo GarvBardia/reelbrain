@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { ArrowRight, Compass, Layers, Sparkles } from "lucide-react";
 
@@ -13,6 +14,21 @@ import { Spotlight } from "@/components/aceternity/spotlight";
 import { LightLines } from "@/components/obsidian/light-lines";
 import { Skeleton } from "@/components/skeleton";
 import { Button } from "@/components/ui/button";
+
+/**
+ * Lazy, browser-only: three + AsciiEffect + GLTFLoader is the heaviest thing
+ * on this page, and it is decoration. ssr:false keeps it out of the static
+ * export's HTML entirely, and next/dynamic splits it into its own chunk so it
+ * cannot block first paint of the headline it sits behind.
+ *
+ * next/dynamic is safe HERE, unlike for the graph: the documented ref-dropping
+ * problem at the top of knowledge-graph.tsx only bites components that need a
+ * ref passed through, and this one exposes no imperative handle.
+ */
+const AsciiHeroBackground = dynamic(
+  () => import("@/components/ascii-hero-background").then((m) => m.AsciiHeroBackground),
+  { ssr: false },
+);
 
 // Client-fetched, not server-rendered: GitHub Pages serves static files with
 // no server to run against, so every data-driven page fetches the public API
@@ -69,6 +85,35 @@ export default function LandingPage() {
         </div>
         <Spotlight className="-top-40 left-0 text-indigo-500 md:-top-20 md:left-60" />
         <div className="pointer-events-none absolute inset-0 bg-dot-grid mask-radial-fade" />
+
+        {/* Ambient ASCII mycelium (2026-09-03). Sits in the same background
+            stack as LightLines/Spotlight/dot-grid and obeys the same rule they
+            do: never compete with the headline. Hence opacity-[0.16], a radial
+            bottom fade, and pointer-events-none so it cannot intercept a
+            click meant for a CTA.
+
+            The mask is a vertical fade, NOT the radial "clear the centre" one
+            tried first: the mycelium renders in the middle of its own canvas,
+            so a centre-clearing mask deleted the subject and left only stray
+            glyphs at the edges. Readability is carried by opacity instead --
+            the headline is near-black at 60px, which a 22% violet glyph field
+            cannot meaningfully degrade.
+
+            Bounded to the top 640px rather than inset-0: this section also
+            contains the 480px graph, so a full-bleed layer would run the
+            glyph grid behind the canvas too -- roughly twice the area, twice
+            the per-frame DOM, behind something already doing its own
+            animation. The brief asked for it behind the headline, and that is
+            exactly the band this covers.
+
+            It self-disables on narrow, low-core and reduced-motion devices --
+            see shouldRender() in the component. */}
+        <div
+          className="pointer-events-none absolute inset-x-0 top-0 h-[640px] overflow-hidden opacity-[0.22] [mask-image:linear-gradient(to_bottom,black_0%,black_62%,transparent_100%)]"
+          aria-hidden
+        >
+          <AsciiHeroBackground />
+        </div>
 
         {/* max-w-[1440px], not max-w-6xl -- widened specifically so the graph
             (the section's centerpiece) gets real room. The headline/subtext
