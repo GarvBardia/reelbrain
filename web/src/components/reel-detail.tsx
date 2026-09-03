@@ -53,6 +53,47 @@ import { cn } from "@/lib/utils";
  * fetch settles (success OR failure), and DetailSkeleton occupies exactly
  * the slot the real sections render into, so the very first frame already
  * carries the new layout's shape instead of omitting it.
+ *
+ * A SEPARATE two-stage-looking open (2026-09-07), unrelated to the fetch
+ * above and present even for a reel with no block-derived sections at all --
+ * this one is a pure animation-definition bug, not a data-timing one.
+ * `reel` itself is never partial: it comes straight from `data.items`,
+ * already a complete object, so the badges/title/summary in the dialog below
+ * are never actually "loading" in stages -- there was no missing skeleton to
+ * add here, because there is no missing data.
+ *
+ * The bug is the dialog's own transition. It used to start from
+ * `{ opacity: 0.6, y: 24, scale: 0.98 }` and animate every property --
+ * opacity INCLUDED -- through one shared spring (stiffness 320, damping 30).
+ * Two things compound: (1) starting opacity at 0.6 rather than 0 means the
+ * dialog's content is already substantially legible on the very first
+ * rendered frame, before any motion has happened -- read by an observer as
+ * "a partial, already-there paint" rather than a fade beginning from
+ * nothing; (2) a spring is a physics simulation, not a fixed-duration curve,
+ * and animating OPACITY through one is unusual -- it doesn't ease smoothly
+ * the way a plain tween does, so from "partially there" it visibly SNAPS
+ * toward 1 rather than gliding, which reads as the "jump to fully loaded"
+ * this was reported as. The backdrop right above it runs its own, completely
+ * separate 0.2s linear-ish opacity tween with no relationship to the
+ * dialog's spring at all -- "two separate animations firing out of sync",
+ * exactly as suspected.
+ *
+ * Fixed by giving opacity its own plain tween (synced to the backdrop's own
+ * 0.2s) via a per-property `transition` override, and starting it at 0 like
+ * every other fade in this codebase -- while keeping the spring for y/scale
+ * only, which is where a spring's bounce actually reads as intentional
+ * motion rather than as a data glitch.
+ *
+ * Could not be captured as a live animation trace in this session's browser
+ * pane: the tab is backgrounded there (document.hidden === true), which
+ * measurably starves both requestAnimationFrame (0 samples collected over a
+ * 700ms window) and setInterval (throttled to 1 tick/second, confirmed by
+ * direct measurement) -- and framer-motion's spring is not a native Web
+ * Animations API animation (element.getAnimations() returns an empty array
+ * for it, confirmed), so there was no timeline to pause/scrub around that
+ * limitation either. The fix here is grounded in the transition DEFINITION
+ * (read directly, not inferred) rather than an observed trace; a real
+ * foregrounded-tab check of the open animation is worth one look.
  */
 export function ReelDetail({ reel, onClose }: { reel: Reel | null; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -149,10 +190,19 @@ export function ReelDetail({ reel, onClose }: { reel: Reel | null; onClose: () =
             // card on wider screens. dvh, not vh, so iOS Safari's collapsing
             // toolbar doesn't clip the bottom of the sheet.
             className="relative flex max-h-[92dvh] w-full max-w-xl flex-col overflow-hidden rounded-t-2xl bg-white shadow-2xl sm:max-h-[88dvh] sm:rounded-2xl"
-            initial={{ y: 24, opacity: 0.6, scale: 0.98 }}
+            initial={{ y: 24, opacity: 0, scale: 0.98 }}
             animate={{ y: 0, opacity: 1, scale: 1 }}
             exit={{ y: 24, opacity: 0 }}
-            transition={{ type: "spring", stiffness: 320, damping: 30 }}
+            // opacity split onto its own plain tween, synced to the
+            // backdrop's 0.2s fade just above -- see THE OPEN-TIME FLASH,
+            // PART 2 above for why sharing the spring with y/scale produced
+            // a two-stage "already partially there, then snaps" open. The
+            // spring stays for y/scale, which is where its bounce reads as
+            // intentional rather than as a glitch.
+            transition={{
+              opacity: { duration: 0.2 },
+              default: { type: "spring", stiffness: 320, damping: 30 },
+            }}
           >
             {/* Accent rail so the modal carries the category colour the same
                 way the cards and graph nodes do. */}
