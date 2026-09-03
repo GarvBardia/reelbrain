@@ -204,6 +204,8 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
   const [hovered, setHovered] = useState<GraphNode | null>(null);
 
   const wrapRef = useRef<HTMLDivElement>(null);
+  /** The bordered card the canvas sits in -- scroll target for strip clicks. */
+  const cardRef = useRef<HTMLDivElement>(null);
   const fgRef = useRef<any>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
 
@@ -316,6 +318,30 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
   const focusCategory = useCallback((category: string | null) => {
     setExpanded(category);
   }, []);
+
+  /**
+   * The category strip's PRIMARY action: focus the category, then make sure
+   * the result is actually on screen.
+   *
+   * Focusing reuses focusCategory unchanged -- there is no separate
+   * "expand to reels" path to call. Since the move to expand="all" every
+   * reel is always on the canvas, so focusing a category highlights its nodes
+   * and dims the rest rather than fetching anything. (Clicking a category
+   * node on the canvas does nothing at all: anchors draw at ~2px and
+   * deliberately carry no click action -- see handleNodeClick.)
+   *
+   * Scrolls only when SELECTING. Un-pinning by clicking the same tile again
+   * passes null, and yanking the viewport around for "I've cleared the
+   * filter" would be motion the user did not ask for.
+   */
+  const focusCategoryAndReveal = useCallback(
+    (category: string | null) => {
+      focusCategory(category);
+      if (!category) return;
+      cardRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    },
+    [focusCategory],
+  );
 
   const handleNodeClick = useCallback((node: any) => {
     // Category anchors are drawn (faintly) but carry no click action: at
@@ -917,6 +943,7 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
           the cursor; it is inert on touch (no pointer to track), so the
           mobile list view below loses nothing. */}
       <div
+        ref={cardRef}
         className={cn(
           "relative rounded-[1.35rem] p-px",
           "bg-gradient-to-br from-slate-200/80 via-slate-100 to-slate-200/80",
@@ -1080,7 +1107,7 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
         className="mt-5"
         categories={data.categories}
         selected={expanded}
-        onSelect={focusCategory}
+        onSelect={focusCategoryAndReveal}
       />
 
       {/* Attribution is a condition of Skiper UI's free licence ("Attribution

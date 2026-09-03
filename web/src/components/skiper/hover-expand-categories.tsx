@@ -1,6 +1,8 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
+import { ArrowUpRight } from "lucide-react";
+import Link from "next/link";
 import { useState } from "react";
 
 import type { CategoryInfo } from "@/lib/types";
@@ -39,13 +41,21 @@ import { cn } from "@/lib/utils";
  *     Scrolling is the brief's own suggested degradation and costs nothing on
  *     desktop, where it never triggers.
  *
+ * TWO SEPARATE ACTIONS live on an expanded tile (2026-09-03), and they are two
+ * real sibling elements rather than one handler branching on event.target:
+ *   - a full-bleed <button> covering the tile, which focuses that category on
+ *     the graph and scrolls the graph into view;
+ *   - a small "View in Library" <Link> stacked above it, which instead routes
+ *     to /library?category=<slug> and does NOT touch the graph.
+ * Siblings, deliberately not nested. An <a> inside a <button> is invalid HTML
+ * and browsers disagree about which one a click activates, so the wrapper is a
+ * plain div and the two targets sit side by side in the stacking order. That
+ * removes the conflict structurally rather than papering over it; the link
+ * still calls stopPropagation as a guard for the wrapper's own handlers.
+ *
  * Touch: upstream already wires onClick alongside onHoverStart, so tap-to-
- * expand works on touch devices with no change. Click additionally pins the
- * category in the graph (see onSelect) -- hover only expands the tile.
- * Hover deliberately does NOT filter the graph: this component's active tile
- * is sticky (it never resets on mouse-leave, upstream behaviour we kept), so
- * driving the filter from hover would leave the graph stuck on whichever
- * category the cursor last crossed on its way somewhere else.
+ * expand works on touch devices with no change. Hover only expands the tile;
+ * pinning the category on the graph is a click.
  */
 export function HoverExpandCategories({
   categories,
@@ -76,25 +86,16 @@ export function HoverExpandCategories({
             const isActive = active === index;
             const isPinned = selected === category.slug;
             return (
-              <motion.button
+              <motion.div
                 key={category.slug}
-                type="button"
-                aria-label={`${category.label}, ${category.count} saves`}
-                aria-pressed={isPinned}
                 className={cn(
-                  "relative shrink-0 cursor-pointer overflow-hidden rounded-2xl",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900/60",
+                  "relative shrink-0 overflow-hidden rounded-2xl",
                   isPinned && "ring-2 ring-slate-900/70",
                 )}
                 initial={{ width: "5rem", height: "8rem" }}
                 animate={{ width: isActive ? "24rem" : "5rem", height: "8rem" }}
                 transition={{ duration: 0.3, ease: "easeInOut" }}
-                onClick={() => {
-                  setActive(index);
-                  onSelect(isPinned ? null : category.slug);
-                }}
                 onHoverStart={() => setActive(index)}
-                onFocus={() => setActive(index)}
               >
                 {/* Stands in for upstream's <img>: the category's own colour,
                     which is the same value the graph paints its nodes with. */}
@@ -105,13 +106,31 @@ export function HoverExpandCategories({
                   }}
                 />
 
+                {/* ACTION 1 -- the primary target, covering the whole tile:
+                    focus this category on the graph and scroll it into view.
+                    Sits above the gradient, below the (inert) overlay and the
+                    Library link. */}
+                <button
+                  type="button"
+                  aria-label={`Show ${category.label} on the graph, ${category.count} saves`}
+                  aria-pressed={isPinned}
+                  className="absolute inset-0 z-10 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/80"
+                  onClick={() => {
+                    setActive(index);
+                    onSelect(isPinned ? null : category.slug);
+                  }}
+                  onFocus={() => setActive(index)}
+                />
+
+                {/* Overlay and label are pointer-events-none so they never
+                    intercept a click meant for the button underneath them. */}
                 <AnimatePresence>
                   {isActive && (
                     <motion.div
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
-                      className="absolute inset-0 h-full w-full bg-gradient-to-t from-black/60 to-transparent"
+                      className="pointer-events-none absolute inset-0 z-20 h-full w-full bg-gradient-to-t from-black/60 to-transparent"
                     />
                   )}
                 </AnimatePresence>
@@ -122,18 +141,41 @@ export function HoverExpandCategories({
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
-                      className="absolute inset-0 flex h-full w-full flex-col items-start justify-end p-3"
+                      className="pointer-events-none absolute inset-0 z-20 flex h-full w-full flex-col items-start justify-end p-3"
                     >
-                      <p className="truncate text-sm font-medium text-white">
-                        {category.label}
-                      </p>
+                      <p className="truncate text-sm font-medium text-white">{category.label}</p>
                       <p className="text-xs tabular-nums text-white/70">
                         {category.count} saves
                       </p>
                     </motion.div>
                   )}
                 </AnimatePresence>
-              </motion.button>
+
+                {/* ACTION 2 -- deliberately secondary: small, cornered and
+                    quiet beside a tile-sized primary target. Routes straight
+                    to the pre-filtered Library and does not focus the graph.
+                    z-30 puts it above the primary button so the click lands
+                    here instead. */}
+                <AnimatePresence>
+                  {isActive && (
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      className="absolute bottom-3 right-3 z-30"
+                    >
+                      <Link
+                        href={`/library?category=${encodeURIComponent(category.slug)}`}
+                        onClick={(event) => event.stopPropagation()}
+                        className="inline-flex items-center gap-1 rounded-md bg-white/15 px-2 py-1 text-[11px] font-medium text-white/85 backdrop-blur-sm transition-colors hover:bg-white/25 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
+                      >
+                        View in Library
+                        <ArrowUpRight className="h-3 w-3" />
+                      </Link>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </motion.div>
             );
           })}
         </div>
