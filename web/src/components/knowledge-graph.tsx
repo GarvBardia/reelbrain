@@ -124,6 +124,64 @@ function mixHex(hex: string, toward: string, amount: number): string {
   return `#${toHex(mix(hr, tr))}${toHex(mix(hg, tg))}${toHex(mix(hb, tb))}`;
 }
 
+function hexToHsl(hex: string): [number, number, number] {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.slice(0, 2), 16) / 255, g = parseInt(h.slice(2, 4), 16) / 255, b = parseInt(h.slice(4, 6), 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const light = (max + min) / 2;
+  let hue = 0, sat = 0;
+  if (max !== min) {
+    const d = max - min;
+    sat = light > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) hue = (g - b) / d + (g < b ? 6 : 0);
+    else if (max === g) hue = (b - r) / d + 2;
+    else hue = (r - g) / d + 4;
+    hue /= 6;
+  }
+  return [hue * 360, sat * 100, light * 100];
+}
+
+function hslToHex(h: number, s: number, l: number): string {
+  h /= 360; s /= 100; l /= 100;
+  let r: number, g: number, b: number;
+  if (s === 0) {
+    r = g = b = l;
+  } else {
+    const hue2rgb = (p: number, q: number, t: number) => {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1 / 6) return p + (q - p) * 6 * t;
+      if (t < 1 / 2) return q;
+      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+      return p;
+    };
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue2rgb(p, q, h + 1 / 3);
+    g = hue2rgb(p, q, h);
+    b = hue2rgb(p, q, h - 1 / 3);
+  }
+  const toHex = (n: number) => Math.round(n * 255).toString(16).padStart(2, "0");
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+/**
+ * Section C, round 2 (2026-09-07): softer/muted category colour, replacing
+ * C1's full-saturation solid fill -- a distinct instruction from, and
+ * superseding, the "vivid solid colour" call in the previous round. Pulls
+ * saturation down to under half and lifts lightness toward pastel, but goes
+ * through HSL rather than mixHex's RGB blend specifically so HUE is
+ * untouched: mixHex-toward-anything shifts the hue itself (that's what made
+ * the original nebula blend collapse different categories into the same
+ * colour), where the actual ask here is "same hue family, calmer version of
+ * it" -- categories still need to read as different colours, just quieter
+ * ones. Saturation and lightness targets were tuned by eye against a real
+ * screenshot (see the session report), not picked blind. */
+function mutedHex(hex: string): string {
+  const [h, s, l] = hexToHsl(hex);
+  return hslToHex(h, s * 0.42, Math.min(80, l + 16));
+}
+
 /** Stable per-link pseudo-random integer, from the link's own endpoint ids.
  *  Used to jitter membership link distance so a hub's leaves don't all land
  *  on one exact radius. Must be deterministic: recomputing it per tick would
@@ -141,6 +199,13 @@ function linkJitter(l: any): number {
  *  the background just needs to stay out of the way and give the glow
  *  somewhere dark to bloom into. */
 const NEBULA_BACKGROUND = "#050208";
+
+/** The one colour every link is drawn in (2026-09-07, Section C round 2),
+ *  replacing per-reel-coloured edges. A muted slate rather than a pure grey
+ *  or the background's own value -- visible as structure against
+ *  NEBULA_BACKGROUND without reading as a colour category of its own, which
+ *  is the entire point of a single neutral link colour. */
+const LINK_COLOR = "#64748b";
 
 /**
  * Drawn-radius scale for reel nodes (2026-09-XX) -- the actual lever for the
@@ -685,17 +750,18 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
    * that only has ~190 of them. Everything after that branch runs for reel
    * nodes only.
    *
-   * Colour (reverted 2026-09-06, Section C1 of the nav/security/graph audit):
-   * each reel is painted in its OWN category's real hex, at full saturation
-   * -- no blending toward a shared 3-hue nebula palette. That blend (kept
-   * for reference in git history, not in this file any more) pulled every
-   * category toward whichever of purple/pink/blue its id happened to hash
-   * to, which is exactly what made two DIFFERENT categories start looking
-   * like the same colour -- fine for "one cohesive cloud", wrong for "which
-   * category is this node". A high value_score (5, the top of the 1-5
-   * scale) still pulls toward the warm yellow accent -- that is a distinct,
-   * deliberate per-node highlight, not the category-identity blend this
-   * reverts, so it stays.
+   * Colour: each reel is painted in its OWN category's hue -- no blending
+   * toward a shared 3-hue nebula palette (removed 2026-09-06, Section C1;
+   * that blend pulled every category toward whichever of purple/pink/blue
+   * its id happened to hash to, which is what made two DIFFERENT categories
+   * start looking like the same colour). Round 2 (2026-09-07) softened that
+   * further: category hex now goes through mutedHex (HSL desaturate +
+   * lighten, hue untouched) rather than being painted at full saturation --
+   * calmer/pastel, but categories are still each other's real hue, just
+   * quieter, so "which category is this" still reads at a glance. A high
+   * value_score (5, the top of the 1-5 scale) still pulls toward the warm
+   * yellow accent, unmuted -- that is a distinct, deliberate per-node
+   * highlight, and a softened accent would defeat its own point.
    *
    * Brightness/size: single ctx.shadowBlur glow pass per node (one draw
    * call, not three) with size and glow radius modulated by distance from
@@ -749,9 +815,14 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
       const dist = Math.hypot(node.x, node.y);
       const coreT = Math.max(0, 1 - dist / 260); // 1 at centre, 0 at/past the edge
 
-      // Section C1: solid, at node.color directly -- no nebula-palette blend.
+      // Section C, round 2: solid and still per-category (no nebula-palette
+      // blend), but through mutedHex rather than node.color directly -- a
+      // calmer, more desaturated version of each category's real hue, not
+      // the vivid full-saturation fill round 1 shipped. The value_score-5
+      // accent stays vivid on purpose: it is a rare, deliberate highlight,
+      // and a muted accent would defeat its own point of standing out.
       const baseColor =
-        node.value_score >= 5 ? mixHex(node.color, NEBULA_ACCENT, 0.7) : node.color;
+        node.value_score >= 5 ? mixHex(node.color, NEBULA_ACCENT, 0.7) : mutedHex(node.color);
 
       // Size: mostly the backend's own val (already value_score-weighted),
       // nudged up slightly for centre nodes so the middle of the cluster
@@ -871,7 +942,16 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
       // edges read as noise rather than as connections. Staying thin is the
       // right style, but thin and *visible* are independent knobs, and only
       // the opacity was wrong.
-      ctx.strokeStyle = `${reel.color}${focussed ? "66" : "40"}`;
+      //
+      // Single neutral colour for every link, not per-category (2026-09-07,
+      // Section C, round 2). `${reel.color}` used to tint each edge with
+      // whichever reel it happened to touch, which meant edges were
+      // competing with the (now-muted) node fills for the same attention --
+      // a link's job here is to read as quiet structure, not as another
+      // category signal. LINK_COLOR is a fixed slate, one step up from
+      // NEBULA_BACKGROUND, so edges stay visible against the near-black
+      // canvas without carrying any colour identity of their own.
+      ctx.strokeStyle = `${LINK_COLOR}${focussed ? "66" : "40"}`;
       ctx.lineWidth = 0.7;
       ctx.stroke();
     },
