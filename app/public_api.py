@@ -31,9 +31,11 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from collections import Counter, defaultdict, deque
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
@@ -54,6 +56,13 @@ PRIVATE_NOTION_PROPERTIES = (
 )
 # Body blocks that must never be serialized outward. The transcript is a full
 # verbatim copy of a creator's audio; "Raw caption" is likewise their text.
+# Named here for the record, but the detail endpoint below (_reel_body_detail)
+# enforces this structurally rather than by matching these names: it reads
+# ONLY the page's TOP-LEVEL block children and never descends into a toggle at
+# all, of any title. Transcript, Raw caption and Research Context are all
+# written as toggle children (see notion_writer._build_children) precisely so
+# a scan that stops at the top level can never reach them, title-matching
+# or not.
 PRIVATE_BODY_TOGGLES = ("Transcript", "Raw caption")
 
 # Rows whose whole point is that they are NOT presentable. Excluding these is
@@ -277,6 +286,171 @@ def load_public_reels(force_refresh: bool = False) -> list[dict]:
     _CORPUS_CACHE["reels"] = reels
     _CORPUS_CACHE["fetched_at"] = now
     return reels
+
+
+# --- per-reel detail (2026-09-04) ---------------------------------------------------
+#
+# main_point (== title), plain_summary, suggested_action, topics, value_score
+# etc. all live in Notion PAGE PROPERTIES, which load_public_reels already
+# fetches in one query for the whole corpus. supporting_points,
+# steps_or_framework, resources_mentioned and quotable_lines are different in
+# kind: notion_writer._build_children writes them as page BODY BLOCKS, which
+# is a SEPARATE Notion API call per page (blocks.children.list). Folding that
+# into load_public_reels would turn one corpus query into 1 + N page-block
+# queries on every cache refresh -- for ~180 reels, a real risk of Notion rate
+# limits, paid for on every visitor even though most reels in a paginated list
+# are never opened.
+#
+# So this stays a SEPARATE, PER-SHORTCODE, ON-DEMAND fetch: only pays the
+# extra Notion call for a reel a visitor actually expands, with its own short
+# cache so re-opening the same reel doesn't re-fetch. The list endpoint
+# (/reels) and its cache are completely unaffected by any of this.
+_DETAIL_CACHE: dict[str, dict] = {}
+DETAIL_CACHE_TTL_SECONDS = PUBLIC_CACHE_TTL_SECONDS
+
+# Written by notion_writer._build_children as
+# f"{resource.name} ({resource.type})" for a resource with NO stated URL (one
+# WITH a URL is written as a bookmark block instead, which carries the URL but
+# -- a real, pre-existing gap in the write path, not something introduced
+# here -- no name or type; see the bookmark branch below). Read back with the
+# exact inverse pattern.
+_RESOURCE_PARAGRAPH_RE = re.compile(
+    r"^(?P<name>.+) \((?P<type>tool|book|site|person|course|other)\)$"
+)
+
+
+def _reel_body_detail(page_id: str) -> dict:
+    """The four block-derived sections for ONE reel, redacted by construction.
+
+    Reads ONLY the page's top-level block children -- never recurses into a
+    toggle's own children, which is where Transcript/Raw caption/Research
+    Context live. That is what keeps this safe: there is no name-matching
+    to get wrong, because the private content is structurally unreachable
+    from a top-level-only scan. See the note on PRIVATE_BODY_TOGGLES.
+
+    resources_mentioned here is never the comment-gate's DM'd payoff link --
+    that lives in the entirely separate "Gate resource" PAGE PROPERTY
+    (PRIVATE_NOTION_PROPERTIES), which no code path in this function reads.
+    A resource here is something the creator stated OPENLY in the reel's own
+    content (a tool/book/site/person/course they named), which is public
+    information the moment it airs -- fundamentally different from a gate
+    resource, which is deliberately unpublished until earned by a comment.
+    """
+    from app import notion_writer
+
+    client = notion_writer._client()
+    blocks: list[dict] = []
+    cursor: Optional[str] = None
+    while True:
+        kwargs: dict = {"block_id": page_id}
+        if cursor:
+            kwargs["start_cursor"] = cursor
+        response = client.blocks.children.list(**kwargs)
+        blocks.extend(response["results"])
+        if not response.get("has_more"):
+            break
+        cursor = response.get("next_cursor")
+
+    supporting_points: list[str] = []
+    steps_or_framework: list[str] = []
+    resources_mentioned: list[dict] = []
+    quotable_lines: list[str] = []
+
+    for block in blocks:
+        kind = block.get("type")
+        if kind == "toggle":
+            continue  # never descended into -- see the module docstring above
+        if kind == "bulleted_list_item":
+            text = notion_writer._rt_text(block["bulleted_list_item"].get("rich_text"))
+            if text:
+                supporting_points.append(text)
+        elif kind == "numbered_list_item":
+            text = notion_writer._rt_text(block["numbered_list_item"].get("rich_text"))
+            if text:
+                steps_or_framework.append(text)
+        elif kind == "bookmark":
+            url = block["bookmark"].get("url")
+            if url:
+                # Name/type were not preserved when this was written as a
+                # bookmark (see _RESOURCE_PARAGRAPH_RE's comment) -- the URL
+                # itself is the best available stand-in for a display name.
+                #
+                # Domain alone is not enough: caught on a real reel citing
+                # four different github.com repos, which all collapsed to the
+                # literal label "github.com" repeated four times -- correct
+                # per-item but unreadable as a group, since nothing visually
+                # distinguished one from another. The first path segment (a
+                # GitHub org/user, an npm scope, a docs section) is usually
+                # what actually identifies a specific link on a host that
+                # hosts many unrelated things, so it's kept when present.
+                parsed = urlparse(url)
+                domain = parsed.netloc.removeprefix("www.") or url
+                first_segment = next((s for s in parsed.path.split("/") if s), "")
+                name = f"{domain}/{first_segment}" if first_segment else domain
+                resources_mentioned.append({"name": name, "type": "site", "url": url})
+        elif kind == "paragraph":
+            text = notion_writer._rt_text(block["paragraph"].get("rich_text"))
+            match = _RESOURCE_PARAGRAPH_RE.match(text)
+            if match:
+                resources_mentioned.append({
+                    "name": match.group("name"),
+                    "type": match.group("type"),
+                    "url": None,
+                })
+            # A non-matching top-level paragraph is not expected (see the
+            # module docstring on what _build_children writes at top level),
+            # so it is skipped rather than shown -- better an omission than
+            # surfacing something unvetted.
+        elif kind == "quote":
+            text = notion_writer._rt_text(block["quote"].get("rich_text"))
+            if text:
+                quotable_lines.append(text)
+        # callout (main_point) and anything else: no public use for it here.
+
+    return {
+        "supporting_points": supporting_points,
+        "steps_or_framework": steps_or_framework,
+        "resources_mentioned": resources_mentioned,
+        "quotable_lines": quotable_lines,
+    }
+
+
+def load_reel_detail(shortcode: str) -> Optional[dict]:
+    """The cached, per-shortcode detail fetch behind GET /reels/{shortcode}/detail.
+
+    Returns None only when Notion has no page for this shortcode at all
+    (the route turns that into a 404). A Notion hiccup WHILE fetching blocks
+    for a page that does exist degrades to empty sections rather than an
+    error -- consistent with load_public_reels' own "never take the site
+    down over a Notion wobble" rule; the base card the visitor already sees
+    (title, summary, topics) does not depend on this call succeeding."""
+    from app import notion_writer
+
+    now = time.time()
+    cached = _DETAIL_CACHE.get(shortcode)
+    if cached and now - cached["fetched_at"] < DETAIL_CACHE_TTL_SECONDS:
+        return cached["data"]
+
+    try:
+        page = notion_writer.find_page_by_shortcode(shortcode)
+    except Exception:  # noqa: BLE001 - see load_public_reels
+        logger.warning("public_api: shortcode lookup failed for %s", shortcode, exc_info=True)
+        return cached["data"] if cached else None
+    if not page:
+        return None
+
+    try:
+        detail = _reel_body_detail(page["id"])
+    except Exception:  # noqa: BLE001 - degrade, don't 500 an otherwise-fine reel
+        logger.warning("public_api: block fetch failed for %s", shortcode, exc_info=True)
+        detail = {
+            "supporting_points": [], "steps_or_framework": [],
+            "resources_mentioned": [], "quotable_lines": [],
+        }
+
+    detail["shortcode"] = shortcode
+    _DETAIL_CACHE[shortcode] = {"data": detail, "fetched_at": now}
+    return detail
 
 
 # --- graph shaping -----------------------------------------------------------------
@@ -551,6 +725,23 @@ def public_reels(
         "page_size": page_size,
         "total_pages": max(1, -(-total // page_size)),
     }
+
+
+@router.get("/reels/{shortcode}/detail")
+def public_reel_detail(request: Request, shortcode: str) -> dict:
+    """The block-derived sections /reels doesn't carry -- see load_reel_detail.
+
+    404s for a shortcode /reels itself would never have shown (hidden status,
+    placeholder title, or simply not found): checked against the SAME
+    load_public_reels() list every other endpoint uses, so this can't be used
+    to probe for a reel that the corpus-level redaction already hid."""
+    check_public_rate_limit(request)
+    if not any(r["shortcode"] == shortcode for r in load_public_reels()):
+        raise HTTPException(status_code=404, detail="unknown reel")
+    detail = load_reel_detail(shortcode)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="unknown reel")
+    return detail
 
 
 @router.get("/scout-queue")

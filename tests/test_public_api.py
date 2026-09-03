@@ -46,14 +46,17 @@ def _page(shortcode, title, topics=(), value="4", priority="High",
 @pytest.fixture(autouse=True)
 def _clear_cache():
     """The corpus cache is module-level and TTL-based, so one test's fixture
-    would otherwise leak into the next test's assertions."""
+    would otherwise leak into the next test's assertions. _DETAIL_CACHE is the
+    same kind of module-level state for the per-reel detail endpoint below."""
     public_api._CORPUS_CACHE["reels"] = []
     public_api._CORPUS_CACHE["fetched_at"] = 0.0
     public_api._public_rate_buckets.clear()
+    public_api._DETAIL_CACHE.clear()
     yield
     public_api._CORPUS_CACHE["reels"] = []
     public_api._CORPUS_CACHE["fetched_at"] = 0.0
     public_api._public_rate_buckets.clear()
+    public_api._DETAIL_CACHE.clear()
 
 
 def _load(monkeypatch, pages):
@@ -522,3 +525,225 @@ def test_public_rate_limit_bucket_is_separate_from_the_write_path_limiter():
 
     assert public_api._public_rate_buckets is not main._rate_buckets
     assert public_api.PUBLIC_RATE_LIMIT_MAX_PER_MINUTE > main.RATE_LIMIT_MAX_PER_MINUTE
+
+
+# --- per-reel detail (2026-09-04) ---------------------------------------------------
+
+def _block(kind, **content):
+    return {"type": kind, kind: content}
+
+
+def _rt(text):
+    return {"rich_text": [{"plain_text": text}]} if text else {"rich_text": []}
+
+
+class _FakeBlocksChildren:
+    def __init__(self, blocks):
+        self._blocks = blocks
+
+    def list(self, block_id, start_cursor=None):  # noqa: ARG002 - fixture signature
+        # Single page of results is enough for these tests; pagination itself
+        # is exercised by the identical pattern already covered elsewhere.
+        return {"results": self._blocks, "has_more": False}
+
+
+class _FakeBlocks:
+    def __init__(self, blocks):
+        self.children = _FakeBlocksChildren(blocks)
+
+
+class _FakeNotionClient:
+    def __init__(self, blocks):
+        self.blocks = _FakeBlocks(blocks)
+
+
+_AUTO_PAGE = object()  # sentinel: "generate {'id': 'pg-<shortcode>'}", distinct from page=None
+
+
+def _detail(monkeypatch, blocks, shortcode="A1", page=_AUTO_PAGE):
+    from app import notion_writer
+    public_api._DETAIL_CACHE.clear()  # each call is a fresh scenario, not a real re-open
+    monkeypatch.setattr(notion_writer, "_client", lambda: _FakeNotionClient(blocks))
+    monkeypatch.setattr(
+        notion_writer, "find_page_by_shortcode",
+        lambda sc: {"id": f"pg-{sc}"} if page is _AUTO_PAGE else page,
+    )
+    return public_api.load_reel_detail(shortcode)
+
+
+def test_detail_buckets_each_block_type_into_its_own_section(monkeypatch):
+    blocks = [
+        {"type": "callout", "callout": {"rich_text": [{"plain_text": "The main point"}]}},
+        {"type": "bulleted_list_item", "bulleted_list_item": {"rich_text": [{"plain_text": "Point one"}]}},
+        {"type": "bulleted_list_item", "bulleted_list_item": {"rich_text": [{"plain_text": "Point two"}]}},
+        {"type": "numbered_list_item", "numbered_list_item": {"rich_text": [{"plain_text": "Step one"}]}},
+        {"type": "bookmark", "bookmark": {"url": "https://firecrawl.dev/docs"}},
+        {"type": "paragraph", "paragraph": {"rich_text": [{"plain_text": "Playwright CLI (tool)"}]}},
+        {"type": "quote", "quote": {"rich_text": [{"plain_text": "A quotable line."}]}},
+    ]
+    detail = _detail(monkeypatch, blocks)
+
+    assert detail["supporting_points"] == ["Point one", "Point two"]
+    assert detail["steps_or_framework"] == ["Step one"]
+    assert detail["quotable_lines"] == ["A quotable line."]
+    assert {"name": "Playwright CLI", "type": "tool", "url": None} in detail["resources_mentioned"]
+    # Domain + first path segment, not domain alone -- see the comment on the
+    # bookmark branch: two bookmarks on the same host must not collapse to
+    # one indistinguishable label.
+    assert {"name": "firecrawl.dev/docs", "type": "site", "url": "https://firecrawl.dev/docs"} \
+        in detail["resources_mentioned"]
+
+
+def test_detail_distinguishes_multiple_bookmarks_on_the_same_host(monkeypatch):
+    """Real bug, found against a live reel while testing this feature: four
+    github.com repos all bookmarked in one reel collapsed to the identical
+    label "github.com" repeated four times -- correct per item, unreadable as
+    a group, since nothing distinguished one from another. The fix folds in
+    the first path segment (an org/user, here), which is what actually
+    identifies a specific repo on a host that hosts unrelated ones."""
+    blocks = [
+        {"type": "bookmark", "bookmark": {"url": "https://github.com/darkroomengineering/lenis"}},
+        {"type": "bookmark", "bookmark": {"url": "https://github.com/greensock/GSAP"}},
+        {"type": "bookmark", "bookmark": {"url": "https://github.com/tengbao/vanta"}},
+    ]
+    detail = _detail(monkeypatch, blocks)
+    names = [r["name"] for r in detail["resources_mentioned"]]
+    assert names == ["github.com/darkroomengineering", "github.com/greensock", "github.com/tengbao"]
+    assert len(set(names)) == len(names)  # every label distinct
+
+
+def test_detail_never_descends_into_a_toggle_regardless_of_its_title(monkeypatch):
+    """This is the actual redaction mechanism for Transcript/Raw caption/
+    Research Context: none of their content is even fetched, let alone
+    filtered by name. A toggle carrying a private-looking title -- or any
+    title at all -- must still contribute nothing to any section."""
+    blocks = [
+        {
+            "type": "toggle",
+            "toggle": {
+                "rich_text": [{"plain_text": "Transcript"}],
+                "children": [
+                    {"type": "paragraph", "paragraph": {"rich_text": [{"plain_text": "verbatim audio text"}]}},
+                ],
+            },
+        },
+        {
+            "type": "toggle",
+            "toggle": {
+                "rich_text": [{"plain_text": "Raw caption"}],
+                "children": [
+                    {"type": "paragraph", "paragraph": {"rich_text": [{"plain_text": "the creator's caption"}]}},
+                ],
+            },
+        },
+        {"type": "bulleted_list_item", "bulleted_list_item": {"rich_text": [{"plain_text": "A real point"}]}},
+    ]
+    detail = _detail(monkeypatch, blocks)
+
+    blob = repr(detail)
+    assert "verbatim audio text" not in blob
+    assert "the creator's caption" not in blob
+    assert detail["supporting_points"] == ["A real point"]
+
+
+def test_detail_skips_a_non_matching_top_level_paragraph_rather_than_show_it(monkeypatch):
+    blocks = [
+        {"type": "paragraph", "paragraph": {"rich_text": [{"plain_text": "not a resource line at all"}]}},
+    ]
+    detail = _detail(monkeypatch, blocks)
+    assert detail["resources_mentioned"] == []
+
+
+def test_detail_on_empty_blocks_is_all_empty_lists_not_an_error(monkeypatch):
+    detail = _detail(monkeypatch, [])
+    assert detail == {
+        "supporting_points": [], "steps_or_framework": [],
+        "resources_mentioned": [], "quotable_lines": [], "shortcode": "A1",
+    }
+
+
+def test_detail_returns_none_when_no_page_matches_the_shortcode(monkeypatch):
+    detail = _detail(monkeypatch, [], page=None)
+    assert detail is None
+
+
+def test_detail_survives_a_notion_block_fetch_failure_with_empty_sections(monkeypatch):
+    from app import notion_writer
+
+    class _Boom:
+        def list(self, **kwargs):
+            raise RuntimeError("notion hiccup")
+
+    class _BoomClient:
+        blocks = type("B", (), {"children": _Boom()})()
+
+    monkeypatch.setattr(notion_writer, "_client", lambda: _BoomClient())
+    monkeypatch.setattr(notion_writer, "find_page_by_shortcode", lambda sc: {"id": "pg-A1"})
+    public_api._DETAIL_CACHE.clear()
+
+    detail = public_api.load_reel_detail("A1")
+    assert detail["supporting_points"] == []
+    assert detail["resources_mentioned"] == []
+
+
+def test_detail_is_cached_and_not_refetched_within_the_ttl(monkeypatch):
+    from app import notion_writer
+
+    calls = {"n": 0}
+
+    def _list(self, block_id, start_cursor=None):
+        calls["n"] += 1
+        return {"results": [], "has_more": False}
+
+    monkeypatch.setattr(_FakeBlocksChildren, "list", _list)
+    monkeypatch.setattr(notion_writer, "_client", lambda: _FakeNotionClient([]))
+    monkeypatch.setattr(notion_writer, "find_page_by_shortcode", lambda sc: {"id": "pg-A1"})
+    public_api._DETAIL_CACHE.clear()
+
+    public_api.load_reel_detail("A1")
+    public_api.load_reel_detail("A1")
+    assert calls["n"] == 1
+
+
+def test_detail_endpoint_404s_for_a_shortcode_hidden_at_the_corpus_level(monkeypatch):
+    """Same visibility gate as everywhere else: a shortcode that /reels would
+    never show (archived status here) must 404 at the detail endpoint too,
+    not fall through to a real Notion lookup."""
+    from fastapi import HTTPException
+
+    reels = _load(monkeypatch, [_page("HIDDEN", "A real title", status="🗄 Archived")])
+    assert reels == []  # confirms the corpus-level gate actually applied
+
+    with pytest.raises(HTTPException) as exc:
+        public_api.public_reel_detail(_Req(), "HIDDEN")
+    assert exc.value.status_code == 404
+
+
+def test_detail_endpoint_returns_the_block_derived_sections_for_a_visible_reel(monkeypatch):
+    from app import notion_writer
+
+    _load(monkeypatch, [_page("A1", "A real title", topics=("claude-ai",))])
+    monkeypatch.setattr(
+        notion_writer, "_client",
+        lambda: _FakeNotionClient([
+            {"type": "quote", "quote": {"rich_text": [{"plain_text": "Ship fast."}]}},
+        ]),
+    )
+    monkeypatch.setattr(notion_writer, "find_page_by_shortcode", lambda sc: {"id": "pg-A1"})
+    public_api._DETAIL_CACHE.clear()
+
+    result = public_api.public_reel_detail(_Req(), "A1")
+    assert result["quotable_lines"] == ["Ship fast."]
+    assert result["shortcode"] == "A1"
+
+
+def test_detail_response_never_carries_the_private_gate_resource(monkeypatch):
+    """resources_mentioned is built ENTIRELY from block content; nothing in
+    _reel_body_detail ever reads the "Gate resource" page property, so even a
+    reel with a real attached gate resource cannot leak it through here."""
+    blocks = [
+        {"type": "bookmark", "bookmark": {"url": "https://openly-named-tool.example/docs"}},
+    ]
+    detail = _detail(monkeypatch, blocks)
+    blob = repr(detail)
+    assert "private.example" not in blob  # the fixture's own gate_resource URL

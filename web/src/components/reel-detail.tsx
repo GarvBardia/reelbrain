@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ExternalLink, X } from "lucide-react";
 
-import type { Reel } from "@/lib/types";
+import { getReelDetail } from "@/lib/api";
+import type { Reel, ReelDetail as ReelDetailData } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /**
@@ -12,9 +13,26 @@ import { cn } from "@/lib/utils";
  * route on purpose: this is a static export (output: "export"), so a dynamic
  * route would need generateStaticParams to enumerate every shortcode at BUILD
  * time -- and the data is live, so any reel captured after the last deploy
- * would 404. The list endpoint already returns every public field, so the
- * modal shows the reel that's already in hand with no extra fetch and no new
- * backend endpoint.
+ * would 404.
+ *
+ * Two data sources now, not one (2026-09-04). `reel` is whatever's already in
+ * hand from the list fetch -- title, summary, suggested action, topics, named
+ * entities, all shown with no extra request, as before. Supporting points,
+ * steps/framework and resources mentioned are DIFFERENT in kind: they live in
+ * the reel's Notion page BODY, a separate fetch from the page properties
+ * `reel` is built from (see app/public_api.py's load_reel_detail for why).
+ * So this component now fetches GET /reels/{shortcode}/detail itself, lazily,
+ * only once a visitor actually opens a reel -- the grid/list behind it pays
+ * no extra cost for reels nobody expands.
+ *
+ * Quotable lines are deliberately NOT rendered here despite being returned by
+ * the endpoint (and despite being one of the Obsidian vault's own sections):
+ * they are short but genuinely VERBATIM excerpts of a creator's own spoken
+ * words, not the paraphrased-and-cleaned main_point/supporting_points/steps
+ * the rest of this view shows. Reproducing another creator's exact words at
+ * scale across every reel's public detail page is a different kind of thing
+ * than summarizing them, so this stays out of the UI pending an explicit
+ * decision to show it.
  *
  * Everything the card truncates for the grid, this shows in full: the whole
  * title, the summary, the suggested action, and -- unlike the card -- every
@@ -23,6 +41,32 @@ import { cn } from "@/lib/utils";
  */
 export function ReelDetail({ reel, onClose }: { reel: Reel | null; onClose: () => void }) {
   const closeRef = useRef<HTMLButtonElement>(null);
+
+  // Fetched fresh per reel, reset to null (not a stale previous reel's data)
+  // the instant the shortcode changes, and swallowed silently on failure --
+  // this is genuinely optional enrichment of an otherwise-complete modal, so
+  // a Notion hiccup here should never surface an error UI over content that
+  // is already fully usable without it.
+  const [detail, setDetail] = useState<ReelDetailData | null>(null);
+  useEffect(() => {
+    setDetail(null);
+    if (!reel) return;
+    let cancelled = false;
+    getReelDetail(reel.shortcode)
+      .then((result) => {
+        if (!cancelled) setDetail(result);
+      })
+      .catch(() => {
+        // Silent on purpose -- see the component docstring.
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Keyed on the shortcode itself, not the `reel` object -- an equivalent
+    // reel re-derived from a fresh list fetch (new object, same shortcode)
+    // should not re-trigger this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reel?.shortcode]);
 
   // Escape to close, and lock the background from scrolling while open. Both
   // are what makes a hand-rolled modal feel like a real one rather than a
@@ -155,6 +199,72 @@ export function ReelDetail({ reel, onClose }: { reel: Reel | null; onClose: () =
                   </p>
                   <p className="mt-1 leading-snug text-slate-700">{reel.suggested_action}</p>
                 </div>
+              )}
+
+              {/* Block-derived sections (2026-09-04) -- see the component
+                  docstring. Each one is its own `length > 0` guard, not a
+                  single "detail && ..." wrapper, because these are genuinely
+                  independent: a reel can have steps but no listed resources,
+                  or resources but no numbered steps, and each combination is
+                  common in the real corpus. No loading indicator while
+                  `detail` is still null -- the modal is already fully usable
+                  on the fields it opened with, and these sections simply
+                  appear a moment later rather than blocking anything. */}
+              {detail && detail.supporting_points.length > 0 && (
+                <Section label="Supporting points">
+                  <ul className="w-full space-y-1.5">
+                    {detail.supporting_points.map((point, i) => (
+                      <li key={i} className="flex gap-2 text-sm leading-snug text-slate-700">
+                        <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-slate-300" />
+                        {point}
+                      </li>
+                    ))}
+                  </ul>
+                </Section>
+              )}
+
+              {detail && detail.steps_or_framework.length > 0 && (
+                <Section label="Steps">
+                  <ol className="w-full space-y-1.5">
+                    {detail.steps_or_framework.map((step, i) => (
+                      <li key={i} className="flex gap-2.5 text-sm leading-snug text-slate-700">
+                        <span
+                          className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] font-medium tabular-nums"
+                          style={{ backgroundColor: `${reel.color}18`, color: reel.color }}
+                        >
+                          {i + 1}
+                        </span>
+                        {step}
+                      </li>
+                    ))}
+                  </ol>
+                </Section>
+              )}
+
+              {detail && detail.resources_mentioned.length > 0 && (
+                <Section label="Resources mentioned">
+                  {detail.resources_mentioned.map((resource, i) =>
+                    resource.url ? (
+                      <a
+                        key={i}
+                        href={resource.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-0.5 text-xs text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900"
+                      >
+                        {resource.name}
+                        <ExternalLink className="h-3 w-3 text-slate-400" />
+                      </a>
+                    ) : (
+                      <span
+                        key={i}
+                        className="rounded-md border border-slate-200 px-2 py-0.5 text-xs text-slate-600"
+                      >
+                        {resource.name}
+                      </span>
+                    ),
+                  )}
+                </Section>
               )}
 
               {reel.topics.length > 0 && (

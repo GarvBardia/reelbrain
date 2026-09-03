@@ -1,4 +1,4 @@
-import type { GraphPayload, ReelPage, ScoutItem, Stats } from "./types";
+import type { GraphPayload, ReelDetail, ReelPage, ScoutItem, Stats } from "./types";
 
 /**
  * The Render-hosted FastAPI. Baked in at BUILD TIME (see
@@ -123,4 +123,15 @@ export function getReels(params: {
   qs.set("page", String(params.page ?? 1));
   qs.set("page_size", "24");
   return getJSON<ReelPage>(`/api/public/reels?${qs}`);
+}
+
+/**
+ * Lazy, per-reel: supporting_points/steps_or_framework/resources_mentioned/
+ * quotable_lines live in the reel's Notion page BODY, a separate fetch from
+ * the properties getReels already has -- see app/public_api.py's
+ * load_reel_detail for why this couldn't just be folded into /reels. Called
+ * only when a visitor actually opens a reel's detail view.
+ */
+export function getReelDetail(shortcode: string) {
+  return getJSON<ReelDetail>(`/api/public/reels/${encodeURIComponent(shortcode)}/detail`);
 }

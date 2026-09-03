@@ -74,4 +74,27 @@ export type ReelPage = {
   total_pages: number;
 };
 
+export type ResourceMentioned = {
+  name: string;
+  type: "tool" | "book" | "site" | "person" | "course" | "other";
+  /** null for a resource named but not linked in the reel's own content. */
+  url: string | null;
+};
+
+/**
+ * The block-derived sections /reels doesn't carry -- see app/public_api.py's
+ * load_reel_detail. A separate type (not fields bolted onto Reel) because
+ * this is fetched separately too: GET /reels/{shortcode}/detail, lazily,
+ * only when a visitor opens a reel's detail view. Every array here can
+ * legitimately be empty (most reels have some but not all of these), which
+ * the UI must treat as "omit the section", not "show it empty".
+ */
+export type ReelDetail = {
+  shortcode: string;
+  supporting_points: string[];
+  steps_or_framework: string[];
+  resources_mentioned: ResourceMentioned[];
+  quotable_lines: string[];
+};
+
 export type ScoutItem = Reel & { suggested_action: string };
