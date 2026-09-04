@@ -58,7 +58,10 @@ const config: Config = {
       },
       animation: {
         spotlight: "spotlight 2.4s ease .2s 1 forwards",
-        shimmer: "shimmer 6s linear infinite",
+        // 1.6s, not 6s -- this is a loading cue, not ambient decoration; the
+        // only consumer (Skeleton) needs it to read as "actively working" at
+        // a glance, which a 6s sweep is too slow to do.
+        shimmer: "shimmer 1.6s linear infinite",
       },
     },
   },
