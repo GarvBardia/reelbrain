@@ -162,21 +162,32 @@ export default function LandingPage() {
               eyebrow-label style the stats section already uses further down
               (text-sm font-medium uppercase tracking-widest text-slate-400)
               rather than inventing a new heading treatment. */}
-          <BlurFade delay={0.12} className="mt-8 text-center">
+          {/* Plain divs, not BlurFade (2026-09-XX, reverting the entrance
+              fade this section used to have). The rest of the hero is static
+              copy with no data dependency, so its BlurFade delay is pure
+              polish; the graph is different -- it's already waiting on a
+              real network fetch (see the loading branch just below), and
+              stacking a ~0.15s-delay, 0.55s blur/fade entrance IN FRONT of
+              that wait only made the section feel like it staged in twice.
+              This heading and the graph slot beneath it are now on screen
+              from the very first frame, full stop -- whatever's actually
+              slow is the fetch, and that's signalled by the skeleton inside
+              the slot, not by the slot itself arriving late. */}
+          <div className="mt-8 text-center">
             <h2 className="text-sm font-medium uppercase tracking-widest text-slate-400">
               The live graph
             </h2>
             <p className="mt-1.5 text-sm text-slate-500">
               Every save below is a real, connected node — drag, scroll, or click a category to explore.
             </p>
-          </BlurFade>
+          </div>
 
           {/* THE CENTREPIECE. Three explicit states -- loading, failed,
               loaded -- all at the same height so the page never jumps. The
               failed branch is the fix for the graph silently vanishing: it
               used to fall through to an empty node list, which renders as a
               blank canvas indistinguishable from success. */}
-          <BlurFade delay={0.15} className="mt-4">
+          <div className="mt-4">
             {graphLoading ? (
               <Skeleton className="h-[480px] w-full rounded-[1.35rem]" />
             ) : graphError ? (
@@ -188,7 +199,7 @@ export default function LandingPage() {
             ) : (
               <KnowledgeGraph initial={graph} />
             )}
-          </BlurFade>
+          </div>
         </div>
       </section>
 

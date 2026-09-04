@@ -12,7 +12,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { GraphFallbackList } from "./graph-fallback-list";
 import { HoverExpandCategories } from "./skiper/hover-expand-categories";
-import { GlowingEffect } from "./obsidian/glowing-effect";
 
 /**
  * THE ACTUAL BUG behind every prior "the graph still looks bad" report
@@ -261,53 +260,6 @@ const LINK_COLOR = "#64748b";
  * harder to hover or click.
  */
 const NODE_RADIUS_SCALE = 0.6;
-
-/**
- * Static wireframe icosahedron (2026-09-XX), the decorative "geometric cage"
- * from the reference image ("Rubric Agentic OS"). Precomputed once (12
- * vertices at golden-ratio coordinates, projected with a fixed rotation,
- * standard icosahedron edge set -- 30 edges, each vertex degree 5) rather
- * than computed at render time: it never needs to be anything but this exact
- * static shape, so there is no reason to pay a matrix-math cost on every
- * mount for a result that's always identical. Each row is
- * [x1, y1, x2, y2, opacity] in a fixed -150..150 SVG unit space; opacity is
- * baked in per-edge from the precompute's own depth (avgZ) so edges "facing
- * the camera" read very slightly brighter, the one part of the polyhedron
- * illusion that's worth keeping from the 3D source even though the render
- * itself is flat SVG.
- */
-const WIREFRAME_EDGES: [number, number, number, number, number][] = [
-  [78.25, 13.44, 83.52, 99.58, 0.29],
-  [78.25, 13.44, 125.28, -29.73, 0.29],
-  [78.25, 13.44, 42.27, -109.64, 0.32],
-  [78.25, 13.44, -25.3, 99.58, 0.33],
-  [78.25, 13.44, -50.79, -29.73, 0.34],
-  [83.52, 99.58, 125.28, -29.73, 0.24],
-  [83.52, 99.58, -42.27, 109.64, 0.23],
-  [83.52, 99.58, 50.79, 29.73, 0.2],
-  [83.52, 99.58, -25.3, 99.58, 0.28],
-  [125.28, -29.73, 25.3, -99.58, 0.21],
-  [125.28, -29.73, 50.79, 29.73, 0.19],
-  [125.28, -29.73, 42.27, -109.64, 0.27],
-  [-42.27, 109.64, 50.79, 29.73, 0.18],
-  [-42.27, 109.64, -25.3, 99.58, 0.26],
-  [-42.27, 109.64, -78.25, -13.44, 0.18],
-  [-42.27, 109.64, -125.28, 29.73, 0.23],
-  [25.3, -99.58, 50.79, 29.73, 0.17],
-  [25.3, -99.58, 42.27, -109.64, 0.24],
-  [25.3, -99.58, -78.25, -13.44, 0.17],
-  [25.3, -99.58, -83.52, -99.58, 0.22],
-  [50.79, 29.73, -78.25, -13.44, 0.16],
-  [42.27, -109.64, -50.79, -29.73, 0.32],
-  [42.27, -109.64, -83.52, -99.58, 0.27],
-  [-25.3, 99.58, -50.79, -29.73, 0.33],
-  [-25.3, 99.58, -125.28, 29.73, 0.29],
-  [-50.79, -29.73, -83.52, -99.58, 0.3],
-  [-50.79, -29.73, -125.28, 29.73, 0.31],
-  [-78.25, -13.44, -83.52, -99.58, 0.21],
-  [-78.25, -13.44, -125.28, 29.73, 0.21],
-  [-83.52, -99.58, -125.28, 29.73, 0.26],
-];
 
 /**
  * Deterministic per-node "dust" scatter (2026-09-XX) -- the actual answer to
@@ -1043,43 +995,14 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
       }
       ctx.restore();
 
-      /**
-       * Label policy: hover-only, always -- with ~190 nodes on screen at
-       * once there is no zoom-dependent threshold that avoids either an
-       * illegible permanent pile (low zoom) or a still-crowded label field
-       * (high zoom, since reels cluster tightly by design here). A single
-       * hover-only rule is simpler and matches what the mobile list already
-       * provides as the browsable alternative.
-       */
-      if (!isHovered) return;
-
-      ctx.save();
-      // Text is drawn in GRAPH units and then scaled by globalScale, so
-      // `11 / globalScale` is what holds it at a constant 11 screen px. The
-      // old `Math.max(11, 12 / globalScale)` floor inverted that above
-      // ~1.09x zoom: once 12/globalScale fell under 11 the constant won, and
-      // rendered size (fontSize * globalScale) grew without bound -- 22px at
-      // 2x, 44px at 4x. Zooming in to read a label made it balloon.
-      // 11 -> 7 screen px (2026-09-03): 11 read as oversized against ~3px
-      // dots even before the double-render above was making it worse.
-      const fontSize = 7 / globalScale;
-      ctx.font = `400 ${fontSize}px ui-sans-serif, system-ui, sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "top";
-
-      const label = node.label;
-      const y = node.y + drawR + 6 / globalScale;
-
-      // Halo thinned (3.5 -> 2 screen px): 3.5px of stroke around an 11px
-      // glyph read as a black outline rather than as separation from the
-      // backdrop. Fill muted off near-white so a label sits quietly on the
-      // field until it is the one being hovered.
-      ctx.lineWidth = 1.5 / globalScale;
-      ctx.strokeStyle = "rgba(5,2,8,0.9)";
-      ctx.strokeText(label, node.x, y);
-      ctx.fillStyle = "rgba(226,232,240,0.72)";
-      ctx.fillText(label, node.x, y);
-      ctx.restore();
+      // No reel-level label, hover or otherwise (2026-09-XX, reverting the
+      // hover-only text this used to draw here). With ~190 dots already
+      // dense enough to read as a particle field, individual reel titles
+      // -- even hover-gated -- were dense text over dense particles, which
+      // is illegible rather than helpful; a reel's full title/summary/detail
+      // is one click away via the modal regardless. Category names are the
+      // only labels this view shows at all, via nodeLabel below, which is
+      // already gated to category-type nodes only.
     },
     [hovered, expanded],
   );
@@ -1212,32 +1135,28 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
         </pre>
       )}
 
-      {/* A thin gradient hairline border, not glass -- the frosted/translucent
-          fill this used to sit on was removed (2026-08-21). GlowingEffect is
-          an absolutely-positioned overlay that lights the border edge nearest
-          the cursor; it is inert on touch (no pointer to track), so the
-          mobile list view below loses nothing. */}
+      {/* No border/hairline/glow around the card (2026-09-XX) -- this used
+          to be a p-px gradient background (a visible light hairline) plus a
+          GlowingEffect white cursor-glow on top of that. Both removed on
+          direct request: the canvas should blend straight into the page
+          background, not sit inside a framed card. Just a soft ambient
+          shadow remains, which reads as depth rather than an edge. */}
       <div
         ref={cardRef}
         className={cn(
-          "relative rounded-[1.35rem] p-px",
-          "bg-gradient-to-br from-slate-200/80 via-slate-100 to-slate-200/80",
-          "shadow-[0_1px_2px_rgba(15,23,42,0.04),0_12px_40px_-12px_rgba(79,70,229,0.18)]",
+          "relative rounded-[1.35rem]",
+          "shadow-[0_12px_40px_-12px_rgba(79,70,229,0.18)]",
         )}
       >
-        <GlowingEffect
-          variant="white"
-          blur={14}
-          spread={44}
-          proximity={120}
-          borderWidth={2}
-          movementDuration={0.35}
-          className="rounded-[1.35rem]"
-        />
         <div
           ref={wrapRef}
           className={cn(
-            "relative w-full overflow-hidden rounded-[1.3rem]",
+            // Same radius as the outer wrapper now (was 1.3rem vs 1.35rem,
+            // deliberately mismatched to sit inset within the 1px gradient
+            // border that wrapper used to have -- with that border gone
+            // there's no offset left to compensate for, so a mismatched
+            // radius here would show as a sliver gap at each corner instead.
+            "relative w-full overflow-hidden rounded-[1.35rem]",
             // Flat near-black backdrop for the canvas view (2026-09-02) --
             // applied via inline style below, since it needs to match
             // NEBULA_BACKGROUND exactly. GraphFallbackList (the <768px view)
@@ -1253,35 +1172,9 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
           )}
           style={isNarrow ? undefined : { backgroundColor: NEBULA_BACKGROUND }}
         >
-          {/* Decorative wireframe cage (2026-09-XX) -- see WIREFRAME_EDGES'
-              comment above. A plain SVG overlay, not a Three.js/WebGL scene:
-              the shape is static, so there is nothing here a real 3D engine
-              would buy over 30 precomputed <line> elements. pointer-events
-              is off and it sits purely visually above the canvas -- clicks
-              and hovers pass straight through to the real nodes underneath,
-              and mix-blend-screen keeps it from ever reading as an opaque
-              layer over the particle field. */}
-          {!isNarrow && (
-            <svg
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-0 h-full w-full text-slate-200 mix-blend-screen"
-              viewBox="-150 -150 300 300"
-              preserveAspectRatio="xMidYMid meet"
-            >
-              {WIREFRAME_EDGES.map(([x1, y1, x2, y2, opacity], i) => (
-                <line
-                  key={i}
-                  x1={x1}
-                  y1={y1}
-                  x2={x2}
-                  y2={y2}
-                  stroke="currentColor"
-                  strokeOpacity={opacity}
-                  strokeWidth={1}
-                />
-              ))}
-            </svg>
-          )}
+          {/* The decorative wireframe icosahedron that used to sit here
+              (2026-09-XX) was removed on direct request after being tested
+              live -- the particle-cloud node styling it framed stays as-is. */}
           {isNarrow ? (
             <GraphFallbackList data={data} expanded={expanded} onExpand={focusCategory} />
           ) : !ForceGraph2D ? (
