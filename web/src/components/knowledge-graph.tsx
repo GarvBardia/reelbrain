@@ -262,6 +262,105 @@ const LINK_COLOR = "#64748b";
  */
 const NODE_RADIUS_SCALE = 0.6;
 
+/**
+ * Static wireframe icosahedron (2026-09-XX), the decorative "geometric cage"
+ * from the reference image ("Rubric Agentic OS"). Precomputed once (12
+ * vertices at golden-ratio coordinates, projected with a fixed rotation,
+ * standard icosahedron edge set -- 30 edges, each vertex degree 5) rather
+ * than computed at render time: it never needs to be anything but this exact
+ * static shape, so there is no reason to pay a matrix-math cost on every
+ * mount for a result that's always identical. Each row is
+ * [x1, y1, x2, y2, opacity] in a fixed -150..150 SVG unit space; opacity is
+ * baked in per-edge from the precompute's own depth (avgZ) so edges "facing
+ * the camera" read very slightly brighter, the one part of the polyhedron
+ * illusion that's worth keeping from the 3D source even though the render
+ * itself is flat SVG.
+ */
+const WIREFRAME_EDGES: [number, number, number, number, number][] = [
+  [78.25, 13.44, 83.52, 99.58, 0.29],
+  [78.25, 13.44, 125.28, -29.73, 0.29],
+  [78.25, 13.44, 42.27, -109.64, 0.32],
+  [78.25, 13.44, -25.3, 99.58, 0.33],
+  [78.25, 13.44, -50.79, -29.73, 0.34],
+  [83.52, 99.58, 125.28, -29.73, 0.24],
+  [83.52, 99.58, -42.27, 109.64, 0.23],
+  [83.52, 99.58, 50.79, 29.73, 0.2],
+  [83.52, 99.58, -25.3, 99.58, 0.28],
+  [125.28, -29.73, 25.3, -99.58, 0.21],
+  [125.28, -29.73, 50.79, 29.73, 0.19],
+  [125.28, -29.73, 42.27, -109.64, 0.27],
+  [-42.27, 109.64, 50.79, 29.73, 0.18],
+  [-42.27, 109.64, -25.3, 99.58, 0.26],
+  [-42.27, 109.64, -78.25, -13.44, 0.18],
+  [-42.27, 109.64, -125.28, 29.73, 0.23],
+  [25.3, -99.58, 50.79, 29.73, 0.17],
+  [25.3, -99.58, 42.27, -109.64, 0.24],
+  [25.3, -99.58, -78.25, -13.44, 0.17],
+  [25.3, -99.58, -83.52, -99.58, 0.22],
+  [50.79, 29.73, -78.25, -13.44, 0.16],
+  [42.27, -109.64, -50.79, -29.73, 0.32],
+  [42.27, -109.64, -83.52, -99.58, 0.27],
+  [-25.3, 99.58, -50.79, -29.73, 0.33],
+  [-25.3, 99.58, -125.28, 29.73, 0.29],
+  [-50.79, -29.73, -83.52, -99.58, 0.3],
+  [-50.79, -29.73, -125.28, 29.73, 0.31],
+  [-78.25, -13.44, -83.52, -99.58, 0.21],
+  [-78.25, -13.44, -125.28, 29.73, 0.21],
+  [-83.52, -99.58, -125.28, 29.73, 0.26],
+];
+
+/**
+ * Deterministic per-node "dust" scatter (2026-09-XX) -- the actual answer to
+ * the reference's dense-particle-field look with a real corpus of ~190 reels
+ * rather than the thousands a generic dashboard mockup can invent freely.
+ *
+ * These are NOT extra data points: they carry no id, no click/hover target,
+ * no entry in nodePointerAreaPaint, and are never passed to force-graph as
+ * nodes -- they are purely a paint-time embellishment drawn around each REAL
+ * reel node, seeded off that node's own id so the scatter is stable across
+ * re-renders and reheats instead of shimmering every tick (same reasoning as
+ * linkJitter above). Reusing that node's id as the seed, rather than reusing
+ * one shared RNG stream, is what keeps each node's speck cluster visually
+ * distinct instead of every node getting an identical offset pattern.
+ */
+function hashSeed(id: string): number {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  return hash || 1;
+}
+
+function mulberry32(seed: number) {
+  let a = seed;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const DUST_PER_NODE = 3;
+
+/** Returns dust specks as [dx, dy, radius, alpha] offsets from a node's own
+ *  centre, scaled by that node's own drawn radius so a big central node gets
+ *  a slightly wider, more visible scatter than a small edge node does. */
+function nodeDust(id: string, drawR: number): [number, number, number, number][] {
+  const rand = mulberry32(hashSeed(id));
+  const specks: [number, number, number, number][] = [];
+  for (let i = 0; i < DUST_PER_NODE; i++) {
+    const angle = rand() * Math.PI * 2;
+    const dist = drawR * (1.6 + rand() * 4.2);
+    specks.push([
+      Math.cos(angle) * dist,
+      Math.sin(angle) * dist,
+      0.35 + rand() * 0.55,
+      0.12 + rand() * 0.22,
+    ]);
+  }
+  return specks;
+}
+
 /** Fixed draw radius for a category anchor dot. Deliberately NOT the node's
  *  own `val` -- that is the old visible-bubble formula (4 + sqrt(count)*2,
  *  up to ~20px) and would make each anchor dwarf every reel around it.
@@ -927,6 +1026,23 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
       }
       ctx.restore();
 
+      // Non-interactive dust scatter -- see nodeDust's comment above. Drawn
+      // in the node's own colour family but at low, flat alpha and with no
+      // shadowBlur (unlike the node itself): cheap per-speck, and it's meant
+      // to read as ambient field density around the real dot, not as another
+      // thing competing for attention. Dims in step with the node it orbits
+      // so a dimmed/unfocused category doesn't leave its dust full-bright.
+      ctx.save();
+      const dustAlphaScale = dim ? 0.22 : 1;
+      for (const [dx, dy, dr, da] of nodeDust(String(node.id), drawR)) {
+        ctx.beginPath();
+        ctx.arc(node.x + dx, node.y + dy, dr, 0, 2 * Math.PI);
+        ctx.fillStyle = baseColor;
+        ctx.globalAlpha = da * dustAlphaScale;
+        ctx.fill();
+      }
+      ctx.restore();
+
       /**
        * Label policy: hover-only, always -- with ~190 nodes on screen at
        * once there is no zoom-dependent threshold that avoids either an
@@ -1137,6 +1253,35 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
           )}
           style={isNarrow ? undefined : { backgroundColor: NEBULA_BACKGROUND }}
         >
+          {/* Decorative wireframe cage (2026-09-XX) -- see WIREFRAME_EDGES'
+              comment above. A plain SVG overlay, not a Three.js/WebGL scene:
+              the shape is static, so there is nothing here a real 3D engine
+              would buy over 30 precomputed <line> elements. pointer-events
+              is off and it sits purely visually above the canvas -- clicks
+              and hovers pass straight through to the real nodes underneath,
+              and mix-blend-screen keeps it from ever reading as an opaque
+              layer over the particle field. */}
+          {!isNarrow && (
+            <svg
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 h-full w-full text-slate-200 mix-blend-screen"
+              viewBox="-150 -150 300 300"
+              preserveAspectRatio="xMidYMid meet"
+            >
+              {WIREFRAME_EDGES.map(([x1, y1, x2, y2, opacity], i) => (
+                <line
+                  key={i}
+                  x1={x1}
+                  y1={y1}
+                  x2={x2}
+                  y2={y2}
+                  stroke="currentColor"
+                  strokeOpacity={opacity}
+                  strokeWidth={1}
+                />
+              ))}
+            </svg>
+          )}
           {isNarrow ? (
             <GraphFallbackList data={data} expanded={expanded} onExpand={focusCategory} />
           ) : !ForceGraph2D ? (
