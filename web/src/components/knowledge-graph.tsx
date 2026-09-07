@@ -123,11 +123,12 @@ const COLLIDE_PADDING = 1.5;
 
 /** Reel labels stay hover-only regardless of node count -- 190 permanent
  *  labels would be the exact unreadable-stack problem the category view was
- *  built to avoid, just at a much larger scale. Category anchors draw as
- *  bare dots with no label at all (they are dust, not landmarks -- their
- *  name is still reachable via the native tooltip on hover), so the
- *  always-on threshold constants from the category-only view no longer
- *  apply. */
+ *  built to avoid, just at a much larger scale. Category anchors are the
+ *  opposite case: only ~13 of them, few enough to label ALL the time without
+ *  that problem, and (2026-09-08) they now do -- see paintNode's category
+ *  branch and ANCHOR_DOT_RADIUS. Their name is also still reachable via the
+ *  native tooltip on hover, for the count/assistive-tech reasons noted on
+ *  the nodeLabel prop. */
 
 /** Accent for the rare, deliberate per-node highlight -- value_score 5 reels
  *  (the top of the 1-5 scale, the smallest slice of the real corpus) pull
@@ -141,8 +142,10 @@ const COLLIDE_PADDING = 1.5;
 const NEBULA_ACCENT = "#fbbf24"; // warm yellow, high-value reels only
 
 /** Blends a #rrggbb hex colour toward another by `amount` (0 = original,
- *  1 = fully the target). Used for the value_score-5 accent above and for
- *  dimming a category anchor dot toward the backdrop. */
+ *  1 = fully the target). Used for the value_score-5 accent above and by
+ *  mutedHex below for every reel's base fill; category anchors used to go
+ *  through this too (desaturated toward the backdrop) but paint their own
+ *  real hue directly now -- see paintNode's category branch. */
 function mixHex(hex: string, toward: string, amount: number): string {
   const h = hex.replace("#", "");
   const t = toward.replace("#", "");
@@ -314,16 +317,24 @@ function nodeDust(id: string, drawR: number): [number, number, number, number][]
   return specks;
 }
 
-/** Fixed draw radius for a category anchor dot. Deliberately NOT the node's
- *  own `val` -- that is the old visible-bubble formula (4 + sqrt(count)*2,
- *  up to ~20px) and would make each anchor dwarf every reel around it.
- *  Anchors sit just under the smallest DRAWN reel so they read as the finest
- *  dust in the field rather than as peers of the reel nodes: smallest reel
- *  is val 2.4 (value_score 1) * 0.85 (edge coreT) * the scale above.
- *  Derived rather than hand-tuned so it tracks NODE_RADIUS_SCALE instead of
- *  silently becoming reel-sized the next time that changes. Their collide
- *  radius is tuned separately in the force effect and is unrelated to this. */
-const ANCHOR_DOT_RADIUS = 2.4 * 0.85 * NODE_RADIUS_SCALE * 0.85;
+/**
+ * Fixed draw radius for a category anchor dot -- reversed 2026-09-08 from
+ * the "dust, not landmarks" call this used to make on purpose. That was a
+ * real, deliberate choice (see the removed comment: anchors sized just
+ * UNDER the smallest reel so they'd read as the finest dust in the field),
+ * but it produced the opposite of what a landmark needs: at ~1px, dimmed to
+ * 0.35 alpha and desaturated toward the backdrop, the category anchors were
+ * consistently the LEAST visible thing on the canvas, smaller than even the
+ * smallest reel dot -- the hierarchy this view wants (categories = landmark,
+ * reels = detail) was never actually visible at default zoom, only
+ * discoverable by hovering blind or zooming in.
+ *
+ * 9px is a flat constant now, not derived from the reel-radius formula --
+ * the point is that it should read as unmistakably bigger than any reel
+ * regardless of how that formula is tuned later, not track it. For
+ * reference: the single biggest reel dot (value_score 5, dead centre) draws
+ * at roughly 4.3px (see drawR below); 9px is a little over double that. */
+const ANCHOR_DOT_RADIUS = 9;
 
 export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
   const ForceGraph2D = useForceGraph2D();
@@ -572,8 +583,12 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
   }, []);
 
   /**
-   * Category anchors still carry no click action: at ~1px they are far too
-   * small to be a reliable target, so focusing a category stays legend-only.
+   * Category anchors still carry no click action, even now that they're
+   * drawn at a real, clickable-looking size (2026-09-08) -- focusing a
+   * category stays legend-only (the strip below, or GraphFallbackList on
+   * mobile) on purpose, not because the anchor is too small a target
+   * anymore. Making the landmark bigger was a visibility fix, not an
+   * invitation to grow a second, redundant way to pin a category here.
    */
   const handleNodeClick = useCallback(
     (node: any) => {
@@ -674,16 +689,26 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
       // The hard constraint. Radius is TYPE-AWARE for the same reason charge
       // is: a category anchor's `val` is the old category-sizing formula
       // (4 + sqrt(count)*2, up to ~20px) meant for a VISIBLE bubble that
-      // needed its own clearance. Left as-is here, that large radius --
-      // still far bigger than the ~1px dot an anchor now draws as --
-      // would bulldoze the small reel dots parked around it away
-      // from their own cluster centre -- collide has no concept of
-      // how small it is drawn, it just sees a big circle. So an anchor's collide
-      // radius is capped small; only real reel nodes use their full `val`.
+      // needed its own clearance. Left as-is here, that large radius would
+      // bulldoze the small reel dots parked around it away from their own
+      // cluster centre -- collide has no concept of how big it's actually
+      // drawn, it just sees a big circle. So an anchor's collide radius is
+      // still capped well under `val`; only real reel nodes use their full
+      // `val`.
+      //
+      // 3 -> 7 (2026-09-08, alongside ANCHOR_DOT_RADIUS 1px -> 9px above):
+      // collide radius and draw radius are independent numbers, but leaving
+      // collide at 3 while the anchor now DRAWS at 9px meant the physics
+      // reserved no real space for the bigger dot -- the nearest reels would
+      // still be free to sit close enough to visually vanish under it. 7
+      // isn't trying to match the new 9px draw radius exactly (that would
+      // reopen the old "bulldozes its own cluster" problem this constant
+      // exists to avoid) -- it's just enough clearance that a landmark-sized
+      // anchor doesn't read as swallowing the reels around it.
       fg.d3Force(
         "collide",
         forceCollide()
-          .radius((n: any) => (n.type === "category" ? 3 : (n.val ?? 3) + COLLIDE_PADDING))
+          .radius((n: any) => (n.type === "category" ? 7 : (n.val ?? 3) + COLLIDE_PADDING))
           .strength(0.85)
           .iterations(2),
       );
@@ -925,12 +950,16 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
    * visually wrong, since the reference image is small glowing points of
    * light, not frosted-glass spheres.
    *
-   * Category anchor nodes take an early branch of their own: a small dim
-   * dot, no glow, no label (see ANCHOR_DOT_RADIUS). Their real job is still
-   * the membership-link clustering effect described in the force-tuning
-   * comment above; drawing them is just a way to add real points to a field
-   * that only has ~190 of them. Everything after that branch runs for reel
-   * nodes only.
+   * Category anchor nodes take an early branch of their own: a bright,
+   * glowing landmark dot with an always-on label (see ANCHOR_DOT_RADIUS and
+   * paintNode's category branch), deliberately more prominent than any reel
+   * -- reversed 2026-09-08 from an earlier "small dim dot, no label" version
+   * that made anchors the least visible thing on the canvas. Their real job
+   * is STILL the membership-link clustering effect described in the
+   * force-tuning comment above (drawing them prominently doesn't change
+   * what the physics does); it's just that "prominent" is now also the
+   * right visual, not only a side effect of adding real points to a sparse
+   * field. Everything after that branch runs for reel nodes only.
    *
    * Colour: each reel is painted in its OWN category's hue -- no blending
    * toward a shared 3-hue nebula palette (removed 2026-09-06, Section C1;
@@ -956,26 +985,72 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
    */
   const paintNode = useCallback(
     (node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
-      // Category anchors: drawn (2026-09-XX), but deliberately faint and
-      // small rather than at their formula-derived `val` (which is sized for
-      // the old visible-bubble view and would tower over every reel dot).
-      // They were skipped entirely before; showing them adds ~13 real points
-      // to the field at zero data cost, since the simulation already
-      // positions them at the centre of each category's own reel cluster.
+      // Category anchors: drawn as real LANDMARKS now (2026-09-08), a direct
+      // reversal of the "dust, not landmarks" treatment this used to have --
+      // that made anchors the single least-visible thing on the canvas
+      // (smaller than the smallest reel, dimmed to 0.35 alpha, desaturated
+      // toward the backdrop), which is the opposite of "categories should be
+      // immediately identifiable at a glance" this view is supposed to give.
       // Kept as a separate early-return branch, not folded into the reel
-      // path, because almost none of the reel treatment below (value_score
-      // accent, coreT sizing, hover label) is meaningful for an anchor.
+      // path below, because almost none of the reel treatment (value_score
+      // accent, coreT sizing, dust scatter) is meaningful for an anchor --
+      // categories get their own glow and their own always-on label instead.
       if (node.type === "category") {
         if (!Number.isFinite(node.x) || !Number.isFinite(node.y)) return;
         const dimmed = expanded !== null && node.category !== expanded;
+
         ctx.save();
-        ctx.globalAlpha = dimmed ? 0.12 : 0.35;
+        ctx.globalAlpha = dimmed ? 0.18 : 1;
+
+        // A real glow, matching the treatment reel nodes get for their own
+        // "white-hot" moments -- an anchor at rest should read as at least
+        // as bright as a hovered reel, not dimmer than an ordinary one.
+        ctx.shadowColor = node.color;
+        ctx.shadowBlur = 14 / Math.max(globalScale, 0.6);
         ctx.beginPath();
         ctx.arc(node.x, node.y, ANCHOR_DOT_RADIUS, 0, 2 * Math.PI);
-        // Desaturated toward the backdrop so an anchor reads as part of the
-        // dust rather than competing with the reels it sits among.
-        ctx.fillStyle = mixHex(node.color, NEBULA_BACKGROUND, 0.45);
+        // The category's own real hue now, not desaturated toward the
+        // backdrop -- a landmark should carry its actual colour identity,
+        // the same colour the Library/legend/strip all already use for it.
+        ctx.fillStyle = node.color;
         ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.shadowColor = "transparent";
+
+        // A near-white core disc on top, same device as a reel's "white-hot
+        // centre" -- gives the landmark a bit of dimension rather than a
+        // flat coloured coin.
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, ANCHOR_DOT_RADIUS * 0.42, 0, 2 * Math.PI);
+        ctx.fillStyle = "rgba(255,255,255,0.75)";
+        ctx.fill();
+        ctx.restore();
+
+        // The always-on label -- deliberately NOT hover-gated the way reel
+        // labels are. Reel labels stay hover-only because there are ~190 of
+        // them and drawing them all at once is the exact illegibility this
+        // graph already had to walk back once; there are only ~13
+        // categories, few enough that permanent labels read as landmark
+        // signage rather than clutter, which is the whole point of this
+        // change -- "immediately identifiable at a glance" cannot mean
+        // "after you hover it".
+        //
+        // Sized and weighted to unambiguously outrank a reel's hover label
+        // (11px/500): 15px/700 here, plus a heavier halo stroke, so a
+        // category name is legible against the particle field without
+        // competing on the reel label's own terms.
+        ctx.save();
+        ctx.globalAlpha = dimmed ? 0.35 : 1;
+        const fontSize = 15 / globalScale;
+        ctx.font = `700 ${fontSize}px ui-sans-serif, system-ui, sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        const y = node.y + ANCHOR_DOT_RADIUS + 5 / globalScale;
+        ctx.lineWidth = 3.5 / globalScale;
+        ctx.strokeStyle = "rgba(5,2,8,0.92)";
+        ctx.strokeText(node.label, node.x, y);
+        ctx.fillStyle = "#ffffff";
+        ctx.fillText(node.label, node.x, y);
         ctx.restore();
         return;
       }
@@ -1109,20 +1184,17 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
   );
 
   /**
-   * Links are deliberately near-invisible in the nebula view (2026-09-02).
-   * (Anchors themselves became faintly visible later, but at ~1px they are
-   * still far too small to make a line drawn to them read as structure.)
-   *
-   * The reference image is a field of small glowing points with NO visible
-   * line mesh -- density comes entirely from the dots. Every link in this
-   * data model touches at least one category anchor (membership links run
-   * reel<->anchor; co-occurrence links run anchor<->anchor), and anchors are
-   * barely visible, so a fully-opaque link would visibly draw a line from a
-   * bright dot out to what looks like nowhere, which reads as broken rather
-   * than as structure. So:
-   *   - co-occurrence links (anchor<->anchor) are skipped entirely -- both
-   *     endpoints are ~1px dust, so drawing them can only ever look wrong,
-   *     never informative.
+   * Links are deliberately near-invisible in the nebula view (2026-09-02),
+   * a decision this section's link-rendering behaviour keeps unchanged even
+   * after anchors themselves grew into bright, labelled landmarks
+   * (2026-09-08, see ANCHOR_DOT_RADIUS) -- that was a node-visibility fix,
+   * not a request to also start drawing a visible link mesh, and the
+   * reasoning below (a field of glowing points with no line mesh) still
+   * holds regardless of how big any one endpoint is drawn:
+   *   - co-occurrence links (anchor<->anchor) are skipped entirely -- even
+   *     with both endpoints now real landmarks, a line drawn straight
+   *     between 13 category dots would read as a webbed diagram overlaid on
+   *     the nebula, competing with it rather than supporting it.
    *   - membership links (reel<->anchor) draw only extremely faintly, and
    *     only when a category is focused/hovered-relevant, as a subtle cue
    *     that a group of nearby dots belongs together, without reading as a
@@ -1310,10 +1382,9 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
                 }}
                 onNodeClick={handleNodeClick}
                 onNodeHover={(n: any) => setHovered(n ?? null)}
-                // Native tooltip, so the categories that do not draw a
-                // permanent label are still identifiable by pointing at them
-                // (and are exposed to assistive tech, which a canvas-painted
-                // label is not).
+                // Native tooltip, exposed to assistive tech (which a
+                // canvas-painted label is not) the way the canvas label
+                // never can be.
                 // Category anchors ONLY (2026-09-03). This prop drives
                 // force-graph's HTML tooltip (.float-tooltip-kap), which is a
                 // completely separate render path from the label paintNode
@@ -1321,10 +1392,17 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
                 // hovered reel printed its name TWICE -- the canvas copy under
                 // the node with its dark halo, and the tooltip copy tracking
                 // the cursor a few px away -- which read as one ghosted,
-                // double-printed label. Anchors keep the tooltip because they
-                // draw no canvas label at all and are only ~2px wide, so it is
-                // their only means of identification. "" is falsy, so no
-                // tooltip element is shown for reels.
+                // double-printed label; reels stay "" (falsy, no tooltip
+                // element shown) for exactly that reason.
+                //
+                // Categories DO now also draw their own always-on canvas
+                // label (2026-09-08, see paintNode's category branch) -- but
+                // that label is fixed below the dot, while this tooltip
+                // follows the cursor, so the two never visually overlap the
+                // way the old reel bug did. Kept anyway, on purpose: this
+                // string adds the save COUNT the canvas label doesn't show,
+                // and remains the only accessible (non-canvas) way to reach
+                // a category's name at all.
                 nodeLabel={(n: any) =>
                   n.type === "category" ? `${n.label} — ${n.count} saves` : ""
                 }
