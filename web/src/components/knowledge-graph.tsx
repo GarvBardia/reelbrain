@@ -532,7 +532,7 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
   );
 
   /**
-   * A reel node now opens the SAME in-site detail modal a Library card does
+   * A reel now opens the SAME in-site detail modal a Library card does
    * (2026-09-XX), replacing a direct window.open to Instagram. That direct
    * navigation was a real bug, not a design choice: it took a visitor off
    * Mycelium entirely for a click that, everywhere else on the site (Library
@@ -540,31 +540,48 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
    * one click away, via the modal's own "View original on Instagram" link,
    * exactly like every other entry point.
    *
-   * Category anchors still carry no click action: at ~1px they are far too
-   * small to be a reliable target, so focusing a category stays legend-only.
+   * Pulled out to its own function (2026-09-XX) rather than living inline in
+   * handleNodeClick: the mobile fallback list (GraphFallbackList) had the
+   * EXACT SAME bug independently -- its own reel rows were a separate
+   * `<a href="instagram.com/...">`, never routed through this at all, since
+   * the canvas click fix only ever touched the canvas's onNodeClick. One
+   * fetch-and-open function, called from both the canvas and the list, is
+   * what keeps that from splitting into two behaviors again.
    */
-  const handleNodeClick = useCallback((node: any) => {
-    if (node.type !== "reel" || !node.shortcode) return;
-    // Guards against a stale response winning a race: clicking reel A then
-    // quickly clicking reel B should never have A's slower response land
-    // second and silently swap the open modal back to the wrong reel. A
-    // plain click handler (unlike an effect) has no cleanup path to cancel
-    // the in-flight request, so this ref just marks which shortcode is the
-    // MOST RECENT one asked for, and the .then() below checks it's still
-    // current before applying the result.
-    requestedShortcodeRef.current = node.shortcode;
-    getReelByShortcode(node.shortcode)
+  const openReelByShortcode = useCallback((shortcode: string) => {
+    // Guards against a stale response winning a race: opening reel A then
+    // quickly opening reel B should never have A's slower response land
+    // second and silently swap the open modal back to the wrong reel. Not
+    // an effect (this fires from plain click handlers in two different
+    // components), so there's no cleanup path to cancel the in-flight
+    // request -- this ref just marks which shortcode is the MOST RECENT one
+    // asked for, and the .then() below checks it's still current before
+    // applying the result.
+    requestedShortcodeRef.current = shortcode;
+    getReelByShortcode(shortcode)
       .then((reel) => {
         // Silent no-op on a miss (404-shaped empty result), a stale/raced
         // response, or a failure below -- consistent with every other lazy
         // fetch in this app (see ReelDetail's own /detail fetch): enrichment
         // failing should never surface as a broken click.
-        if (reel && requestedShortcodeRef.current === node.shortcode) setSelectedReel(reel);
+        if (reel && requestedShortcodeRef.current === shortcode) setSelectedReel(reel);
       })
       .catch(() => {
         // Silent on purpose, same reasoning.
       });
   }, []);
+
+  /**
+   * Category anchors still carry no click action: at ~1px they are far too
+   * small to be a reliable target, so focusing a category stays legend-only.
+   */
+  const handleNodeClick = useCallback(
+    (node: any) => {
+      if (node.type !== "reel" || !node.shortcode) return;
+      openReelByShortcode(node.shortcode);
+    },
+    [openReelByShortcode],
+  );
 
   const closeReel = useCallback(() => setSelectedReel(null), []);
 
@@ -1260,7 +1277,12 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
               (2026-09-XX) was removed on direct request after being tested
               live -- the particle-cloud node styling it framed stays as-is. */}
           {isNarrow ? (
-            <GraphFallbackList data={data} expanded={expanded} onExpand={focusCategory} />
+            <GraphFallbackList
+              data={data}
+              expanded={expanded}
+              onExpand={focusCategory}
+              onSelectReel={openReelByShortcode}
+            />
           ) : !ForceGraph2D ? (
             // Module still resolving (see useForceGraph2D above) -- same
             // spinner next/dynamic's `loading` option used to show.
@@ -1407,33 +1429,48 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
         </div>
       </div>
 
-      {/* Legend/selector, now the Skiper UI hover-expand strip (2026-09-03).
-          Same job as the flat dot-row it replaces -- name every category, show
-          its size, and let you pin one -- but the colour swatch is the tile
-          itself, so hovering along the strip reads as browsing rather than as
-          scanning a key. Fed from `data.categories`, the exact array the
-          canvas already uses, so there is no second request. */}
-      <HoverExpandCategories
-        className="mt-5"
-        categories={data.categories}
-        selected={expanded}
-        onSelect={focusCategoryAndReveal}
-      />
+      {/* Legend/selector, now the Skiper UI hover-expand strip (2026-09-03) --
+          desktop only (2026-09-XX). This is a HOVER-driven browsing strip
+          (tiles at rest are bare colour swatches; the label/count only
+          appears on the active tile), which never had a real touch
+          equivalent to begin with -- a mobile audit found it overflowing the
+          viewport with no visible scroll affordance, and its own "View in
+          Library" action cut off mid-word at the edge. It's also flatly
+          redundant on mobile: GraphFallbackList (isNarrow's own view, right
+          above where this sits) already does this exact job -- name every
+          category, show its size, let you drill in -- as a real readable
+          list with full-width tap targets, which is strictly better on a
+          touch screen than color swatches you have to tap blindly to
+          identify. So below GRAPH_MIN_WIDTH this doesn't render at all,
+          rather than trying to retrofit hover-only tiles for touch; the
+          license attribution goes with it, since there is nothing to
+          attribute when the component itself isn't shown. */}
+      {!isNarrow && (
+        <>
+          <HoverExpandCategories
+            className="mt-5"
+            categories={data.categories}
+            selected={expanded}
+            onSelect={focusCategoryAndReveal}
+          />
 
-      {/* Attribution is a condition of Skiper UI's free licence ("Attribution
-          to Skiper UI is required when using the free version"). No format is
-          specified, so it sits here as a quiet footer line. */}
-      <p className="mt-2 text-[11px] text-slate-400">
-        Category strip by{" "}
-        <a
-          href="https://skiper-ui.com"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="underline decoration-slate-300 underline-offset-2 hover:text-slate-600"
-        >
-          Skiper UI
-        </a>
-      </p>
+          {/* Attribution is a condition of Skiper UI's free licence
+              ("Attribution to Skiper UI is required when using the free
+              version"). No format is specified, so it sits here as a quiet
+              footer line. */}
+          <p className="mt-2 text-[11px] text-slate-400">
+            Category strip by{" "}
+            <a
+              href="https://skiper-ui.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline decoration-slate-300 underline-offset-2 hover:text-slate-600"
+            >
+              Skiper UI
+            </a>
+          </p>
+        </>
+      )}
 
       {/* Same component the Library page renders for its own cards -- see
           handleNodeClick above for why a reel click opens this instead of

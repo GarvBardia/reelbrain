@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, ChevronRight, ExternalLink } from "lucide-react";
+import { ArrowLeft, ChevronRight } from "lucide-react";
 
 import type { GraphPayload } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -19,15 +19,26 @@ import { Button } from "@/components/ui/button";
  * `data` already contains everything; drilling into one category on mobile is
  * just filtering what's already in hand, same as the desktop view dimming
  * everything outside the focused category instead of re-fetching.
+ *
+ * `onSelectReel` (2026-09-XX): a tapped reel row used to be a bare
+ * `<a href="instagram.com/...">`, a straight-to-Instagram link this list
+ * never shared with the canvas view. The canvas got fixed to open the
+ * in-site ReelDetail modal instead and this list quietly kept the old
+ * behaviour, because nothing about "fix the canvas's onNodeClick" touches a
+ * completely separate component -- same bug, just not caught in the same
+ * pass. `onSelectReel` is KnowledgeGraph's own openReelByShortcode, passed
+ * down so both views share one fetch-and-open path rather than two.
  */
 export function GraphFallbackList({
   data,
   expanded,
   onExpand,
+  onSelectReel,
 }: {
   data: GraphPayload;
   expanded: string | null;
   onExpand: (slug: string | null) => void;
+  onSelectReel: (shortcode: string) => void;
 }) {
   // Filtered by category, not just by type=="reel" -- with `data` now holding
   // every reel across every category (expand="all"), the unfiltered set used
@@ -52,19 +63,19 @@ export function GraphFallbackList({
         <ul className="divide-y">
           {reelNodes.map((n) => (
             <li key={n.id}>
-              <a
-                href={`https://www.instagram.com/reel/${n.shortcode}/`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-start gap-3 py-3 active:bg-slate-50"
+              <button
+                type="button"
+                disabled={!n.shortcode}
+                onClick={() => n.shortcode && onSelectReel(n.shortcode)}
+                className="flex w-full items-start gap-3 py-3 text-left active:bg-slate-50"
               >
                 <span
                   className="mt-1.5 h-2 w-2 shrink-0 rounded-full"
                   style={{ backgroundColor: n.color }}
                 />
                 <span className="flex-1 text-sm leading-snug text-slate-700">{n.label}</span>
-                <ExternalLink className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-300" />
-              </a>
+                <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-300" />
+              </button>
             </li>
           ))}
         </ul>
