@@ -737,6 +737,36 @@ def test_detail_endpoint_returns_the_block_derived_sections_for_a_visible_reel(m
     assert result["shortcode"] == "A1"
 
 
+def test_reels_shortcode_filter_returns_exactly_that_one_reel(monkeypatch):
+    """The exact-match filter the graph's click-through relies on (see
+    public_reels' shortcode param docstring) -- a real Reel record for a
+    shortcode the graph only ever hands the frontend a thin node for."""
+    _load(monkeypatch, [
+        _page("A1", "First reel"),
+        _page("B2", "Second reel"),
+    ])
+
+    result = public_api.public_reels(
+        _Req(), q=None, category=None, topic=None, shortcode="B2",
+        min_value=1, page=1, page_size=24,
+    )
+    assert [r["shortcode"] for r in result["items"]] == ["B2"]
+    assert result["items"][0]["title"] == "Second reel"
+
+
+def test_reels_shortcode_filter_empty_for_unknown_shortcode(monkeypatch):
+    """No match is an empty list, not an error -- the frontend treats this the
+    same as any other API hiccup: silently skip opening the modal."""
+    _load(monkeypatch, [_page("A1", "First reel")])
+
+    result = public_api.public_reels(
+        _Req(), q=None, category=None, topic=None, shortcode="NOPE",
+        min_value=1, page=1, page_size=24,
+    )
+    assert result["items"] == []
+    assert result["total"] == 0
+
+
 def test_detail_response_never_carries_the_private_gate_resource(monkeypatch):
     """resources_mentioned is built ENTIRELY from block content; nothing in
     _reel_body_detail ever reads the "Gate resource" page property, so even a

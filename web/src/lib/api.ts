@@ -126,6 +126,25 @@ export function getReels(params: {
 }
 
 /**
+ * The graph's click-through to the SAME detail modal the Library page uses
+ * (2026-09-XX). getGraph only ever returns a thin node shape (label, colour,
+ * shortcode -- see app/public_api.py's build_graph); ReelDetail needs the
+ * full Reel record the Library page already has in hand from its own
+ * getReels call. Rather than have the landing page prefetch every reel's
+ * full data just so an occasional graph click has it ready (real cost paid
+ * by every visitor for a feature most won't use), this fetches ONE reel,
+ * lazily, only when a graph node is actually clicked -- the same "pay only
+ * for what's opened" shape as getReelDetail below. Reuses the existing
+ * /reels list endpoint with an exact-match filter rather than a new
+ * single-reel route (see public_reels' shortcode param).
+ */
+export function getReelByShortcode(shortcode: string) {
+  return getJSON<ReelPage>(
+    `/api/public/reels?shortcode=${encodeURIComponent(shortcode)}&page_size=1`,
+  ).then((page) => page.items[0] ?? null);
+}
+
+/**
  * Lazy, per-reel: supporting_points/steps_or_framework/resources_mentioned/
  * quotable_lines live in the reel's Notion page BODY, a separate fetch from
  * the properties getReels already has -- see app/public_api.py's

@@ -5,13 +5,14 @@ import type { ComponentType } from "react";
 import { forceCollide, forceX, forceY } from "d3-force";
 import { ArrowLeft, Loader2, LocateFixed } from "lucide-react";
 
-import { EMPTY_GRAPH } from "@/lib/api";
-import type { GraphNode, GraphPayload } from "@/lib/types";
+import { EMPTY_GRAPH, getReelByShortcode } from "@/lib/api";
+import type { GraphNode, GraphPayload, Reel } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { GraphFallbackList } from "./graph-fallback-list";
 import { HoverExpandCategories } from "./skiper/hover-expand-categories";
+import { ReelDetail } from "./reel-detail";
 
 /**
  * THE ACTUAL BUG behind every prior "the graph still looks bad" report
@@ -334,6 +335,24 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [hovered, setHovered] = useState<GraphNode | null>(null);
 
+  /**
+   * The reel detail modal, opened from a graph click (2026-09-XX). Owned
+   * here rather than lifted to the parent page for the same reason
+   * LibraryClient owns its own `selected` state: this is this component's
+   * own interaction, and nothing outside the graph needs to know a reel is
+   * open. Unlike the Library page, there's no full Reel object already in
+   * hand to show synchronously -- getGraph's nodes are the thin
+   * {label, colour, shortcode} shape (see build_graph), not a full Reel --
+   * so this fetches ONE reel lazily on click via getReelByShortcode, the
+   * same "pay only for what's opened" shape as ReelDetail's own /detail
+   * fetch. `reelDetail` reuses the exact same ReelDetail component the
+   * Library page renders -- no second modal implementation.
+   */
+  const [selectedReel, setSelectedReel] = useState<Reel | null>(null);
+  /** Most recently clicked reel's shortcode -- see handleNodeClick's own
+   *  comment on why this exists (a race guard, not caching). */
+  const requestedShortcodeRef = useRef<string | null>(null);
+
   const wrapRef = useRef<HTMLDivElement>(null);
   /** The bordered card the canvas sits in -- scroll target for strip clicks. */
   const cardRef = useRef<HTMLDivElement>(null);
@@ -512,14 +531,42 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
     [focusCategory],
   );
 
+  /**
+   * A reel node now opens the SAME in-site detail modal a Library card does
+   * (2026-09-XX), replacing a direct window.open to Instagram. That direct
+   * navigation was a real bug, not a design choice: it took a visitor off
+   * Mycelium entirely for a click that, everywhere else on the site (Library
+   * cards, the Scout queue), opens ReelDetail instead -- Instagram is still
+   * one click away, via the modal's own "View original on Instagram" link,
+   * exactly like every other entry point.
+   *
+   * Category anchors still carry no click action: at ~1px they are far too
+   * small to be a reliable target, so focusing a category stays legend-only.
+   */
   const handleNodeClick = useCallback((node: any) => {
-    // Category anchors are drawn (faintly) but carry no click action: at
-    // ~1px they are far too small to be a reliable target, so focusing a
-    // category stays legend-only. A reel node still opens its source post.
-    if (node.type === "reel" && node.shortcode) {
-      window.open(`https://www.instagram.com/reel/${node.shortcode}/`, "_blank", "noopener");
-    }
+    if (node.type !== "reel" || !node.shortcode) return;
+    // Guards against a stale response winning a race: clicking reel A then
+    // quickly clicking reel B should never have A's slower response land
+    // second and silently swap the open modal back to the wrong reel. A
+    // plain click handler (unlike an effect) has no cleanup path to cancel
+    // the in-flight request, so this ref just marks which shortcode is the
+    // MOST RECENT one asked for, and the .then() below checks it's still
+    // current before applying the result.
+    requestedShortcodeRef.current = node.shortcode;
+    getReelByShortcode(node.shortcode)
+      .then((reel) => {
+        // Silent no-op on a miss (404-shaped empty result), a stale/raced
+        // response, or a failure below -- consistent with every other lazy
+        // fetch in this app (see ReelDetail's own /detail fetch): enrichment
+        // failing should never surface as a broken click.
+        if (reel && requestedShortcodeRef.current === node.shortcode) setSelectedReel(reel);
+      })
+      .catch(() => {
+        // Silent on purpose, same reasoning.
+      });
   }, []);
+
+  const closeReel = useCallback(() => setSelectedReel(null), []);
 
   /**
    * Force tuning for the dense nebula view (2026-09-02), retuned from the
@@ -995,14 +1042,51 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
       }
       ctx.restore();
 
-      // No reel-level label, hover or otherwise (2026-09-XX, reverting the
-      // hover-only text this used to draw here). With ~190 dots already
-      // dense enough to read as a particle field, individual reel titles
-      // -- even hover-gated -- were dense text over dense particles, which
-      // is illegible rather than helpful; a reel's full title/summary/detail
-      // is one click away via the modal regardless. Category names are the
-      // only labels this view shows at all, via nodeLabel below, which is
-      // already gated to category-type nodes only.
+      /**
+       * Hover-only reel label (restored 2026-09-XX after a prior round
+       * removed it entirely). That removal traded one problem for another:
+       * ~190 ALWAYS-drawn titles was genuinely illegible dense text over a
+       * dense particle field, but going all the way to zero reel-level
+       * context left the graph too sparse to browse by -- confirmed by
+       * feedback, not assumed. The fix is the gate this already had, not a
+       * new one: only the ONE currently-hovered dot ever draws its label,
+       * so density at rest is unaffected and only a deliberate point of
+       * interest gets text.
+       *
+       * The text itself is node.label -- the backend's own _short_label
+       * (app/public_api.py), which is ALREADY a short, word-boundary-
+       * truncated snippet (plain_summary's first sentence, falling back to
+       * title, capped and ellipsised) built specifically to "fit next to a
+       * dot". Reusing it instead of re-truncating client-side keeps this in
+       * one place rather than two different truncation rules that could
+       * drift apart.
+       */
+      if (!isHovered) return;
+
+      ctx.save();
+      // Text is drawn in GRAPH units and then scaled by globalScale, so
+      // `11 / globalScale` is what holds it at a constant 11 screen px --
+      // NOT `Math.max(11, 12 / globalScale)`, which inverts above ~1.09x
+      // zoom (the constant wins once 12/globalScale falls under it, so
+      // rendered size keeps growing with zoom instead of holding steady).
+      const fontSize = 11 / globalScale;
+      ctx.font = `500 ${fontSize}px ui-sans-serif, system-ui, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+
+      const label = node.label;
+      const y = node.y + drawR + 6 / globalScale;
+
+      // A dark halo, not a background pill -- reads as separation from the
+      // near-black backdrop without drawing another shape competing with
+      // the dots themselves. Fill near-white so it's legible against
+      // NEBULA_BACKGROUND regardless of which category's colour it sits on.
+      ctx.lineWidth = 3 / globalScale;
+      ctx.strokeStyle = "rgba(5,2,8,0.9)";
+      ctx.strokeText(label, node.x, y);
+      ctx.fillStyle = "rgba(241,245,249,0.95)";
+      ctx.fillText(label, node.x, y);
+      ctx.restore();
     },
     [hovered, expanded],
   );
@@ -1350,6 +1434,11 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
           Skiper UI
         </a>
       </p>
+
+      {/* Same component the Library page renders for its own cards -- see
+          handleNodeClick above for why a reel click opens this instead of
+          Instagram directly. */}
+      <ReelDetail reel={selectedReel} onClose={closeReel} />
     </div>
   );
 }

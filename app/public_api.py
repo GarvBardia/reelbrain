@@ -692,6 +692,19 @@ def public_reels(
     q: Optional[str] = Query(None, description="free-text search over title/summary/topics"),
     category: Optional[str] = Query(None),
     topic: Optional[str] = Query(None),
+    # Exact-match a single reel (2026-09-XX), for the graph's click-through:
+    # the graph endpoint only ever returns a THIN node shape (label, colour,
+    # shortcode -- see build_graph), not the full Reel record ReelDetail
+    # needs, and there was no other way to go from "a shortcode I have" to
+    # "the full reel" without either shipping every reel's full data down
+    # with the graph payload (bloats the one response every landing-page
+    # visitor pays for, whether they click a node or not) or adding a
+    # redundant single-reel endpoint that duplicates this one's filtering.
+    # An exact-match filter on the existing list endpoint reuses
+    # load_public_reels()'s already-cached corpus and returns the normal
+    # {items, total, ...} shape with (at most) one item -- no new endpoint,
+    # no new response shape for callers to learn.
+    shortcode: Optional[str] = Query(None, description="exact-match one reel by shortcode"),
     min_value: int = Query(1, ge=1, le=5),
     page: int = Query(1, ge=1),
     page_size: int = Query(24, ge=1, le=100),
@@ -699,6 +712,8 @@ def public_reels(
     check_public_rate_limit(request)
     reels = load_public_reels()
 
+    if shortcode:
+        reels = [r for r in reels if r["shortcode"] == shortcode]
     if category:
         reels = [r for r in reels if r["category"] == category]
     if topic:
