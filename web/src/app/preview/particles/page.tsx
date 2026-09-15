@@ -63,6 +63,19 @@ const VARIANTS: { value: ParticleHeroVariant; label: string }[] = [
   { value: "galaxy", label: "Galaxy Nebula" },
 ];
 
+/**
+ * Debug dolly progress, held in a module-level box rather than React
+ * state ON PURPOSE: the sphere reads it once per animation frame, and
+ * routing a 60Hz slider through setState would re-render the page (and
+ * the graph below it) on every pixel of slider drag for no benefit. The
+ * readout span is updated imperatively for the same reason. This whole
+ * block is Stage 2 scaffolding -- scroll replaces it as the progress
+ * source in Stage 3, and it can be deleted once the scroll path is
+ * trusted.
+ */
+const debugProgress = { value: 0 };
+const readDebugProgress = () => debugProgress.value;
+
 export default function ParticlePreviewPage() {
   const [variant, setVariant] = useState<ParticleHeroVariant>("sun");
 
@@ -101,18 +114,44 @@ export default function ParticlePreviewPage() {
       {/* White space above, clearing the fixed toggle bar. */}
       <div className="pt-24" />
 
-      {/* ---------- STAGE 1: white-background scroll sphere ----------
+      {/* ---------- STAGES 1-2: white-background scroll sphere ----------
           The new pink/purple/blue sphere on the page's own white, with no
           dark card around it -- this is the one the scroll sequence will
           drive. Full-bleed white, no rounded container, because the whole
-          point is that it sits ON the page rather than in a panel. */}
+          point is that it sits ON the page rather than in a panel.
+
+          The slider drives the SAME normalised progress value scroll will
+          drive in Stage 3, which is the point of building the dolly
+          scroll-agnostic: the camera move can be verified end to end here
+          without any scroll machinery existing yet. */}
       <section className="mx-auto max-w-6xl px-6">
         <p className="mb-3 text-xs font-medium uppercase tracking-widest text-slate-400">
-          Scroll sphere · white background
+          Scroll sphere · white background · debug dolly
         </p>
         <div className="h-[560px] w-full">
-          <ScrollHeroSphere />
+          <ScrollHeroSphere progressSource={readDebugProgress} />
         </div>
+        <label className="mt-4 flex items-center gap-3 text-xs text-slate-500">
+          <span className="w-28 shrink-0 font-medium uppercase tracking-widest">
+            Dolly progress
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.001}
+            defaultValue={0}
+            onChange={(e) => {
+              debugProgress.value = Number(e.target.value);
+              const el = document.getElementById("dolly-readout");
+              if (el) el.textContent = debugProgress.value.toFixed(2);
+            }}
+            className="h-1 w-full max-w-md cursor-pointer accent-fuchsia-600"
+          />
+          <span id="dolly-readout" className="w-10 tabular-nums">
+            0.00
+          </span>
+        </label>
       </section>
 
       <div className="pt-24" />

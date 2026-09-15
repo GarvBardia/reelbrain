@@ -53,8 +53,63 @@ export type ScrollHeroSphereProps = {
   particleCount?: number;
   /** Radians per second of ambient Y rotation at rest. */
   rotationSpeed?: number;
+  /**
+   * Normalised 0..1 dolly progress, read as a FUNCTION on every animation
+   * frame rather than passed as a value prop.
+   *
+   * This is the key interface decision of the whole sequence. A `progress:
+   * number` prop would re-render this component on every scroll event --
+   * i.e. tear down nothing but still re-run React reconciliation 60x/sec
+   * against a component whose entire payload is an imperative WebGL scene
+   * -- and would also force the scene's useEffect to either re-run or
+   * carry progress in a ref anyway. Reading a getter inside the existing
+   * RAF loop keeps the scroll->render path entirely outside React: zero
+   * re-renders, one source of truth, and it works identically whether the
+   * caller backs it with a plain ref (the Stage 2 debug slider) or a
+   * framer-motion MotionValue (the Stage 3 scroll scrub).
+   *
+   * Deliberately kept scroll-AGNOSTIC: this component knows nothing about
+   * scrolling, pinning, or ScrollTrigger. It knows a number between 0 and
+   * 1. That's what makes it independently testable with a slider.
+   */
+  progressSource?: () => number;
   className?: string;
 };
+
+/** Camera z at progress 0 (whole sphere in frame) and at progress 1
+ *  (camera deep inside the cloud, particles streaming past the edges of
+ *  frame). END_Z sits inside the 2.2-unit envelope on purpose -- that IS
+ *  the "flying into it" moment. Anything the camera passes within the
+ *  0.1 near plane is clipped, which is correct: those particles have gone
+ *  behind the viewer. */
+const START_Z = 4.4;
+/**
+ * 1.15, not the 0.25 first tried. At 0.25 the camera ends up sitting
+ * essentially ON the dense core, and core particles a quarter-unit away
+ * subtend so much of the frame that their icosahedron facets become
+ * visible -- the end of the dolly rendered as a flat wall of magenta
+ * hexagons, which reads as a broken shader rather than as flying through
+ * a particle field. Verified on a screenshot at progress 1.0, not
+ * predicted. 1.15 puts the camera inside the outer cloud with the core
+ * still ahead of it, which is the "in among the particles" look wanted,
+ * while keeping every particle far enough away to stay a point.
+ *
+ * Stage 4's outward rush is the other half of this: by the time progress
+ * approaches 1 the particles are also moving AWAY from the centre, so the
+ * core has thinned out by the time the camera arrives. The two are tuned
+ * together -- pulling END_Z back further than this makes the rush-past
+ * read as distant, pushing it closer re-introduces the facet wall.
+ */
+const END_Z = 1.15;
+
+/**
+ * Exponential damping factor, per second. Higher = snappier, lower =
+ * floatier. Applied as 1 - exp(-k*dt) rather than a fixed per-frame lerp
+ * alpha so the smoothing is FRAME-RATE INDEPENDENT -- a fixed alpha makes
+ * the dolly visibly faster on a 144Hz display than on a 60Hz one, which is
+ * the kind of bug that only shows up on someone else's machine.
+ */
+const DAMPING_PER_SECOND = 6.5;
 
 /** Page-background white, matching globals.css's real --background:
  *  0 0% 100%. The scene clears to this so the canvas is seamless against
@@ -219,8 +274,17 @@ function buildInstances(
   particles: Particle[],
   radius: number,
   opacity: number,
+  detail = 0,
 ): { mesh: THREE.InstancedMesh; geometry: THREE.IcosahedronGeometry; material: THREE.MeshBasicMaterial } {
-  const geometry = new THREE.IcosahedronGeometry(radius, 0);
+  // `detail` matters only at the END of the dolly. At rest every particle
+  // is a sub-pixel dot and a 12-vertex icosahedron is plenty; once the
+  // camera is inside the cloud the nearest particles fill real screen
+  // area and a detail-0 solid renders as a visibly HEXAGONAL blob, which
+  // reads as a broken shader. Caught on a screenshot at progress 1.0.
+  // Detail 1 (42 verts) is enough to read as round at that distance --
+  // and is applied only to the core layer, since the halo layer is a
+  // blurred 13%-opacity tint whose silhouette nobody can resolve.
+  const geometry = new THREE.IcosahedronGeometry(radius, detail);
   const material = new THREE.MeshBasicMaterial({
     toneMapped: false,
     transparent: true,
@@ -243,9 +307,16 @@ function buildInstances(
 export function ScrollHeroSphere({
   particleCount = 11000,
   rotationSpeed = 0.05,
+  progressSource,
   className,
 }: ScrollHeroSphereProps) {
   const mountRef = useRef<HTMLDivElement>(null);
+
+  // Held in a ref so the scene effect never re-runs when the caller passes
+  // a new closure identity -- the effect below reads .current at frame
+  // time, so a changed getter is picked up without tearing down WebGL.
+  const progressSourceRef = useRef(progressSource);
+  progressSourceRef.current = progressSource;
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -281,7 +352,7 @@ export function ScrollHeroSphere({
     // see the module docstring. A semi-transparent saturated colour over
     // white lightens toward a tint, which is exactly how a halo reads on a
     // light page.
-    const core = buildInstances(particles, 0.035, 1);
+    const core = buildInstances(particles, 0.035, 1, 1);
     const halo = buildInstances(particles, 0.09, 0.13);
 
     const subject = new THREE.Group();
@@ -315,10 +386,24 @@ export function ScrollHeroSphere({
     };
 
     const clock = new THREE.Clock();
+    // Damped progress, lagging the raw input. Never assign the target
+    // directly -- raw scroll input is jittery (trackpad momentum, wheel
+    // steps, scrollbar drags) and a camera that tracks it 1:1 reads as
+    // cheap and twitchy rather than as a dolly move.
+    let damped = 0;
+
     const tick = () => {
       frame = requestAnimationFrame(tick);
       if (!onScreen()) return;
-      subject.rotation.y += rotationSpeed * clock.getDelta();
+      const dt = Math.min(clock.getDelta(), 0.1); // clamp: a backgrounded tab returns a huge first delta
+
+      const raw = progressSourceRef.current?.() ?? 0;
+      const target = Math.min(1, Math.max(0, raw));
+      damped += (target - damped) * (1 - Math.exp(-DAMPING_PER_SECOND * dt));
+
+      camera.position.z = START_Z + (END_Z - START_Z) * damped;
+
+      subject.rotation.y += rotationSpeed * dt;
       composer.render();
     };
     frame = requestAnimationFrame(tick);
