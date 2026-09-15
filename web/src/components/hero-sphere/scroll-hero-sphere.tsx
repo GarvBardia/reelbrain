@@ -425,7 +425,20 @@ export function ScrollHeroSphere({
       const target = Math.min(1, Math.max(0, raw));
       damped += (target - damped) * (1 - Math.exp(-DAMPING_PER_SECOND * dt));
 
-      camera.position.z = START_Z + (END_Z - START_Z) * damped;
+      // Ease-IN on the dolly: slow to leave, accelerating into the rush.
+      // pow(p, 1.7) means at half-scrolled the camera has only covered
+      // ~31% of its travel, so the last third of the scroll covers the
+      // most ground -- which is what makes the end read as "rushing
+      // through" rather than as a constant-speed push.
+      //
+      // Applied to the CAMERA ONLY, deliberately. The rush/fade below and
+      // the graph's fade in the orchestrator both stay on raw linear
+      // progress, because those two have to stay locked to each other --
+      // easing the particle fade but not the graph's (or vice versa)
+      // would pull apart the one moment the whole sequence depends on
+      // being simultaneous.
+      const eased = Math.pow(damped, 1.7);
+      camera.position.z = START_Z + (END_Z - START_Z) * eased;
 
       // Rush + dissolve. Zero over [0, RUSH_START], then 0..1 over the
       // handoff window, so nothing about the resting sphere changes until
