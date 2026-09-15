@@ -47,14 +47,15 @@ const ParticleHeroBackground = dynamic(
 );
 
 /**
- * The scroll-sequence sphere (2026-09-17) -- a SEPARATE component from the
- * Sun/Galaxy one above, deliberately: see its own module docstring for why
- * the existing, verified particle-hero-background.tsx was extended
- * alongside rather than rewritten. Both are rendered on this page so the
- * original stays demonstrably working next to the new one.
+ * The scroll-driven sequence (2026-09-17) -- a SEPARATE component tree from
+ * the Sun/Galaxy one above, deliberately: see scroll-hero-sphere.tsx's own
+ * module docstring for why the existing, verified
+ * particle-hero-background.tsx was built alongside rather than rewritten.
+ * Both are rendered on this page so the original stays demonstrably
+ * working next to the new one.
  */
-const ScrollHeroSphere = dynamic(
-  () => import("@/components/hero-sphere/scroll-hero-sphere").then((m) => m.ScrollHeroSphere),
+const HeroScrollSequence = dynamic(
+  () => import("@/components/hero-sphere/hero-scroll-sequence").then((m) => m.HeroScrollSequence),
   { ssr: false },
 );
 
@@ -63,18 +64,6 @@ const VARIANTS: { value: ParticleHeroVariant; label: string }[] = [
   { value: "galaxy", label: "Galaxy Nebula" },
 ];
 
-/**
- * Debug dolly progress, held in a module-level box rather than React
- * state ON PURPOSE: the sphere reads it once per animation frame, and
- * routing a 60Hz slider through setState would re-render the page (and
- * the graph below it) on every pixel of slider drag for no benefit. The
- * readout span is updated imperatively for the same reason. This whole
- * block is Stage 2 scaffolding -- scroll replaces it as the progress
- * source in Stage 3, and it can be deleted once the scroll path is
- * trusted.
- */
-const debugProgress = { value: 0 };
-const readDebugProgress = () => debugProgress.value;
 
 export default function ParticlePreviewPage() {
   const [variant, setVariant] = useState<ParticleHeroVariant>("sun");
@@ -125,34 +114,15 @@ export default function ParticlePreviewPage() {
           scroll-agnostic: the camera move can be verified end to end here
           without any scroll machinery existing yet. */}
       <section className="mx-auto max-w-6xl px-6">
-        <p className="mb-3 text-xs font-medium uppercase tracking-widest text-slate-400">
-          Scroll sphere · white background · debug dolly
+        <p className="text-xs font-medium uppercase tracking-widest text-slate-400">
+          Scroll sphere · scroll down to dolly in
         </p>
-        <div className="h-[560px] w-full">
-          <ScrollHeroSphere progressSource={readDebugProgress} />
-        </div>
-        <label className="mt-4 flex items-center gap-3 text-xs text-slate-500">
-          <span className="w-28 shrink-0 font-medium uppercase tracking-widest">
-            Dolly progress
-          </span>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.001}
-            defaultValue={0}
-            onChange={(e) => {
-              debugProgress.value = Number(e.target.value);
-              const el = document.getElementById("dolly-readout");
-              if (el) el.textContent = debugProgress.value.toFixed(2);
-            }}
-            className="h-1 w-full max-w-md cursor-pointer accent-fuchsia-600"
-          />
-          <span id="dolly-readout" className="w-10 tabular-nums">
-            0.00
-          </span>
-        </label>
       </section>
+
+      {/* Stage 3: the real scroll-driven sequence. The Stage 2 debug slider
+          is gone -- scroll is the progress source now. The dolly itself is
+          unchanged and still scroll-agnostic; only what feeds it changed. */}
+      <HeroScrollSequence />
 
       <div className="pt-24" />
 
