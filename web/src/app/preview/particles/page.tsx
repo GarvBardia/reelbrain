@@ -46,6 +46,18 @@ const ParticleHeroBackground = dynamic(
   { ssr: false },
 );
 
+/**
+ * The scroll-sequence sphere (2026-09-17) -- a SEPARATE component from the
+ * Sun/Galaxy one above, deliberately: see its own module docstring for why
+ * the existing, verified particle-hero-background.tsx was extended
+ * alongside rather than rewritten. Both are rendered on this page so the
+ * original stays demonstrably working next to the new one.
+ */
+const ScrollHeroSphere = dynamic(
+  () => import("@/components/hero-sphere/scroll-hero-sphere").then((m) => m.ScrollHeroSphere),
+  { ssr: false },
+);
+
 const VARIANTS: { value: ParticleHeroVariant; label: string }[] = [
   { value: "sun", label: "Sun" },
   { value: "galaxy", label: "Galaxy Nebula" },
@@ -86,11 +98,23 @@ export default function ParticlePreviewPage() {
         ))}
       </div>
 
-      {/* White space above the card, same idea as the real page's own
-          pt-20/pt-28 hero spacing -- clears the fixed toggle bar and gives
-          the "surrounding page is white" claim something visible to point
-          at in a screenshot, not just an unreachable colour behind a
-          full-bleed card. */}
+      {/* White space above, clearing the fixed toggle bar. */}
+      <div className="pt-24" />
+
+      {/* ---------- STAGE 1: white-background scroll sphere ----------
+          The new pink/purple/blue sphere on the page's own white, with no
+          dark card around it -- this is the one the scroll sequence will
+          drive. Full-bleed white, no rounded container, because the whole
+          point is that it sits ON the page rather than in a panel. */}
+      <section className="mx-auto max-w-6xl px-6">
+        <p className="mb-3 text-xs font-medium uppercase tracking-widest text-slate-400">
+          Scroll sphere · white background
+        </p>
+        <div className="h-[560px] w-full">
+          <ScrollHeroSphere />
+        </div>
+      </section>
+
       <div className="pt-24" />
 
       {/* Hero mockup, now a BOUNDED card (2026-09-17) rather than a
