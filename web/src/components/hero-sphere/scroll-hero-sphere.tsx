@@ -133,6 +133,11 @@ const DAMPING_PER_SECOND = 6.5;
 const RUSH_START = 0.6;
 const RUSH_SCALE = 1.9;
 
+/** World-unit amplitude of the at-rest camera drift. Small on purpose:
+ *  enough that the sphere breathes, not enough to read as the camera
+ *  being animated at the viewer. */
+const DRIFT_AMOUNT = 0.14;
+
 /** Page-background white, matching globals.css's real --background:
  *  0 0% 100%. The scene clears to this so the canvas is seamless against
  *  the page rather than a visible rectangle sitting on it. */
@@ -439,6 +444,22 @@ export function ScrollHeroSphere({
       // being simultaneous.
       const eased = Math.pow(damped, 1.7);
       camera.position.z = START_Z + (END_Z - START_Z) * eased;
+
+      // Idle parallax: a slow lateral drift so the sphere is alive before
+      // anyone scrolls, rather than a frozen render waiting for input.
+      // Two different, deliberately non-harmonic periods (0.17 and 0.13
+      // rad/s) so the path never visibly repeats -- a single sine reads as
+      // a mechanical back-and-forth within a few seconds.
+      //
+      // Scaled by (1 - damped) so it fades out as the dolly takes over:
+      // drift is there to fill dead air at rest, and keeping it running
+      // during the rush would fight the one motion the user is actually
+      // driving. By the handoff it's gone entirely.
+      const elapsed = clock.getElapsedTime();
+      const drift = (1 - damped) * DRIFT_AMOUNT;
+      camera.position.x = Math.sin(elapsed * 0.17) * drift;
+      camera.position.y = Math.cos(elapsed * 0.13) * drift * 0.7;
+      camera.lookAt(0, 0, 0);
 
       // Rush + dissolve. Zero over [0, RUSH_START], then 0..1 over the
       // handoff window, so nothing about the resting sphere changes until
