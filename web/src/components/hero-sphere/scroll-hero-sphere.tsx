@@ -111,6 +111,28 @@ const END_Z = 1.15;
  */
 const DAMPING_PER_SECOND = 6.5;
 
+/**
+ * Progress at which the particles stop being a sphere being flown into and
+ * start being a rush of light being flown THROUGH -- they accelerate
+ * outward and fade out over [RUSH_START, 1].
+ *
+ * 0.6 matches the window the graph fades/scales in over on the other side
+ * of the handoff, because the two have to happen SIMULTANEOUSLY for the
+ * illusion to work. If the particles cleared first there'd be an empty
+ * white beat before the graph arrived (a cut); if the graph arrived first
+ * it would appear through a wall of particles (a crossfade). Overlapping
+ * them is what makes one object read as becoming the other.
+ *
+ * RUSH_SCALE is how far outward the cloud expands over that window. This
+ * is a GROUP scale, not per-instance position writes: scaling the parent
+ * pushes every particle radially away from the centre, which is exactly
+ * the required motion, at zero per-frame cost for 11,000 instances. The
+ * alternative -- rewriting 11,000 instance matrices every frame -- would
+ * buy nothing visible and cost real milliseconds.
+ */
+const RUSH_START = 0.6;
+const RUSH_SCALE = 1.9;
+
 /** Page-background white, matching globals.css's real --background:
  *  0 0% 100%. The scene clears to this so the canvas is seamless against
  *  the page rather than a visible rectangle sitting on it. */
@@ -127,6 +149,8 @@ const MAX_R = 2.2;
  * this should read as crisp points, not haze. It only starts contributing
  * once the dolly puts the camera inside the densest part of the cloud.
  */
+const HALO_OPACITY = 0.13;
+
 const BLOOM_STRENGTH = 0.35;
 const BLOOM_RADIUS = 0.4;
 const BLOOM_THRESHOLD = 0.75;
@@ -353,7 +377,7 @@ export function ScrollHeroSphere({
     // white lightens toward a tint, which is exactly how a halo reads on a
     // light page.
     const core = buildInstances(particles, 0.035, 1, 1);
-    const halo = buildInstances(particles, 0.09, 0.13);
+    const halo = buildInstances(particles, 0.09, HALO_OPACITY);
 
     const subject = new THREE.Group();
     subject.add(halo.mesh);
@@ -402,6 +426,20 @@ export function ScrollHeroSphere({
       damped += (target - damped) * (1 - Math.exp(-DAMPING_PER_SECOND * dt));
 
       camera.position.z = START_Z + (END_Z - START_Z) * damped;
+
+      // Rush + dissolve. Zero over [0, RUSH_START], then 0..1 over the
+      // handoff window, so nothing about the resting sphere changes until
+      // the graph starts arriving.
+      const rush = Math.max(0, (damped - RUSH_START) / (1 - RUSH_START));
+      subject.scale.setScalar(1 + rush * RUSH_SCALE);
+      const remaining = 1 - rush;
+      core.material.opacity = remaining;
+      halo.material.opacity = HALO_OPACITY * remaining;
+      // Once the core is translucent it must stop writing depth, or the
+      // particles nearest the camera punch depth-buffer holes that hide
+      // the ones behind them and the dissolve reads as chunks vanishing
+      // rather than a field thinning out.
+      core.material.depthWrite = remaining >= 1;
 
       subject.rotation.y += rotationSpeed * dt;
       composer.render();
