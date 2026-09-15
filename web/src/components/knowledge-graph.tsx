@@ -123,12 +123,17 @@ const COLLIDE_PADDING = 1.5;
 
 /** Reel labels stay hover-only regardless of node count -- 190 permanent
  *  labels would be the exact unreadable-stack problem the category view was
- *  built to avoid, just at a much larger scale. Category anchors are the
- *  opposite case: only ~13 of them, few enough to label ALL the time without
- *  that problem, and (2026-09-08) they now do -- see paintNode's category
- *  branch and ANCHOR_DOT_RADIUS. Their name is also still reachable via the
- *  native tooltip on hover, for the count/assistive-tech reasons noted on
- *  the nodeLabel prop. */
+ *  built to avoid, just at a much larger scale. Category anchors were
+ *  briefly tried as an always-on exception to that rule (2026-09-08, same
+ *  day): only ~13 of them, the assumption was that's few enough to label
+ *  permanently without the reel problem recurring. In practice, at only
+ *  13 nodes packed into a tight ~300px cluster, several sit close enough
+ *  that their labels collided anyway -- a smaller-scale version of the
+ *  exact bug this rule exists to prevent. Category labels are hover-only
+ *  now too, same as reels, for the same reason: see paintNode's category
+ *  branch. Their name is also still reachable via the native tooltip on
+ *  hover, for the count/assistive-tech reasons noted on the nodeLabel
+ *  prop. */
 
 /** Accent for the rare, deliberate per-node highlight -- value_score 5 reels
  *  (the top of the 1-5 scale, the smallest slice of the real corpus) pull
@@ -329,12 +334,17 @@ function nodeDust(id: string, drawR: number): [number, number, number, number][]
  * reels = detail) was never actually visible at default zoom, only
  * discoverable by hovering blind or zooming in.
  *
- * 9px is a flat constant now, not derived from the reel-radius formula --
- * the point is that it should read as unmistakably bigger than any reel
- * regardless of how that formula is tuned later, not track it. For
- * reference: the single biggest reel dot (value_score 5, dead centre) draws
- * at roughly 4.3px (see drawR below); 9px is a little over double that. */
-const ANCHOR_DOT_RADIUS = 9;
+ * 9 -> 5.5 (2026-09-08, same day, second pass): 9px overshot. With 13
+ * always-on labels stacked at that size the anchors themselves started
+ * visually crowding into their neighbours in the tightly-packed cluster,
+ * on top of the label-overlap problem the hover-only change below already
+ * fixes on its own. 5.5px is a flat constant, still not derived from the
+ * reel-radius formula -- the point is that it reads as unmistakably bigger
+ * than any reel regardless of how that formula is tuned later, not track
+ * it -- just a more moderate multiple now: the single biggest reel dot
+ * (value_score 5, dead centre) draws at roughly 4.3px (see drawR below),
+ * so 5.5px is still a clear ~1.3x, landmark-vs-detail without dominating. */
+const ANCHOR_DOT_RADIUS = 5.5;
 
 export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
   const ForceGraph2D = useForceGraph2D();
@@ -951,10 +961,13 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
    * light, not frosted-glass spheres.
    *
    * Category anchor nodes take an early branch of their own: a bright,
-   * glowing landmark dot with an always-on label (see ANCHOR_DOT_RADIUS and
+   * glowing landmark dot with a hover-only label (see ANCHOR_DOT_RADIUS and
    * paintNode's category branch), deliberately more prominent than any reel
-   * -- reversed 2026-09-08 from an earlier "small dim dot, no label" version
-   * that made anchors the least visible thing on the canvas. Their real job
+   * at rest even with no text showing -- reversed 2026-09-08 from an
+   * earlier "small dim dot, no label" version that made anchors the least
+   * visible thing on the canvas. (An always-on-label version was tried the
+   * same day and reverted a round later -- 13 permanent labels in a tight
+   * cluster still collided with each other.) Their real job
    * is STILL the membership-link clustering effect described in the
    * force-tuning comment above (drawing them prominently doesn't change
    * what the physics does); it's just that "prominent" is now also the
@@ -985,19 +998,29 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
    */
   const paintNode = useCallback(
     (node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
-      // Category anchors: drawn as real LANDMARKS now (2026-09-08), a direct
-      // reversal of the "dust, not landmarks" treatment this used to have --
-      // that made anchors the single least-visible thing on the canvas
-      // (smaller than the smallest reel, dimmed to 0.35 alpha, desaturated
-      // toward the backdrop), which is the opposite of "categories should be
-      // immediately identifiable at a glance" this view is supposed to give.
-      // Kept as a separate early-return branch, not folded into the reel
-      // path below, because almost none of the reel treatment (value_score
+      // Category anchors: drawn as real landmarks (2026-09-08), reversed a
+      // second time the same day after the first pass overshot -- see
+      // ANCHOR_DOT_RADIUS's own comment for the dot-size half of that
+      // correction. This is the label half: labels went from invisible
+      // (the original "dust, not landmarks" version) to ALWAYS-ON at 15px/
+      // 700 weight, which produced 13 permanently-drawn labels sitting in a
+      // ~300px cluster -- they collided with each other constantly, which
+      // is a different, worse illegibility than the one being fixed.
+      // Reel labels are hover-only for exactly this reason (~190 of them,
+      // drawing them all at once is unreadable); categories needed the same
+      // gate, just realised a round later. Hover-only also structurally
+      // guarantees at most one category label on screen at a time, which is
+      // what actually solves "labels overlap" -- shrinking the font
+      // wouldn't have (13 small overlapping labels still overlap).
+      //
+      // Kept as its own early-return branch, not folded into the reel path
+      // below, because almost none of the reel treatment (value_score
       // accent, coreT sizing, dust scatter) is meaningful for an anchor --
-      // categories get their own glow and their own always-on label instead.
+      // categories get their own glow and their own hover label instead.
       if (node.type === "category") {
         if (!Number.isFinite(node.x) || !Number.isFinite(node.y)) return;
         const dimmed = expanded !== null && node.category !== expanded;
+        const isHoveredAnchor = hovered?.id === node.id;
 
         ctx.save();
         ctx.globalAlpha = dimmed ? 0.18 : 1;
@@ -1006,7 +1029,7 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
         // "white-hot" moments -- an anchor at rest should read as at least
         // as bright as a hovered reel, not dimmer than an ordinary one.
         ctx.shadowColor = node.color;
-        ctx.shadowBlur = 14 / Math.max(globalScale, 0.6);
+        ctx.shadowBlur = (isHoveredAnchor ? 20 : 14) / Math.max(globalScale, 0.6);
         ctx.beginPath();
         ctx.arc(node.x, node.y, ANCHOR_DOT_RADIUS, 0, 2 * Math.PI);
         // The category's own real hue now, not desaturated toward the
@@ -1026,27 +1049,31 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
         ctx.fill();
         ctx.restore();
 
-        // The always-on label -- deliberately NOT hover-gated the way reel
-        // labels are. Reel labels stay hover-only because there are ~190 of
-        // them and drawing them all at once is the exact illegibility this
-        // graph already had to walk back once; there are only ~13
-        // categories, few enough that permanent labels read as landmark
-        // signage rather than clutter, which is the whole point of this
-        // change -- "immediately identifiable at a glance" cannot mean
-        // "after you hover it".
-        //
-        // Sized and weighted to unambiguously outrank a reel's hover label
-        // (11px/500): 15px/700 here, plus a heavier halo stroke, so a
-        // category name is legible against the particle field without
-        // competing on the reel label's own terms.
+        // Hover-only label. At rest: just the dot above, no text at all --
+        // exactly the "small colored dots, no overlapping text anywhere"
+        // the brief asks for.
+        if (!isHoveredAnchor) return;
+
+        // Site typography, not a generic canvas-default stack: this project
+        // loads Manrope via next/font (layout.tsx) as the ONE font the rest
+        // of the UI (nav, buttons, body copy) uses throughout, exposed as
+        // the `--font-sans` CSS variable Tailwind's `font-sans` resolves to
+        // -- canvas text can't read a CSS variable, so the family is named
+        // directly here, with the same fallback chain tailwind.config.ts
+        // declares behind it. 600 (semibold) rather than the site's usual
+        // 500 (nav/buttons) -- a small deliberate step up for legibility
+        // against a dark, busy backdrop, not the mismatched 700 the
+        // always-on version used. 12px, not 15px: hover-only means it is
+        // never competing against another label for attention, so it no
+        // longer needs to out-shout anything -- sized close to the site's
+        // own text-xs (12px) rather than a canvas-only oversized one-off.
         ctx.save();
-        ctx.globalAlpha = dimmed ? 0.35 : 1;
-        const fontSize = 15 / globalScale;
-        ctx.font = `700 ${fontSize}px ui-sans-serif, system-ui, sans-serif`;
+        const fontSize = 12 / globalScale;
+        ctx.font = `600 ${fontSize}px Manrope, ui-sans-serif, system-ui, sans-serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
         const y = node.y + ANCHOR_DOT_RADIUS + 5 / globalScale;
-        ctx.lineWidth = 3.5 / globalScale;
+        ctx.lineWidth = 3 / globalScale;
         ctx.strokeStyle = "rgba(5,2,8,0.92)";
         ctx.strokeText(node.label, node.x, y);
         ctx.fillStyle = "#ffffff";
@@ -1395,14 +1422,16 @@ export function KnowledgeGraph({ initial }: { initial: GraphPayload }) {
                 // double-printed label; reels stay "" (falsy, no tooltip
                 // element shown) for exactly that reason.
                 //
-                // Categories DO now also draw their own always-on canvas
-                // label (2026-09-08, see paintNode's category branch) -- but
-                // that label is fixed below the dot, while this tooltip
-                // follows the cursor, so the two never visually overlap the
-                // way the old reel bug did. Kept anyway, on purpose: this
-                // string adds the save COUNT the canvas label doesn't show,
-                // and remains the only accessible (non-canvas) way to reach
-                // a category's name at all.
+                // Categories DO now also draw their own canvas label on
+                // hover (2026-09-08, see paintNode's category branch) -- so
+                // hovering a category anchor shows both: the canvas label
+                // fixed below the dot, and this tooltip following the
+                // cursor a few px away. Not the same "ghosted double-print"
+                // bug reels had (different positions, not stacked on top of
+                // each other), and kept anyway on purpose: this string adds
+                // the save COUNT the canvas label doesn't show, and remains
+                // the only accessible (non-canvas) way to reach a category's
+                // name at all.
                 nodeLabel={(n: any) =>
                   n.type === "category" ? `${n.label} — ${n.count} saves` : ""
                 }
