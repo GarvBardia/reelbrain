@@ -148,11 +148,32 @@ export function HeroScrollSequence() {
       className="relative"
     >
       {!enabled ? (
-        <section className="mx-auto flex h-[70vh] max-w-6xl items-center justify-center px-6">
-          <p className="text-sm text-slate-400">
-            Scroll sequence disabled on this device (reduced motion, narrow viewport, or
-            low-power hardware).
-          </p>
+        /**
+         * FALLBACK (Stage 5): the graph, directly, in normal document flow.
+         *
+         * Not a static image, and not a reduced particle count either --
+         * both were on the table and both are worse here. The thing this
+         * sequence is a delivery mechanism FOR is the graph; on a device
+         * that can't run the delivery mechanism, showing the payload
+         * immediately is the version that looks intentional rather than
+         * degraded. A static gradient PNG standing in for a live effect
+         * would be a picture of a feature this device isn't running, and
+         * a thinned particle count would still pin the page and still
+         * scroll-jack a phone through a 260vh track for a muted version
+         * of an effect it was already disqualified from.
+         *
+         * This also gets mobile right for free: KnowledgeGraph has its own
+         * <768px fallback (GraphFallbackList, a tappable category list), so
+         * on a phone this path lands on the established mobile graph UI
+         * rather than on anything invented here.
+         *
+         * prefers-reduced-motion resolves to this same branch via
+         * canRenderSphere(), which is the brief's "skip the dolly
+         * entirely, show the graph directly" -- no scroll-scrubbed
+         * animation, no pin, no transform.
+         */
+        <section className="mx-auto max-w-6xl px-6 py-16">
+          <KnowledgeGraph initial={graph} />
         </section>
       ) : (
         // The pinned frame. `sticky top-0` rather than a library pin: the
