@@ -18,9 +18,10 @@ import { Button } from "@/components/ui/button";
  * export's HTML entirely, and next/dynamic splits it into its own chunk so it
  * cannot block first paint of the headline it sits behind.
  *
- * next/dynamic is safe HERE, unlike for the graph: the documented ref-dropping
- * problem at the top of knowledge-graph.tsx only bites components that need a
- * ref passed through, and this one exposes no imperative handle.
+ * next/dynamic's ref-dropping caveat does not apply: it only bites
+ * components that need a ref passed through, and this one exposes no
+ * imperative handle. (The graph used to be the counter-example here; that
+ * component is gone -- see the note on HeroSphere below.)
  */
 const AsciiHeroBackground = dynamic(
   () => import("@/components/ascii-hero-background").then((m) => m.AsciiHeroBackground),

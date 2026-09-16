@@ -7,7 +7,8 @@ import * as THREE from "three";
  *
  * WHAT THIS IS PROMOTED FROM, and what was deliberately left behind:
  * the look here is lifted UNCHANGED from the overnight branch's Stage 1
- * work (scroll-hero-sphere.tsx) -- same deep-saturated pink/purple/blue
+ * work (scroll-hero-sphere.tsx, since deleted -- it exists only in git
+ * history now) -- same deep-saturated pink/purple/blue
  * palette, same white scene background, same two-layer core+halo instancing,
  * same bloom tuning, same deterministic mulberry32 seeding. The scroll
  * machinery around it (camera dolly, progress getter, particle rush-out,
