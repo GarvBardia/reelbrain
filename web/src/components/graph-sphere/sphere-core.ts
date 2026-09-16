@@ -54,37 +54,9 @@ export const BLOOM_STRENGTH = 0.35;
 export const BLOOM_RADIUS = 0.4;
 export const BLOOM_THRESHOLD = 0.75;
 
-/** Below this width neither sphere renders -- same threshold and reasoning
- *  as ascii-hero-background.tsx and particle-hero-background.tsx before it.
- *  The interactive graph additionally has a real mobile alternative (see
- *  the /graph route), which is why this being a hard gate is acceptable. */
-export const MIN_WIDTH = 768;
-
-export function prefersReducedMotion(): boolean {
-  if (typeof window === "undefined") return false;
-  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-}
-
-/**
- * Is this device worth running a bloom-postprocessed instanced particle
- * scene on? Unchanged gate from the previous hero backgrounds.
- *
- * NOTE the difference in consequence between the two callers: for the hero
- * this means "render nothing, it's decoration". For /graph it means "render
- * the tappable list instead", because there the sphere is carrying real
- * data a visitor actually needs, and silently showing nothing would be
- * hiding the content rather than skipping an ornament.
- */
-export function canRenderSphere(): boolean {
-  if (typeof window === "undefined") return false;
-  if (prefersReducedMotion()) return false;
-  if (window.innerWidth < MIN_WIDTH) return false;
-  const cores = navigator.hardwareConcurrency;
-  if (typeof cores === "number" && cores > 0 && cores <= 4) return false;
-  const mem = (navigator as any).deviceMemory;
-  if (typeof mem === "number" && mem > 0 && mem <= 4) return false;
-  return true;
-}
+// The device gate lives in can-render.ts, which imports no three -- see
+// that file for why. Re-exported here so existing importers are unaffected.
+export { MIN_WIDTH, prefersReducedMotion, canRenderSphere } from "./can-render";
 
 /** Deterministic RNG (mulberry32). A sphere that reshuffles itself between
  *  reloads reads as instability, not life -- and for the data sphere it

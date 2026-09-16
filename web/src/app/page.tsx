@@ -4,15 +4,12 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { ArrowRight, Compass, Layers, Sparkles } from "lucide-react";
 
-import { EMPTY_GRAPH, EMPTY_STATS, getGraph, getStats } from "@/lib/api";
+import { EMPTY_STATS, getStats } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
-import { KnowledgeGraph } from "@/components/knowledge-graph";
-import { ApiErrorState } from "@/components/api-error-state";
 import { BlurFade } from "@/components/magic/blur-fade";
 import { NumberTicker } from "@/components/magic/number-ticker";
 import { Spotlight } from "@/components/aceternity/spotlight";
 import { LightLines } from "@/components/obsidian/light-lines";
-import { Skeleton } from "@/components/skeleton";
 import { Button } from "@/components/ui/button";
 
 /**
@@ -30,23 +27,35 @@ const AsciiHeroBackground = dynamic(
   { ssr: false },
 );
 
+/**
+ * The hero sphere: STATIC decoration, and lazy/browser-only for the same
+ * reason as above -- three + postprocessing is the heaviest asset on the
+ * site and has no business in the shared bundle.
+ *
+ * It is not the graph. The interactive, data-driven version of this sphere
+ * lives at /graph, behind the explicit CTA below. That split is the point
+ * of the rebuild: the scroll-driven "hero becomes the graph" transition
+ * that used to be planned here was reported as janky, and the fix was to
+ * delete the mechanism rather than tune it. A hero that reacts to nothing
+ * cannot feel janky, and entering the graph is now a decision a visitor
+ * makes rather than something they fall into while scrolling.
+ */
+const HeroSphere = dynamic(
+  () => import("@/components/graph-sphere/hero-sphere").then((m) => m.HeroSphere),
+  { ssr: false },
+);
+
 // Client-fetched, not server-rendered: GitHub Pages serves static files with
 // no server to run against, so every data-driven page fetches the public API
 // directly from the browser. See src/lib/api.ts.
 export default function LandingPage() {
+  // The landing page no longer fetches the graph at all. It used to pull
+  // getGraph("all") -- every reel in one payload -- purely to feed the
+  // canvas that used to sit in this section. The hero sphere is decorative
+  // and data-free, so that entire request (and its loading and error
+  // states) now belongs only to /graph, where the data is actually used.
+  // Every visitor was paying for it; only the ones who open the graph do now.
   const { data: stats } = useApi(getStats, EMPTY_STATS);
-  const {
-    data: graph,
-    loading: graphLoading,
-    error: graphError,
-    retry: retryGraph,
-    // "all" (2026-09-02): every reel as a node in one payload, for the
-    // dense default nebula view -- see app/public_api.py's expand="all"
-    // and the block comment at the top of knowledge-graph.tsx. Previously
-    // this fetched category-level-only data and KnowledgeGraph re-fetched
-    // a single category's reels on click; that network round-trip is gone
-    // now that the very first payload already contains everything.
-  } = useApi(() => getGraph("all"), EMPTY_GRAPH);
 
   return (
     <>
@@ -177,28 +186,51 @@ export default function LandingPage() {
             <h2 className="text-sm font-medium uppercase tracking-widest text-slate-400">
               The live graph
             </h2>
+            {/* Copy rewritten to match what this section now IS. It used to
+                say "drag, scroll, or click a category to explore", which
+                described the canvas that used to sit here -- left unchanged
+                it would be instructions for interactions this sphere
+                deliberately does not have, on a visual that is now a door
+                rather than the room. */}
             <p className="mt-1.5 text-sm text-slate-500">
-              Every save below is a real, connected node — drag, scroll, or click a category to explore.
+              Every save is a point on it — one particle per reel, nothing invented.
             </p>
           </div>
 
-          {/* THE CENTREPIECE. Three explicit states -- loading, failed,
-              loaded -- all at the same height so the page never jumps. The
-              failed branch is the fix for the graph silently vanishing: it
-              used to fall through to an empty node list, which renders as a
-              blank canvas indistinguishable from success. */}
+          {/* THE DOOR, not the room. This slot used to hold the live
+              react-force-graph-2d canvas with its three explicit
+              loading/failed/loaded states; it now holds a static sphere and
+              a CTA, and has no states at all because it has no data to
+              wait on. Fixed height is kept for the same reason it always
+              was -- the page must not jump -- even though nothing here can
+              arrive late any more.
+
+              Nothing renders in place of the sphere below 768px or under
+              prefers-reduced-motion (see canRenderSphere). That is correct
+              here in a way it would NOT have been for the old canvas: this
+              is decoration, and the CTA underneath is a real link that
+              works regardless, leading to a view that has its own tappable
+              mobile list. Skipping an ornament is not hiding content. */}
           <div className="mt-4">
-            {graphLoading ? (
-              <Skeleton className="h-[480px] w-full rounded-[1.35rem]" />
-            ) : graphError ? (
-              <ApiErrorState
-                message={graphError}
-                onRetry={retryGraph}
-                className="h-[480px]"
-              />
-            ) : (
-              <KnowledgeGraph initial={graph} />
-            )}
+            <div
+              className="relative h-[420px] w-full sm:h-[480px]"
+              aria-hidden
+            >
+              <HeroSphere />
+            </div>
+            <div className="mt-6 flex flex-col items-center gap-3">
+              <Link href="/graph">
+                <Button size="lg">
+                  View graph
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+              </Link>
+              <p className="text-xs text-slate-400">
+                {stats.total_reels > 0
+                  ? `${stats.total_reels.toLocaleString()} saves, one particle each`
+                  : "One particle per save"}
+              </p>
+            </div>
           </div>
         </div>
       </section>

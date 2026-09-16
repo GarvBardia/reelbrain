@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { ArrowLeft, Loader2 } from "lucide-react";
@@ -9,6 +9,12 @@ import { EMPTY_GRAPH, getGraph, getReelByShortcode } from "@/lib/api";
 import type { Reel } from "@/lib/types";
 import { useApi } from "@/lib/use-api";
 import { ApiErrorState } from "@/components/api-error-state";
+import { GraphFallbackList } from "@/components/graph-fallback-list";
+// Imported from can-render, NOT from sphere-core: sphere-core pulls in all
+// of three and the postprocessing passes, and this question has to be
+// answerable without loading any of that -- especially on the devices the
+// answer is "no" for.
+import { canRenderSphere } from "@/components/graph-sphere/can-render";
 import { ReelDetail } from "@/components/reel-detail";
 import { Button } from "@/components/ui/button";
 
@@ -27,9 +33,10 @@ import { Button } from "@/components/ui/button";
  *  3. It solves the scroll conflict structurally rather than defensively.
  *     The documented failure of the old graph was its wheel handler
  *     fighting page scroll; here the page IS the graph, the shell is
- *     h-screen with overflow hidden, and there is no page scroll for the
- *     wheel to fight. An overlay would leave the homepage scrolling
- *     underneath and need a scroll lock to paper over it.
+ *     taken out of flow entirely (see the note on the shell below), and
+ *     there is no page scroll for the wheel to fight. An overlay would
+ *     leave the homepage scrolling underneath and need a scroll lock to
+ *     paper over it.
  *  4. output:"export" handles it natively -- the route prerenders to a
  *     static shell and fetches its data client-side, same as every other
  *     page here.
@@ -91,6 +98,32 @@ export function GraphClient() {
 
   const closeReel = useCallback(() => setSelectedReel(null), []);
 
+  /**
+   * Which of the two views this device gets. Three-valued on purpose:
+   * `null` means "not decided yet".
+   *
+   * It has to start null rather than calling canRenderSphere() during
+   * render, because this route is statically prerendered by the export --
+   * the server has no window, so a render-time call would hydrate
+   * mismatched. Resolving it in an effect costs one extra frame of loader
+   * and is the difference between correct and a hydration error.
+   *
+   * Re-checked on resize so that dragging a desktop window narrow, or
+   * rotating a tablet, lands on the right view rather than the one the
+   * device happened to qualify for at load.
+   */
+  const [canRender, setCanRender] = useState<boolean | null>(null);
+  useEffect(() => {
+    const update = () => setCanRender(canRenderSphere());
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+
+  /** Mobile-only: which category the fallback list is drilled into. Local
+   *  state, not a refetch -- `data` is already the expand="all" payload. */
+  const [expanded, setExpanded] = useState<string | null>(null);
+
   return (
     // `fixed inset-0`, not `h-screen`, and that distinction is load-bearing
     // rather than cosmetic. The goal is that the wheel belongs ENTIRELY to
@@ -132,7 +165,7 @@ export function GraphClient() {
         </p>
       </div>
 
-      {loading ? (
+      {canRender === null || loading ? (
         <div className="flex h-full items-center justify-center text-slate-400">
           <Loader2 className="h-5 w-5 animate-spin" />
         </div>
@@ -140,9 +173,29 @@ export function GraphClient() {
         <div className="flex h-full items-center justify-center px-6">
           <ApiErrorState message={error} onRetry={retry} />
         </div>
-      ) : (
+      ) : canRender ? (
         <SphereGraph data={data} onSelectReel={openReelByShortcode} />
-      )}
+      ) : null}
+
+      {/* The small-screen view of the SAME data, UNCHANGED from what the
+          old graph rendered: same component, same props, same tappable
+          category-then-reel drill-down, same click-through to ReelDetail.
+          The rebuild is desktop-only by instruction, and this is what
+          keeps that true -- the sphere replaced the canvas, not the list.
+
+          It scrolls, unlike the sphere view, so this wrapper opts back
+          into overflow-y-auto that the shell turns off. pt-28 clears both
+          the site header and the floating Back bar above it. */}
+      {canRender === false && !loading && !error ? (
+        <div className="h-full overflow-y-auto px-4 pb-10 pt-32">
+          <GraphFallbackList
+            data={data}
+            expanded={expanded}
+            onExpand={setExpanded}
+            onSelectReel={openReelByShortcode}
+          />
+        </div>
+      ) : null}
 
       <ReelDetail reel={selectedReel} onClose={closeReel} />
     </div>
