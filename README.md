@@ -98,27 +98,32 @@ flowchart TB
 
 ## The data model
 
-Notion is the system of record. This is the real schema, read from the Notion API:
+Notion is the system of record. The structure below was confirmed directly
+against the live database schema (property names and types only, no row data).
 
-**Saves** (22 properties): `Title`, `Reel URL`, `Shortcode`, `Posted at`,
-`Creator` → Creators, `Related` (self-relation, filled from embeddings),
-`Topics` (multi-select, kept in line with a curated taxonomy), `Named entities`,
-`Value score` (1–5), `Priority` (High/Medium/Low), `Content type`
-(tutorial · insight · resource_drop · motivation · news · entertainment),
-`Plain summary`, `Suggested action`, `Status` (Inbox · Awaiting DM ·
-Processed/Reviewed · Failed — retry · Low signal · Gate expired · Photo — manual),
-`Comment gate`, `Gate keyword`, `Gate resource`, `My note`, `Processed`,
-`Created time`, `Place`.
+**Saves — 22 properties**
 
-**Creators** (7 properties): `Username`, `Full name`, `Profile URL`, `Save count`
-and `Primary topics` (rollups from Saves), and `Core source`, a flag for creators
-who keep producing high-value saves.
+| Group | Properties |
+|---|---|
+| Identity | `Title` (title), `Shortcode`, `Reel URL`, `Posted at`, `Created time` |
+| Extraction | `Plain summary`, `Suggested action`, `Content type` (tutorial · insight · resource_drop · motivation · news · entertainment · unknown), `Value score` (1–5), `Priority` (High · Medium · Low) |
+| Classification | `Topics` (multi-select, held to a curated taxonomy), `Named entities` (multi-select) |
+| Relations | `Creator` → Creators, `Related` and its reverse side (self-relations, filled from embedding similarity) |
+| Workflow | `Status` (Inbox · Awaiting DM · Processed/Reviewed · Failed — retry · Low signal · Gate expired · Photo — manual), `Processed`, `Comment gate` |
+| **Private** | `Gate keyword`, `Gate resource`, `My note` |
+| Unused | `Place` (in the database, not read or written by any code) |
 
-Several of these fields are private: `Gate keyword`, `Gate resource`, `My note`,
-raw transcripts, and the underlying source URLs of attached resources. They
-never reach the public API. The site's categories aren't stored in Notion; they
-are derived from topics in `app/public_api.py`. Field-level detail is in
-[DATA_SCHEMA.md](DATA_SCHEMA.md).
+The three **private** fields are never exposed by the public API or shown on the
+site. The API filters through an allow-list of fields, so this holds even if new
+private fields are added later.
+The site's categories aren't a Notion property; they are derived from `Topics`
+in `app/public_api.py`.
+
+**Creators — 7 properties:** `Username`, `Full name`, `Profile URL`, `Save count`
+and `Primary topics` (rollups from Saves), a relation back to Saves, and
+`Core source` (flag for creators who keep producing high-value saves).
+
+Field-level detail: [DATA_SCHEMA.md](DATA_SCHEMA.md).
 
 ## Stack
 
