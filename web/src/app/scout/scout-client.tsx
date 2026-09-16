@@ -108,7 +108,7 @@ export function ScoutClient() {
                       {item.named_entities.slice(0, 4).map((e) => (
                         <span
                           key={e}
-                          className="rounded-md bg-slate-100 px-2 py-0.5 text-xs text-slate-600"
+                          className="rounded-md bg-sphere-purple/[0.06] px-2 py-0.5 text-xs text-slate-600"
                         >
                           {e}
                         </span>
@@ -118,7 +118,7 @@ export function ScoutClient() {
                           href={item.permalink}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="ml-auto inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-700"
+                          className="ml-auto inline-flex items-center gap-1 text-xs text-slate-400 transition-colors hover:text-sphere-purple"
                         >
                           Source
                           <ExternalLink className="h-3 w-3" />

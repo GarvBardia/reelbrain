@@ -34,6 +34,19 @@ const config: Config = {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        // The graph sphere's own palette (graph-sphere/sphere-core.ts), used
+        // site-wide as a RESTRAINED accent so the rest of the product reads
+        // as the same thing as the graph. Rules of use: purple is the
+        // working accent (focus, active nav, hover text, faint tag tints);
+        // pink and blue appear only together with purple, as the gradient
+        // in the hero headline and the odd small icon. Never body text,
+        // never backgrounds, never turns a neutral button into a coloured
+        // block. If in doubt, use less.
+        sphere: {
+          pink: "#e8118a",
+          purple: "#7c16e8",
+          blue: "#1b45e0",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",

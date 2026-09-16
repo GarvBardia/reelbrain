@@ -10,9 +10,9 @@ export function SiteFooter() {
             there's no reason to put a login surface in front of every
             visitor (PRODUCT.md: admin is secondary to the public surfaces). */}
         <div className="flex items-center gap-5">
-          <Link href="/how-it-works" className="hover:text-slate-800">How it works</Link>
-          <Link href="/library" className="hover:text-slate-800">Library</Link>
-          <Link href="/scout" className="hover:text-slate-800">Scout queue</Link>
+          <Link href="/how-it-works" className="transition-colors hover:text-sphere-purple">How it works</Link>
+          <Link href="/library" className="transition-colors hover:text-sphere-purple">Library</Link>
+          <Link href="/scout" className="transition-colors hover:text-sphere-purple">Scout queue</Link>
         </div>
       </div>
     </footer>

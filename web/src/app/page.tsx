@@ -81,7 +81,7 @@ export default function LandingPage() {
             lightsOpacity={0.55}
             speedMultiplier={0.4}
             lineColor="#94a3b8"
-            lightColor="#6366f1"
+            lightColor="#7c16e8"
             // gradientFrom/To are the component's own full-bleed container
             // background -- its ONLY use of those two props. Left at the
             // upstream blue they paint a solid gradient over the entire hero,
@@ -93,7 +93,7 @@ export default function LandingPage() {
             gradientTo="transparent"
           />
         </div>
-        <Spotlight className="-top-40 left-0 text-indigo-500 md:-top-20 md:left-60" />
+        <Spotlight className="-top-40 left-0 text-sphere-purple md:-top-20 md:left-60" />
         <div className="pointer-events-none absolute inset-0 bg-dot-grid mask-radial-fade" />
 
         {/* Ambient ASCII mycelium (2026-09-03). Sits in the same background
@@ -132,12 +132,12 @@ export default function LandingPage() {
         <div className="relative mx-auto max-w-[1440px] px-6 pb-10 pt-20 md:pt-28">
           <BlurFade className="mx-auto max-w-3xl text-center">
             <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/70 px-3.5 py-1.5 text-xs font-medium text-slate-600 shadow-sm">
-              <Sparkles className="h-3.5 w-3.5 text-indigo-500" />
+              <Sparkles className="h-3.5 w-3.5 text-sphere-pink" />
               Live from a real, continuously-growing knowledge base
             </div>
             <h1 className="text-balance text-4xl font-semibold leading-[1.08] tracking-tight text-slate-900 sm:text-6xl">
               Mycelium turns scattered saved content into a{" "}
-              <span className="bg-gradient-to-r from-indigo-600 via-violet-600 to-orange-500 bg-clip-text text-transparent">
+              <span className="bg-gradient-to-r from-sphere-pink via-sphere-purple to-sphere-blue bg-clip-text text-transparent">
                 self-organizing, self-improving
               </span>{" "}
               knowledge network.
@@ -354,7 +354,7 @@ export default function LandingPage() {
                         <p className="truncate font-medium text-slate-900">{c.label}</p>
                         <p className="text-sm text-slate-500">{c.count} saves</p>
                       </div>
-                      <ArrowRight className="h-4 w-4 shrink-0 text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-slate-500" />
+                      <ArrowRight className="h-4 w-4 shrink-0 text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-sphere-purple" />
                     </div>
                   </Link>
                 </BlurFade>
@@ -366,7 +366,7 @@ export default function LandingPage() {
                 <div className="mt-12 flex flex-wrap justify-center gap-2">
                   {stats.top_topics.slice(0, 14).map((t) => (
                     <Link key={t.topic} href={`/library?q=${encodeURIComponent(t.topic)}`}>
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900">
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-600 transition-colors hover:border-sphere-purple/30 hover:text-sphere-purple">
                         {t.topic}
                         <span className="tabular-nums text-slate-400">{t.count}</span>
                       </span>
