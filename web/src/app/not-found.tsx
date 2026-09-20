@@ -12,14 +12,14 @@ export default function NotFound() {
     <div className="mx-auto flex max-w-xl flex-col items-center px-6 py-32 text-center">
       <p className="text-sm font-medium uppercase tracking-widest text-slate-400">404</p>
       <h1 className="mt-4 text-balance text-3xl font-semibold tracking-tight text-slate-900">
-        Nothing&apos;s connected at this address.
+        Page not found.
       </h1>
       <p className="mt-4 text-lg leading-relaxed text-slate-600">
         The page you&apos;re looking for doesn&apos;t exist, or the link is out of date.
       </p>
       <Link href="/" className="mt-8">
         <Button size="lg">
-          Back to the network
+          Back to home
           <ArrowRight className="h-4 w-4" />
         </Button>
       </Link>

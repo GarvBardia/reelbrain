@@ -197,6 +197,32 @@ export function GraphClient() {
         </div>
       ) : null}
 
+      {/* WHAT AM I LOOKING AT. The sphere shipped with no explanation at all:
+          nothing said a point was one reel, nothing said the controls
+          existed, and nothing said that where a point sits carries no
+          meaning -- which matters, because an evenly-spread ball of points
+          looks exactly like a relationship graph and is not one.
+
+          Deliberately two small muted captions in the corners rather than a
+          panel or an overlay: the answer has to be available without
+          competing with the thing it describes, and without needing to be
+          dismissed before the view can be used.
+
+          Only rendered for the sphere. The mobile list explains itself. */}
+      {canRender === true && !loading && !error ? (
+        <>
+          <p className="pointer-events-none absolute bottom-5 left-6 z-20 max-w-xs text-xs leading-relaxed text-slate-400">
+            <span className="font-medium text-slate-500">Each point is one saved reel.</span>{" "}
+            Points are spread evenly; where a point sits doesn&apos;t mean it&apos;s related
+            to its neighbours. Colour runs pink to blue from top to bottom and marks
+            nothing.
+          </p>
+          <p className="pointer-events-none absolute bottom-5 right-6 z-20 hidden text-xs text-slate-400 lg:block">
+            Hover to preview · Click to open · Scroll to zoom · Swipe sideways to rotate
+          </p>
+        </>
+      ) : null}
+
       <ReelDetail reel={selectedReel} onClose={closeReel} />
     </div>
   );

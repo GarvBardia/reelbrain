@@ -133,19 +133,20 @@ export default function LandingPage() {
           <BlurFade className="mx-auto max-w-3xl text-center">
             <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/70 px-3.5 py-1.5 text-xs font-medium text-slate-600 shadow-sm">
               <Sparkles className="h-3.5 w-3.5 text-sphere-pink" />
-              Live from a real, continuously-growing knowledge base
+              Real data, from a pipeline that runs every day
             </div>
             <h1 className="text-balance text-4xl font-semibold leading-[1.08] tracking-tight text-slate-900 sm:text-6xl">
-              Mycelium turns scattered saved content into a{" "}
+              Saved Instagram reels, turned into{" "}
               <span className="bg-gradient-to-r from-sphere-pink via-sphere-purple to-sphere-blue bg-clip-text text-transparent">
-                self-organizing, self-improving
-              </span>{" "}
-              knowledge network.
+                structured, searchable notes
+              </span>
+              , automatically.
             </h1>
             <p className="mx-auto mt-6 max-w-2xl text-balance text-lg leading-relaxed text-slate-600">
-              Everything you save gets read, understood, categorized and connected —
-              automatically. What comes out is not a folder of links. It is a map that
-              knows what it contains, and tells you what to do next.
+              Share a reel from a phone and a backend pipeline takes over. It downloads
+              the video and uses Gemini to transcribe it and pull out the main point, the
+              steps and the tools mentioned. The result is filed in Notion. This site is a
+              public, read-only view of that database.
             </p>
             <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
               <Link href="/how-it-works">
@@ -185,7 +186,7 @@ export default function LandingPage() {
               the slot, not by the slot itself arriving late. */}
           <div className="mt-8 text-center">
             <h2 className="text-sm font-medium uppercase tracking-widest text-slate-400">
-              The live graph
+              The graph
             </h2>
             {/* Copy rewritten to match what this section now IS. It used to
                 say "drag, scroll, or click a category to explore", which
@@ -194,7 +195,8 @@ export default function LandingPage() {
                 deliberately does not have, on a visual that is now a door
                 rather than the room. */}
             <p className="mt-1.5 text-sm text-slate-500">
-              Every save is a point on it — one particle per reel, nothing invented.
+              Each point is one saved reel. Open it to hover over any point and read what was
+              extracted from it.
             </p>
           </div>
 
@@ -222,14 +224,14 @@ export default function LandingPage() {
             <div className="mt-6 flex flex-col items-center gap-3">
               <Link href="/graph">
                 <Button size="lg">
-                  View graph
+                  Explore the graph
                   <ArrowRight className="h-4 w-4" />
                 </Button>
               </Link>
               <p className="text-xs text-slate-400">
                 {stats.total_reels > 0
-                  ? `${stats.total_reels.toLocaleString()} saves, one particle each`
-                  : "One particle per save"}
+                  ? `${stats.total_reels.toLocaleString()} reels · hover to preview, click to open`
+                  : "Hover to preview, click to open"}
               </p>
             </div>
           </div>
@@ -241,15 +243,15 @@ export default function LandingPage() {
         <div className="mx-auto max-w-6xl px-6 py-14">
           <BlurFade>
             <p className="mb-8 text-center text-sm font-medium uppercase tracking-widest text-slate-400">
-              The network right now
+              Current totals, counted live from the database
             </p>
           </BlurFade>
           <dl className="grid grid-cols-2 gap-y-10 md:grid-cols-4">
             {[
-              { label: "Saves organized", value: stats.total_reels },
-              { label: "Distinct topics", value: stats.total_topics },
-              { label: "Tools & entities named", value: stats.total_entities },
-              { label: "Actionable next steps", value: stats.actionable_items },
+              { label: "Reels processed", value: stats.total_reels },
+              { label: "Topic tags in use", value: stats.total_topics },
+              { label: "Tools, people & products named", value: stats.total_entities },
+              { label: "Saves with a next step", value: stats.actionable_items },
             ].map((stat, i) => (
               <BlurFade key={stat.label} delay={0.06 * i}>
                 <div className="text-center">
@@ -268,10 +270,10 @@ export default function LandingPage() {
       <section className="mx-auto max-w-6xl px-6 py-24">
         <BlurFade className="mx-auto max-w-2xl text-center">
           <h2 className="text-balance text-3xl font-semibold tracking-tight text-slate-900 sm:text-4xl">
-            A saved link is a dead end. A network is a map.
+            What happens to each save
           </h2>
           <p className="mt-4 text-lg leading-relaxed text-slate-600">
-            Three things happen automatically that a bookmarks folder will never do.
+            Three steps run on every reel, with no manual tagging.
           </p>
         </BlurFade>
 
@@ -283,16 +285,16 @@ export default function LandingPage() {
           {[
             {
               icon: Layers,
-              title: "It organizes itself",
-              body: "Every save is read and filed against a shared vocabulary — not whatever tag came to mind that day. The taxonomy converges instead of sprawling.",
+              title: "Tagged from a fixed vocabulary",
+              body: "Topics come from a curated taxonomy instead of being invented per save, so the same idea gets the same tag every time.",
               accent: "#FF5A1F",
               tint: "bg-orange-50 text-orange-600",
               shadow: "hover:shadow-[0_16px_40px_-20px_rgba(255,90,31,0.45)]",
             },
             {
               icon: Sparkles,
-              title: "It improves itself",
-              body: "New saves are matched against everything already there. Near-duplicates get flagged, related items get linked, and thin entries get re-processed later.",
+              title: "Compared with every earlier save",
+              body: "Each reel is turned into an embedding and compared with the rest. Near-duplicates are flagged, the closest matches are linked as related saves, and saves that failed to process are retried later.",
               accent: "#7C3AED",
               tint: "bg-violet-50 text-violet-600",
               shadow: "hover:shadow-[0_16px_40px_-20px_rgba(124,58,237,0.45)]",
@@ -300,8 +302,8 @@ export default function LandingPage() {
             },
             {
               icon: Compass,
-              title: "It tells you what to do",
-              body: "Each item carries one concrete next step. The highest-value ones get promoted into a queue, so the network hands you work instead of a reading list.",
+              title: "Given a next step",
+              body: "Where the content supports it, extraction adds one concrete action. Saves rated 4 or 5 for value that have one are listed in the Scout queue.",
               accent: "#2563EB",
               tint: "bg-blue-50 text-blue-600",
               shadow: "hover:shadow-[0_16px_40px_-20px_rgba(37,99,235,0.45)]",
@@ -328,10 +330,10 @@ export default function LandingPage() {
           <div className="mx-auto max-w-6xl px-6 py-24">
             <BlurFade className="mx-auto max-w-2xl text-center">
               <h2 className="text-balance text-3xl font-semibold tracking-tight text-slate-900 sm:text-4xl">
-                What&apos;s actually in there
+                What&apos;s in the database
               </h2>
               <p className="mt-4 text-lg text-slate-600">
-                The biggest clusters in the network today — every number is live.
+                The largest categories and most-used topic tags, counted live.
               </p>
             </BlurFade>
 
@@ -387,12 +389,12 @@ export default function LandingPage() {
             <div className="relative">
               <h2 className="text-balance text-3xl font-semibold tracking-tight text-white sm:text-4xl">
                 {stats.actionable_items > 0
-                  ? `${stats.actionable_items} things worth doing, already sorted.`
-                  : "The network sorts itself. You just read the top."}
+                  ? `${stats.actionable_items} saves come with a concrete next step.`
+                  : "Saves with a next step are listed in the Scout queue."}
               </h2>
               <p className="mx-auto mt-4 max-w-xl text-balance text-lg text-slate-300">
-                The Scout queue surfaces the highest-value saves with a concrete next step
-                attached — so the pile becomes a plan.
+                The Scout queue lists the ones rated 4 or 5 out of 5 for value, highest
+                first, each with its suggested action.
               </p>
               <Link href="/scout" className="mt-8 inline-block">
                 <Button size="lg" className="bg-white text-slate-900 hover:bg-slate-100">
