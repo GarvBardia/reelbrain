@@ -22,6 +22,8 @@ comes from working inside those free-tier limits.
 | ![The /graph view](docs/screenshots/graph.png) | ![Hover label on the graph](docs/screenshots/graph-hover.png) |
 | **Clicking opens the full extracted note** | **The searchable library** |
 | ![Reel detail modal](docs/screenshots/reel-detail.png) | ![Library page](docs/screenshots/library.png) |
+| **The pipeline, followed with one real save** | |
+| ![How it works](docs/screenshots/how-it-works.png) | |
 
 ---
 

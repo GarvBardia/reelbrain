@@ -97,4 +97,27 @@ export type ReelDetail = {
   quotable_lines: string[];
 };
 
-export type ScoutItem = Reel & { suggested_action: string };
+/**
+ * What /scout-queue actually returns -- a SUBSET of Reel, not Reel itself.
+ *
+ * This was `Reel & { suggested_action: string }`, which was wrong:
+ * build_scout_queue in app/public_api.py emits eleven fields and does not
+ * include `topics`, `content_type` or `posted_at`. The type claiming
+ * otherwise is how a page that read `item.topics` type-checked cleanly and
+ * then crashed at runtime on undefined. Narrowed to the real payload so the
+ * compiler catches that instead of the browser.
+ */
+export type ScoutItem = Pick<
+  Reel,
+  | "shortcode"
+  | "title"
+  | "plain_summary"
+  | "suggested_action"
+  | "category"
+  | "category_label"
+  | "color"
+  | "value_score"
+  | "priority"
+  | "named_entities"
+  | "permalink"
+>;

@@ -10,7 +10,7 @@ import { HowItWorksClient } from "./how-it-works-client";
 export const metadata: Metadata = {
   title: "How it works",
   description:
-    "Capture, Extract, Organize, Suggest — the four stages that turn a saved link into part of a knowledge network.",
+    "One real saved reel, followed through all six stages: capture, fetch, AI extraction, Notion, local Markdown mirror, and the public graph.",
 };
 
 export default function HowItWorksPage() {
