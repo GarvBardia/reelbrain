@@ -3,73 +3,122 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 
-import { EMPTY_STATS, getStats } from "@/lib/api";
+import { EMPTY_STATS, getReelByShortcode, getScoutQueue, getStats } from "@/lib/api";
+import type { Reel, ScoutItem } from "@/lib/types";
 import { useApi } from "@/lib/use-api";
 import { BlurFade } from "@/components/magic/blur-fade";
-import { PipelineStages } from "@/components/pipeline-stages";
+import { PipelineWalkthrough } from "@/components/pipeline-walkthrough";
 import { Button } from "@/components/ui/button";
+
+/**
+ * /how-it-works — rebuilt (2026-09-20).
+ *
+ * What it replaced and why: four capability cards ("Capture, Extract,
+ * Organize, Suggest"), each an icon and two sentences. Three problems, all
+ * factual rather than aesthetic. It claimed four stages when the pipeline
+ * has six — the Instagram fetch, the local vault mirror and the public API
+ * were simply missing. It asserted instead of showing, so an engineer
+ * learned nothing checkable and a recruiter saw no evidence. And it opened
+ * on a mycelium metaphor rather than on the product.
+ *
+ * The replacement follows ONE REAL SAVE through all six stages and shows
+ * what that save actually looked like at each one. See the contract at the
+ * top of pipeline-walkthrough.tsx.
+ */
+
+const EMPTY_SCOUT: { items: ScoutItem[]; total_reels: number } = { items: [], total_reels: 0 };
 
 export function HowItWorksClient() {
   const { data: stats } = useApi(getStats, EMPTY_STATS);
 
+  /**
+   * The subject of the walkthrough, chosen by the data rather than by hand:
+   * the top of the Scout queue is by definition a save the pipeline rated
+   * 5/5 with a real suggested action, so it is guaranteed to have every
+   * field the stages below display. Hardcoding a favourite shortcode would
+   * have been one more thing to rot.
+   *
+   * A failure here is not an error state: the walkthrough renders its real
+   * shapes with empty slots (see Pending), because the page still explains
+   * the pipeline correctly without the example, and inventing a plausible
+   * sample would break the one promise this page makes.
+   */
+  const { data: scout } = useApi(() => getScoutQueue(1), EMPTY_SCOUT);
+  const shortcode = scout.items[0]?.shortcode ?? null;
+
+  /**
+   * Two requests on purpose. /scout-queue is the right way to CHOOSE the
+   * example (it is the one endpoint that guarantees a real suggested
+   * action), but it returns a deliberately small projection -- no topics,
+   * no content_type. The stages display both, so the full record is fetched
+   * by shortcode once the choice is made. Both responses are cached server
+   * side, and the page renders correctly from the moment the first lands.
+   */
+  const { data: reel } = useApi<Reel | null>(
+    () => (shortcode ? getReelByShortcode(shortcode) : Promise.resolve(null)),
+    null,
+    [shortcode],
+  );
+
   return (
     <>
-      <section className="mx-auto max-w-4xl px-6 pb-8 pt-20 text-center">
+      <section className="mx-auto max-w-6xl px-6 pb-16 pt-20">
         <BlurFade>
-          <p className="mb-4 text-sm font-medium uppercase tracking-widest text-slate-400">
-            The pipeline
-          </p>
-          <h1 className="text-balance text-4xl font-semibold leading-[1.1] tracking-tight text-slate-900 sm:text-5xl">
-            Four stages. No filing, no folders, no upkeep.
+          {/* No eyebrow above this heading, unlike the other pages here: a
+              kicker is a label doing the heading's job, and this heading
+              carries itself. The stage count moved into the sentence below,
+              where it is information rather than decoration. */}
+          <h1 className="max-w-3xl text-balance text-4xl font-semibold leading-[1.1] tracking-tight text-slate-900 sm:text-5xl">
+            One shared reel, followed all the way to this site.
           </h1>
-          <p className="mx-auto mt-6 max-w-2xl text-balance text-lg leading-relaxed text-slate-600">
-            A mycelial network grows toward what it finds and links it back to everything
-            already connected. This works the same way: every save extends the network and
-            makes the rest of it a little more useful.
+          <p className="mt-6 max-w-2xl text-lg leading-relaxed text-slate-600">
+            Six stages, and everything below is one real save from the database, shown as it
+            existed at each one — the request that started it, the JSON the model returned, the
+            Notion page, the Markdown mirror, and the point it became on the graph. Nothing
+            here is a mock-up.
           </p>
         </BlurFade>
       </section>
 
-      <PipelineStages
-        totalReels={stats.total_reels}
-        totalTopics={stats.total_topics}
-        actionable={stats.actionable_items}
-      />
+      <PipelineWalkthrough reel={reel} />
 
-      {/* The honest part: what it deliberately does NOT do. */}
-      <section className="border-t border-slate-200/70 bg-slate-50/60">
-        <div className="mx-auto max-w-4xl px-6 py-20">
+      {/* The constraints section, kept from the previous page because it was
+          the one part doing real work -- but rewritten against what the code
+          does, not what reads well. Two of the four claims here were
+          unverifiable as previously worded. */}
+      <section className="mt-28 border-t border-slate-200/70 bg-slate-50/60">
+        <div className="mx-auto max-w-6xl px-6 py-20">
           <BlurFade>
             <h2 className="text-balance text-3xl font-semibold tracking-tight text-slate-900">
-              What it deliberately doesn&apos;t do
+              Where it deliberately stops
             </h2>
-            <p className="mt-4 text-lg text-slate-600">
-              The constraints are the design, not omissions.
+            <p className="mt-4 max-w-2xl text-lg text-slate-600">
+              Each of these is a constraint that was chosen, and each one costs something.
             </p>
           </BlurFade>
-          <dl className="mt-10 space-y-7">
+          <dl className="mt-12 grid gap-x-12 gap-y-9 md:grid-cols-2">
             {[
               {
                 q: "It never invents a summary.",
-                a: "If a save has no readable content, it is marked as needing another pass rather than being given a plausible-sounding description. An honest gap beats a confident guess.",
+                a: "A save with no readable content is marked as needing another pass instead of being given a plausible description. The cost is visible gaps in the library; the alternative is a knowledge base that lies quietly.",
               },
               {
-                q: "It never publishes what was gated.",
-                a: "When a creator asks you to comment a word to get a link, that link is the thing they are trading for engagement. It is stored privately and never appears in any public view.",
+                q: "It never publishes a gated link.",
+                a: "When a creator asks you to comment a word to receive a link, that link is what they are trading for engagement. It is stored in a private field and filtered out of every public response by an allow-list.",
               },
               {
-                q: "It never lets the vocabulary sprawl.",
-                a: "Tags are matched against the categories that already exist before a new one is allowed. Spelling drift is normalized on write, so the map keeps converging instead of fragmenting.",
+                q: "It never logs in for you.",
+                a: "Instagram sessions expire. Detecting that is automatic — three consecutive auth failures raises an alert — but refreshing the cookies is a manual two-minute job, because automating it would mean storing a real password.",
               },
               {
-                q: "It never needs a subscription to keep thinking.",
-                a: "The text-only work runs on a local model. Only the parts that genuinely need to watch or listen to a video call out to a hosted one.",
+                q: "It never pays for inference.",
+                a: "Extraction runs on the Gemini free tier, which in practice stops at 17–20 calls a day. Text-only backfill work is routed to a local model instead, and a daily runner spends the remaining quota in priority order and resumes tomorrow.",
               },
             ].map((item, i) => (
               <BlurFade key={item.q} delay={0.05 * i}>
-                <div className="border-l-2 border-slate-200 pl-6">
+                <div className="border-l border-sphere-purple/30 pl-5">
                   <dt className="font-semibold text-slate-900">{item.q}</dt>
-                  <dd className="mt-1.5 leading-relaxed text-slate-600">{item.a}</dd>
+                  <dd className="mt-2 leading-relaxed text-slate-600">{item.a}</dd>
                 </div>
               </BlurFade>
             ))}
@@ -77,26 +126,26 @@ export function HowItWorksClient() {
         </div>
       </section>
 
-      <section className="mx-auto max-w-4xl px-6 py-20 text-center">
+      <section className="mx-auto max-w-4xl px-6 py-24 text-center">
         <BlurFade>
           <h2 className="text-balance text-3xl font-semibold tracking-tight text-slate-900">
-            See the result
-          </h2>
-          <p className="mx-auto mt-4 max-w-lg text-lg text-slate-600">
             {stats.total_reels > 0
-              ? `${stats.total_reels} saves have already been through all four stages.`
-              : "Every save that goes through comes out mapped and actionable."}
+              ? `${stats.total_reels.toLocaleString()} saves have been through all six stages.`
+              : "See the output"}
+          </h2>
+          <p className="mx-auto mt-4 max-w-xl text-lg text-slate-600">
+            The graph is every one of them at once. The library is the same set, searchable.
           </p>
           <div className="mt-8 flex flex-wrap justify-center gap-3">
-            <Link href="/library">
+            <Link href="/graph">
               <Button size="lg">
-                Browse the library
+                Explore the graph
                 <ArrowRight className="h-4 w-4" />
               </Button>
             </Link>
-            <Link href="/scout">
+            <Link href="/library">
               <Button size="lg" variant="outline">
-                Open the Scout queue
+                Browse the library
               </Button>
             </Link>
           </div>
@@ -105,3 +154,5 @@ export function HowItWorksClient() {
     </>
   );
 }
+
+export default HowItWorksClient;

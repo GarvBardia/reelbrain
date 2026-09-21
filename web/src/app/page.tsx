@@ -4,15 +4,12 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { ArrowRight, Compass, Layers, Sparkles } from "lucide-react";
 
-import { EMPTY_GRAPH, EMPTY_STATS, getGraph, getStats } from "@/lib/api";
+import { EMPTY_STATS, getStats } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
-import { KnowledgeGraph } from "@/components/knowledge-graph";
-import { ApiErrorState } from "@/components/api-error-state";
 import { BlurFade } from "@/components/magic/blur-fade";
 import { NumberTicker } from "@/components/magic/number-ticker";
 import { Spotlight } from "@/components/aceternity/spotlight";
 import { LightLines } from "@/components/obsidian/light-lines";
-import { Skeleton } from "@/components/skeleton";
 import { Button } from "@/components/ui/button";
 
 /**
@@ -21,12 +18,31 @@ import { Button } from "@/components/ui/button";
  * export's HTML entirely, and next/dynamic splits it into its own chunk so it
  * cannot block first paint of the headline it sits behind.
  *
- * next/dynamic is safe HERE, unlike for the graph: the documented ref-dropping
- * problem at the top of knowledge-graph.tsx only bites components that need a
- * ref passed through, and this one exposes no imperative handle.
+ * next/dynamic's ref-dropping caveat does not apply: it only bites
+ * components that need a ref passed through, and this one exposes no
+ * imperative handle. (The graph used to be the counter-example here; that
+ * component is gone -- see the note on HeroSphere below.)
  */
 const AsciiHeroBackground = dynamic(
   () => import("@/components/ascii-hero-background").then((m) => m.AsciiHeroBackground),
+  { ssr: false },
+);
+
+/**
+ * The hero sphere: STATIC decoration, and lazy/browser-only for the same
+ * reason as above -- three + postprocessing is the heaviest asset on the
+ * site and has no business in the shared bundle.
+ *
+ * It is not the graph. The interactive, data-driven version of this sphere
+ * lives at /graph, behind the explicit CTA below. That split is the point
+ * of the rebuild: the scroll-driven "hero becomes the graph" transition
+ * that used to be planned here was reported as janky, and the fix was to
+ * delete the mechanism rather than tune it. A hero that reacts to nothing
+ * cannot feel janky, and entering the graph is now a decision a visitor
+ * makes rather than something they fall into while scrolling.
+ */
+const HeroSphere = dynamic(
+  () => import("@/components/graph-sphere/hero-sphere").then((m) => m.HeroSphere),
   { ssr: false },
 );
 
@@ -34,19 +50,13 @@ const AsciiHeroBackground = dynamic(
 // no server to run against, so every data-driven page fetches the public API
 // directly from the browser. See src/lib/api.ts.
 export default function LandingPage() {
+  // The landing page no longer fetches the graph at all. It used to pull
+  // getGraph("all") -- every reel in one payload -- purely to feed the
+  // canvas that used to sit in this section. The hero sphere is decorative
+  // and data-free, so that entire request (and its loading and error
+  // states) now belongs only to /graph, where the data is actually used.
+  // Every visitor was paying for it; only the ones who open the graph do now.
   const { data: stats } = useApi(getStats, EMPTY_STATS);
-  const {
-    data: graph,
-    loading: graphLoading,
-    error: graphError,
-    retry: retryGraph,
-    // "all" (2026-09-02): every reel as a node in one payload, for the
-    // dense default nebula view -- see app/public_api.py's expand="all"
-    // and the block comment at the top of knowledge-graph.tsx. Previously
-    // this fetched category-level-only data and KnowledgeGraph re-fetched
-    // a single category's reels on click; that network round-trip is gone
-    // now that the very first payload already contains everything.
-  } = useApi(() => getGraph("all"), EMPTY_GRAPH);
 
   return (
     <>
@@ -71,7 +81,7 @@ export default function LandingPage() {
             lightsOpacity={0.55}
             speedMultiplier={0.4}
             lineColor="#94a3b8"
-            lightColor="#6366f1"
+            lightColor="#7c16e8"
             // gradientFrom/To are the component's own full-bleed container
             // background -- its ONLY use of those two props. Left at the
             // upstream blue they paint a solid gradient over the entire hero,
@@ -83,7 +93,7 @@ export default function LandingPage() {
             gradientTo="transparent"
           />
         </div>
-        <Spotlight className="-top-40 left-0 text-indigo-500 md:-top-20 md:left-60" />
+        <Spotlight className="-top-40 left-0 text-sphere-purple md:-top-20 md:left-60" />
         <div className="pointer-events-none absolute inset-0 bg-dot-grid mask-radial-fade" />
 
         {/* Ambient ASCII mycelium (2026-09-03). Sits in the same background
@@ -122,20 +132,21 @@ export default function LandingPage() {
         <div className="relative mx-auto max-w-[1440px] px-6 pb-10 pt-20 md:pt-28">
           <BlurFade className="mx-auto max-w-3xl text-center">
             <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/70 px-3.5 py-1.5 text-xs font-medium text-slate-600 shadow-sm">
-              <Sparkles className="h-3.5 w-3.5 text-indigo-500" />
-              Live from a real, continuously-growing knowledge base
+              <Sparkles className="h-3.5 w-3.5 text-sphere-pink" />
+              Real data, from a pipeline that runs every day
             </div>
             <h1 className="text-balance text-4xl font-semibold leading-[1.08] tracking-tight text-slate-900 sm:text-6xl">
-              Mycelium turns scattered saved content into a{" "}
-              <span className="bg-gradient-to-r from-indigo-600 via-violet-600 to-orange-500 bg-clip-text text-transparent">
-                self-organizing, self-improving
-              </span>{" "}
-              knowledge network.
+              Saved Instagram reels, turned into{" "}
+              <span className="bg-gradient-to-r from-sphere-pink via-sphere-purple to-sphere-blue bg-clip-text text-transparent">
+                structured, searchable notes
+              </span>
+              , automatically.
             </h1>
             <p className="mx-auto mt-6 max-w-2xl text-balance text-lg leading-relaxed text-slate-600">
-              Everything you save gets read, understood, categorized and connected —
-              automatically. What comes out is not a folder of links. It is a map that
-              knows what it contains, and tells you what to do next.
+              Share a reel from a phone and a backend pipeline takes over. It downloads
+              the video and uses Gemini to transcribe it and pull out the main point, the
+              steps and the tools mentioned. The result is filed in Notion. This site is a
+              public, read-only view of that database.
             </p>
             <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
               <Link href="/how-it-works">
@@ -175,30 +186,54 @@ export default function LandingPage() {
               the slot, not by the slot itself arriving late. */}
           <div className="mt-8 text-center">
             <h2 className="text-sm font-medium uppercase tracking-widest text-slate-400">
-              The live graph
+              The graph
             </h2>
+            {/* Copy rewritten to match what this section now IS. It used to
+                say "drag, scroll, or click a category to explore", which
+                described the canvas that used to sit here -- left unchanged
+                it would be instructions for interactions this sphere
+                deliberately does not have, on a visual that is now a door
+                rather than the room. */}
             <p className="mt-1.5 text-sm text-slate-500">
-              Every save below is a real, connected node — drag, scroll, or click a category to explore.
+              Each point is one saved reel. Open it to hover over any point and read what was
+              extracted from it.
             </p>
           </div>
 
-          {/* THE CENTREPIECE. Three explicit states -- loading, failed,
-              loaded -- all at the same height so the page never jumps. The
-              failed branch is the fix for the graph silently vanishing: it
-              used to fall through to an empty node list, which renders as a
-              blank canvas indistinguishable from success. */}
+          {/* THE DOOR, not the room. This slot used to hold the live
+              react-force-graph-2d canvas with its three explicit
+              loading/failed/loaded states; it now holds a static sphere and
+              a CTA, and has no states at all because it has no data to
+              wait on. Fixed height is kept for the same reason it always
+              was -- the page must not jump -- even though nothing here can
+              arrive late any more.
+
+              Nothing renders in place of the sphere below 768px or under
+              prefers-reduced-motion (see canRenderSphere). That is correct
+              here in a way it would NOT have been for the old canvas: this
+              is decoration, and the CTA underneath is a real link that
+              works regardless, leading to a view that has its own tappable
+              mobile list. Skipping an ornament is not hiding content. */}
           <div className="mt-4">
-            {graphLoading ? (
-              <Skeleton className="h-[480px] w-full rounded-[1.35rem]" />
-            ) : graphError ? (
-              <ApiErrorState
-                message={graphError}
-                onRetry={retryGraph}
-                className="h-[480px]"
-              />
-            ) : (
-              <KnowledgeGraph initial={graph} />
-            )}
+            <div
+              className="relative h-[420px] w-full sm:h-[480px]"
+              aria-hidden
+            >
+              <HeroSphere />
+            </div>
+            <div className="mt-6 flex flex-col items-center gap-3">
+              <Link href="/graph">
+                <Button size="lg">
+                  Explore the graph
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+              </Link>
+              <p className="text-xs text-slate-400">
+                {stats.total_reels > 0
+                  ? `${stats.total_reels.toLocaleString()} reels · hover to preview, click to open`
+                  : "Hover to preview, click to open"}
+              </p>
+            </div>
           </div>
         </div>
       </section>
@@ -208,15 +243,15 @@ export default function LandingPage() {
         <div className="mx-auto max-w-6xl px-6 py-14">
           <BlurFade>
             <p className="mb-8 text-center text-sm font-medium uppercase tracking-widest text-slate-400">
-              The network right now
+              Current totals, counted live from the database
             </p>
           </BlurFade>
           <dl className="grid grid-cols-2 gap-y-10 md:grid-cols-4">
             {[
-              { label: "Saves organized", value: stats.total_reels },
-              { label: "Distinct topics", value: stats.total_topics },
-              { label: "Tools & entities named", value: stats.total_entities },
-              { label: "Actionable next steps", value: stats.actionable_items },
+              { label: "Reels processed", value: stats.total_reels },
+              { label: "Topic tags in use", value: stats.total_topics },
+              { label: "Tools, people & products named", value: stats.total_entities },
+              { label: "Saves with a next step", value: stats.actionable_items },
             ].map((stat, i) => (
               <BlurFade key={stat.label} delay={0.06 * i}>
                 <div className="text-center">
@@ -235,10 +270,10 @@ export default function LandingPage() {
       <section className="mx-auto max-w-6xl px-6 py-24">
         <BlurFade className="mx-auto max-w-2xl text-center">
           <h2 className="text-balance text-3xl font-semibold tracking-tight text-slate-900 sm:text-4xl">
-            A saved link is a dead end. A network is a map.
+            What happens to each save
           </h2>
           <p className="mt-4 text-lg leading-relaxed text-slate-600">
-            Three things happen automatically that a bookmarks folder will never do.
+            Three steps run on every reel, with no manual tagging.
           </p>
         </BlurFade>
 
@@ -250,16 +285,16 @@ export default function LandingPage() {
           {[
             {
               icon: Layers,
-              title: "It organizes itself",
-              body: "Every save is read and filed against a shared vocabulary — not whatever tag came to mind that day. The taxonomy converges instead of sprawling.",
+              title: "Tagged from a fixed vocabulary",
+              body: "Topics come from a curated taxonomy instead of being invented per save, so the same idea gets the same tag every time.",
               accent: "#FF5A1F",
               tint: "bg-orange-50 text-orange-600",
               shadow: "hover:shadow-[0_16px_40px_-20px_rgba(255,90,31,0.45)]",
             },
             {
               icon: Sparkles,
-              title: "It improves itself",
-              body: "New saves are matched against everything already there. Near-duplicates get flagged, related items get linked, and thin entries get re-processed later.",
+              title: "Compared with every earlier save",
+              body: "Each reel is turned into an embedding and compared with the rest. Near-duplicates are flagged, the closest matches are linked as related saves, and saves that failed to process are retried later.",
               accent: "#7C3AED",
               tint: "bg-violet-50 text-violet-600",
               shadow: "hover:shadow-[0_16px_40px_-20px_rgba(124,58,237,0.45)]",
@@ -267,8 +302,8 @@ export default function LandingPage() {
             },
             {
               icon: Compass,
-              title: "It tells you what to do",
-              body: "Each item carries one concrete next step. The highest-value ones get promoted into a queue, so the network hands you work instead of a reading list.",
+              title: "Given a next step",
+              body: "Where the content supports it, extraction adds one concrete action. Saves rated 4 or 5 for value that have one are listed in the Scout queue.",
               accent: "#2563EB",
               tint: "bg-blue-50 text-blue-600",
               shadow: "hover:shadow-[0_16px_40px_-20px_rgba(37,99,235,0.45)]",
@@ -295,10 +330,10 @@ export default function LandingPage() {
           <div className="mx-auto max-w-6xl px-6 py-24">
             <BlurFade className="mx-auto max-w-2xl text-center">
               <h2 className="text-balance text-3xl font-semibold tracking-tight text-slate-900 sm:text-4xl">
-                What&apos;s actually in there
+                What&apos;s in the database
               </h2>
               <p className="mt-4 text-lg text-slate-600">
-                The biggest clusters in the network today — every number is live.
+                The largest categories and most-used topic tags, counted live.
               </p>
             </BlurFade>
 
@@ -321,7 +356,7 @@ export default function LandingPage() {
                         <p className="truncate font-medium text-slate-900">{c.label}</p>
                         <p className="text-sm text-slate-500">{c.count} saves</p>
                       </div>
-                      <ArrowRight className="h-4 w-4 shrink-0 text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-slate-500" />
+                      <ArrowRight className="h-4 w-4 shrink-0 text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-sphere-purple" />
                     </div>
                   </Link>
                 </BlurFade>
@@ -333,7 +368,7 @@ export default function LandingPage() {
                 <div className="mt-12 flex flex-wrap justify-center gap-2">
                   {stats.top_topics.slice(0, 14).map((t) => (
                     <Link key={t.topic} href={`/library?q=${encodeURIComponent(t.topic)}`}>
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900">
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-600 transition-colors hover:border-sphere-purple/30 hover:text-sphere-purple">
                         {t.topic}
                         <span className="tabular-nums text-slate-400">{t.count}</span>
                       </span>
@@ -354,12 +389,12 @@ export default function LandingPage() {
             <div className="relative">
               <h2 className="text-balance text-3xl font-semibold tracking-tight text-white sm:text-4xl">
                 {stats.actionable_items > 0
-                  ? `${stats.actionable_items} things worth doing, already sorted.`
-                  : "The network sorts itself. You just read the top."}
+                  ? `${stats.actionable_items} saves come with a concrete next step.`
+                  : "Saves with a next step are listed in the Scout queue."}
               </h2>
               <p className="mx-auto mt-4 max-w-xl text-balance text-lg text-slate-300">
-                The Scout queue surfaces the highest-value saves with a concrete next step
-                attached — so the pile becomes a plan.
+                The Scout queue lists the ones rated 4 or 5 out of 5 for value, highest
+                first, each with its suggested action.
               </p>
               <Link href="/scout" className="mt-8 inline-block">
                 <Button size="lg" className="bg-white text-slate-900 hover:bg-slate-100">

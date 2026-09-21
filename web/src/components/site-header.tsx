@@ -22,9 +22,9 @@ const NAV = [
  * "Mycelium" wordmark and the first link. No hamburger pattern existed at
  * all -- every link just squeezed into whatever width it got.
  *
- * `md:` (768px) is the breakpoint, matching GRAPH_MIN_WIDTH in
- * knowledge-graph.tsx -- one "mobile mode" threshold across the site rather
- * than a second, arbitrary nav-only cutoff. At 768px the audit found the
+ * `md:` (768px) is the breakpoint, matching MIN_WIDTH in
+ * components/graph-sphere/can-render.ts -- one "mobile mode" threshold
+ * across the site rather than a second, arbitrary nav-only cutoff. At 768px the audit found the
  * plain row already comfortable, so nothing below needed tightening further.
  *
  * Hand-rolled rather than pulling in a Sheet/Dialog primitive: this project
@@ -124,8 +124,8 @@ function NavLink({
         "rounded-lg px-3 py-2 text-sm transition-colors",
         block ? "w-full" : "shrink-0",
         active
-          ? "bg-slate-100 font-medium text-slate-900"
-          : "text-slate-600 hover:bg-slate-100 hover:text-slate-900",
+          ? "bg-sphere-purple/[0.07] font-medium text-sphere-purple"
+          : "text-slate-600 hover:bg-slate-100 hover:text-sphere-purple",
       )}
     >
       {item.label}

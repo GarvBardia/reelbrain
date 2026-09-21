@@ -80,10 +80,19 @@ export function LibraryClient() {
     <div className="mx-auto max-w-6xl px-6 py-16">
       <BlurFade>
         <h1 className="text-4xl font-semibold tracking-tight text-slate-900">Library</h1>
+        {/* "highest value first" is the literal sort the API applies
+            (value_score, then posted_at, both descending). The previous
+            "newest and highest-value first" described an order the endpoint
+            never returned. */}
         <p className="mt-3 text-lg text-slate-600">
           {data.total.toLocaleString()}
-          {q || category || minValue > 1 ? " matching " : " "}
-          saves, newest and highest-value first.
+          {q || category || minValue > 1 ? " matching reels" : " saved reels"}, highest
+          value first.
+          {q || category || minValue > 1 ? null : (
+            <span className="mt-1 block text-base text-slate-500">
+              Search covers titles, summaries, topics and named tools.
+            </span>
+          )}
         </p>
       </BlurFade>
 
@@ -106,8 +115,8 @@ export function LibraryClient() {
       ) : data.items.length === 0 ? (
         <BlurFade delay={0.1}>
           <div className="mt-16 rounded-2xl border border-dashed border-slate-200 py-20 text-center">
-            <p className="text-lg font-medium text-slate-900">Nothing matches that yet</p>
-            <p className="mt-2 text-slate-500">Try a broader search or clear the filters.</p>
+            <p className="text-lg font-medium text-slate-900">No reels match</p>
+            <p className="mt-2 text-slate-500">Try a broader search, or clear the filters.</p>
             <Link href="/library" className="mt-6 inline-block">
               <Button variant="outline">Clear filters</Button>
             </Link>

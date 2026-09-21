@@ -24,7 +24,7 @@
     --destructive-foreground: 0 0% 98%;
     --border: 214 32% 91%;
     --input: 214 32% 91%;
-    --ring: 222 47% 11%;
+    --ring: 269 83% 50%; /* sphere purple -- see tailwind.config sphere */
     --radius: 0.75rem;
   }
 

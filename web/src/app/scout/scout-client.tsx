@@ -19,18 +19,19 @@ export function ScoutClient() {
     <div className="mx-auto max-w-4xl px-6 py-16">
       <BlurFade>
         <p className="mb-3 text-sm font-medium uppercase tracking-widest text-slate-400">
-          Implementation queue
+          Scout queue
         </p>
         <h1 className="text-balance text-4xl font-semibold tracking-tight text-slate-900">
-          What&apos;s worth actually doing
+          Saves worth acting on
         </h1>
         <p className="mt-4 max-w-2xl text-lg leading-relaxed text-slate-600">
-          Not a reading list. These are the saves that scored highest on real value and
-          carry a concrete next step — ranked, out of{" "}
+          Saves rated 4 or 5 out of 5 for value that also have a suggested action, out
+          of{" "}
           <span className="font-medium tabular-nums text-slate-900">
             {total_reels.toLocaleString()}
           </span>{" "}
-          in the network.
+          in total. Sorted by value score, then priority. Both are assigned by the AI
+          extraction step, not by hand.
         </p>
       </BlurFade>
 
@@ -45,9 +46,10 @@ export function ScoutClient() {
       ) : items.length === 0 ? (
         <BlurFade delay={0.1}>
           <div className="mt-12 rounded-2xl border border-dashed border-slate-200 py-20 text-center">
-            <p className="text-lg font-medium text-slate-900">The queue is clear</p>
+            <p className="text-lg font-medium text-slate-900">Nothing qualifies yet</p>
             <p className="mt-2 text-slate-500">
-              Nothing is currently ranked high enough to surface here.
+              A save appears here once it is rated 4 or higher for value and has a
+              suggested action.
             </p>
           </div>
         </BlurFade>
@@ -108,7 +110,7 @@ export function ScoutClient() {
                       {item.named_entities.slice(0, 4).map((e) => (
                         <span
                           key={e}
-                          className="rounded-md bg-slate-100 px-2 py-0.5 text-xs text-slate-600"
+                          className="rounded-md bg-sphere-purple/[0.06] px-2 py-0.5 text-xs text-slate-600"
                         >
                           {e}
                         </span>
@@ -118,7 +120,7 @@ export function ScoutClient() {
                           href={item.permalink}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="ml-auto inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-700"
+                          className="ml-auto inline-flex items-center gap-1 text-xs text-slate-400 transition-colors hover:text-sphere-purple"
                         >
                           Source
                           <ExternalLink className="h-3 w-3" />

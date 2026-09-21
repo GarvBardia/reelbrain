@@ -13,15 +13,15 @@ const manrope = Manrope({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
   title: {
-    default: "Mycelium — a self-organizing knowledge network",
+    default: "Mycelium — saved reels, turned into a knowledge base",
     template: "%s · Mycelium",
   },
   description:
-    "Mycelium turns scattered saved content into a self-organizing, self-improving knowledge network.",
+    "An automation pipeline that turns saved Instagram reels into structured notes: fetched, transcribed and summarized by AI, stored in Notion, and published as a browsable graph and library.",
   openGraph: {
-    title: "Mycelium — a self-organizing knowledge network",
+    title: "Mycelium — saved reels, turned into a knowledge base",
     description:
-      "Mycelium turns scattered saved content into a self-organizing, self-improving knowledge network.",
+      "An automation pipeline that turns saved Instagram reels into structured notes: fetched, transcribed and summarized by AI, stored in Notion, and published as a browsable graph and library.",
     type: "website",
   },
 };

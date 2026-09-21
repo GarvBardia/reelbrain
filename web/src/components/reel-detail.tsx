@@ -215,7 +215,7 @@ export function ReelDetail({ reel, onClose }: { reel: Reel | null; onClose: () =
               ref={closeRef}
               onClick={onClose}
               aria-label="Close detail view"
-              className="absolute right-4 top-4 z-10 flex h-8 w-8 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+              className="absolute right-4 top-4 z-10 flex h-8 w-8 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-100 hover:text-sphere-purple focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sphere-purple/50"
             >
               <X className="h-4 w-4" />
             </button>
@@ -246,7 +246,7 @@ export function ReelDetail({ reel, onClose }: { reel: Reel | null; onClose: () =
                   </span>
                 )}
                 {reel.content_type && reel.content_type !== "unknown" && (
-                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium capitalize text-slate-500">
+                  <span className="rounded-full bg-sphere-purple/[0.06] px-2.5 py-1 text-xs font-medium capitalize text-sphere-purple/90">
                     {reel.content_type.replace(/_/g, " ")}
                   </span>
                 )}
@@ -327,7 +327,7 @@ export function ReelDetail({ reel, onClose }: { reel: Reel | null; onClose: () =
                         href={resource.url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-0.5 text-xs text-slate-600 transition-colors hover:border-slate-300 hover:text-slate-900"
+                        className="inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-0.5 text-xs text-slate-600 transition-colors hover:border-sphere-purple/30 hover:text-sphere-purple"
                       >
                         {resource.name}
                         <ExternalLink className="h-3 w-3 text-slate-400" />
@@ -349,7 +349,7 @@ export function ReelDetail({ reel, onClose }: { reel: Reel | null; onClose: () =
                   {reel.topics.map((t) => (
                     <span
                       key={t}
-                      className="rounded-md bg-slate-100 px-2 py-0.5 text-xs text-slate-600"
+                      className="rounded-md bg-sphere-purple/[0.06] px-2 py-0.5 text-xs text-sphere-purple/90"
                     >
                       {t}
                     </span>

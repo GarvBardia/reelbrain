@@ -9,15 +9,23 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 import { cn } from "@/lib/utils";
 
 /**
+ * ORPHANED, KEPT DELIBERATELY (2026-09-16). Nothing imports this any
+ * more: its only consumer was the /preview/particles side-by-side page,
+ * removed when the sphere rebuild landed, and the visual it was a
+ * candidate for is now served by components/graph-sphere/hero-sphere.tsx.
+ * It is left in place rather than deleted because an explicit instruction
+ * covered this file specifically -- it was not to be removed or rewritten
+ * unsupervised -- and because an unimported module costs nothing at
+ * runtime: it is in no bundle. Delete it on a word from its owner.
+ *
  * A decorative, GPU-instanced particle field with UnrealBloom post-
  * processing -- the same technique confirmed live at particles.casberry.in
  * (EffectComposer + RenderPass + UnrealBloomPass, real three.js addons, not
  * hand-rolled). This is a SEPARATE, purely atmospheric component: it is not
- * the data graph (react-force-graph-2d, KnowledgeGraph's category/reel
- * nodes), does not read any API data, and is not meant to replace that view
- * anywhere. It exists to be compared against AsciiHeroBackground as a
- * candidate for the hero's own ambient visual -- see
- * app/preview/particles/page.tsx for the side-by-side.
+ * the data graph, does not read any API data, and is not meant to replace
+ * that view anywhere. It existed to be compared against
+ * AsciiHeroBackground as a candidate for the hero's own ambient visual;
+ * the side-by-side page that did the comparing is gone.
  *
  * TWO VARIANTS, one component, picked at mount via `variant` (2026-09-16):
  * building this as a single parameterised component rather than two files
