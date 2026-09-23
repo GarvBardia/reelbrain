@@ -191,9 +191,10 @@ def _public_reel(page: dict) -> Optional[dict]:
     except (TypeError, ValueError):
         value_score = 3
 
+    content_type = _select_name(page, "Content type")
     return {
         "shortcode": shortcode,
-        "title": title,
+        "title": _display_title(title, content_type),
         "plain_summary": plain_summary,
         "suggested_action": suggested_action,
         "topics": real_topics,
@@ -202,7 +203,7 @@ def _public_reel(page: dict) -> Optional[dict]:
         "color": category_color(category),
         "value_score": value_score,
         "priority": digest["priority"],
-        "content_type": _select_name(page, "Content type"),
+        "content_type": content_type,
         "named_entities": _safe_entities(digest["named_entities"]),
         # The Instagram permalink is the creator's own public post -- linking
         # back to it is attribution, not disclosure. The gate RESOURCE (the
@@ -210,6 +211,55 @@ def _public_reel(page: dict) -> Optional[dict]:
         "permalink": digest["permalink"],
         "posted_at": posted,
     }
+
+
+PENDING_TITLE = "Untitled save (summary pending)"
+_HASHTAG_OR_MENTION = re.compile(r"[#@][\w.]+")
+_URL = re.compile(r"https?://\S+")
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+|\n+")
+# Calls to action, never titles -- and a comment-gate line carries the gate
+# KEYWORD, which is private by design ("Gate keyword" never leaves Notion). The
+# raw-caption titles were showing lines like 'comment "REPOS" & i'll send you
+# the link' publicly, so these sentences are skipped outright.
+_CTA = re.compile(
+    r"\b(comment|dm me|dm us|link in (my )?bio|follow (me|for)|save this|share this|tag (a|someone))\b",
+    re.IGNORECASE,
+)
+
+
+def _display_title(title: str, content_type: str) -> str:
+    """What a visitor sees as the title of a row whose extraction degraded.
+
+    A live capture whose Gemini call fails (almost always the shared free-tier
+    quota being exhausted) falls back to degraded_extraction(), which stores
+    the RAW caption as the Title -- so the library was showing strings like
+    "Build on YouTube #selfimprovement #aitools #motivation #claude". Those
+    rows are queued for re-extraction (scripts/recover_placeholders.py, first
+    in daily_runner's order), and once recovered they carry a real
+    content_type and a real summary title, at which point this is a no-op.
+
+    Only degraded rows are touched: content_type is "unknown" or empty ONLY
+    when extraction did not run. A real extracted title is never rewritten.
+    Display-only: Notion keeps the stored value, so nothing is lost.
+    """
+    if (content_type or "").strip().lower() not in ("", "unknown"):
+        return title
+    text = _URL.sub(" ", title)
+    text = _HASHTAG_OR_MENTION.sub(" ", text)
+    first = next(
+        (part for part in _SENTENCE_END.split(text)
+         # also skip bracketed keyword dumps: "[ claude, claudecode, ai, ... ]"
+         if part.strip(" -–—|•.[]") and not _CTA.search(part)
+         and not part.lstrip().startswith("[")),
+        "",
+    )
+    first = " ".join(first.split()).strip(" -–—|•")
+    if len(first) < 12:
+        return PENDING_TITLE
+    if len(first) > 120:
+        cut = first[:120].rsplit(" ", 1)[0]
+        first = cut.rstrip(",;:") + "…"
+    return first
 
 
 def _safe_entities(entities: list[str]) -> list[str]:

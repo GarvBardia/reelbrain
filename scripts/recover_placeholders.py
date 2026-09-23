@@ -153,7 +153,21 @@ def find_placeholder_rows() -> list[dict]:
             or _title_is_bare_permalink(fields["title"], fields["shortcode"])
             or needs_extraction
         ):
+            fields["_caption_titled"] = (
+                needs_extraction
+                and fields["status_label"] not in RECOVERABLE_STATUSES
+                and fields["title"] != PLACEHOLDER_TITLE
+                and not _title_is_bare_permalink(fields["title"], fields["shortcode"])
+            )
             rows.append(fields)
+    # Caption-titled rows first (2026-09-23): a live capture whose Gemini call
+    # failed -- almost always the shared quota being exhausted -- and fell back
+    # to degraded_extraction(), which stores the raw caption as the Title. These
+    # are the most visible defect on the public site (hashtag strings as titles,
+    # including every one of the 10 newest saves) and the most recoverable: the
+    # video was fetched fine once already. Stable sort, so the original order
+    # holds within each group.
+    rows.sort(key=lambda f: not f["_caption_titled"])
     return rows
 
 

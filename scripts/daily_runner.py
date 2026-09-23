@@ -6,11 +6,13 @@ needed a human to run a script. The Gemini free tier is ~20 requests/day/model,
 and it has blocked work on most days of this project. This turns "run six
 scripts by hand and remember which one stopped where" into one scheduled pass.
 
-PRIORITY ORDER (and why):
-  1. backfill_named_entities  — HIGHEST. Both the taxonomy work and the
+PRIORITY ORDER (and why) -- steps 1 and 2 swapped on 2026-09-23, see build_steps:
+  1. recover_placeholders     — now FIRST: its backlog includes live captures
+     published with their raw caption as the title (a public defect).
+  2. backfill_named_entities  — previously HIGHEST. Both the taxonomy work and the
      /attach accuracy remeasurement are blocked on it, and it's the single
      most specific matching signal the system has. Everything else can wait.
-  2. recover_placeholders     — photo/carousel + Failed-retry rows. Recovers
+     (recover_placeholders also covers photo/carousel + Failed-retry rows.) Recovers
      content that does not exist anywhere else yet.
   3. enforce_topics           — FREE (zero Gemini calls; derives tags from
      data already on the row). Runs EVERY day regardless of quota state,
@@ -70,6 +72,19 @@ LOG_FILE = "daily_runner.log"
 # seen repeatedly in live 429 bodies). Override with --budget or the env var if
 # the account tier changes.
 DAILY_GEMINI_BUDGET = int(os.environ.get("DAILY_GEMINI_BUDGET", "20"))
+
+# Calls this runner must NEVER spend, held back for LIVE captures on Render.
+# Render and this runner share one API key and one free-tier quota, and the
+# local quota file only sees this machine's calls -- it cannot know what Render
+# will need. Before this reserve existed the runner planned to spend all 20 and
+# then ran on to the 429, so on a busy backfill day every live capture that
+# followed hit an exhausted quota, fell back to degraded_extraction(), and was
+# filed with its raw caption as the title (89 rows, including the 10 newest,
+# found 2026-09-23). Sized from real volume: since 2026-08-01 live captures ran
+# a median of 2/day and a p90 of 5/day, one extraction call each; 6 covers the
+# p90 day with one to spare. Busier days still degrade, and the recovery step
+# re-extracts those rows on a later pass.
+LIVE_CAPTURE_RESERVE = int(os.environ.get("LIVE_CAPTURE_RESERVE", "6"))
 QUOTA_MARKERS = ("429", "RESOURCE_EXHAUSTED")
 
 # PROGRESS.md 2026-08-16: local-LLM (Ollama) steps are a genuinely separate,
@@ -392,19 +407,25 @@ def build_steps() -> list[Step]:
         return notion_writer.find_saves_pages_since("1970-01-01T00:00:00")
 
     return [
-        Step(
-            name="named_entities",
-            cost_per_row=ROW_COST["named_entities"],
-            find_pending=lambda: backfill_named_entities.find_rows_needing_entities(_pages()),
-            run=lambda rows, dry, deadline: backfill_named_entities.run_backfill(
-                rows, backfill_named_entities.DEFAULT_PROGRESS_FILE, dry_run=dry),
-        ),
+        # recover_placeholders runs FIRST as of 2026-09-23, ahead of named_entities.
+        # The original order put entities first because taxonomy work waited on
+        # them, but that left recovery starved for days, and its backlog now
+        # includes 89 live captures published with their raw caption as the
+        # title (see LIVE_CAPTURE_RESERVE). A public, visible defect outranks
+        # an internal enrichment signal; named_entities resumes once it clears.
         Step(
             name="recover_placeholders",
             cost_per_row=ROW_COST["recover_placeholders"],
             find_pending=recover_placeholders.find_placeholder_rows,
             run=lambda rows, dry, deadline: recover_placeholders.run_worker(
                 rows, recover_placeholders.DEFAULT_PROGRESS_FILE, dry_run=dry),
+        ),
+        Step(
+            name="named_entities",
+            cost_per_row=ROW_COST["named_entities"],
+            find_pending=lambda: backfill_named_entities.find_rows_needing_entities(_pages()),
+            run=lambda rows, dry, deadline: backfill_named_entities.run_backfill(
+                rows, backfill_named_entities.DEFAULT_PROGRESS_FILE, dry_run=dry),
         ),
         Step(
             name="enforce_topics",
@@ -473,6 +494,9 @@ def main() -> None:
     parser.add_argument("--budget", type=int, default=None,
                         help="override the day's Gemini call budget; default is the TRUE "
                              "remaining quota for the configured model (gemini_quota)")
+    parser.add_argument("--reserve", type=int, default=LIVE_CAPTURE_RESERVE,
+                        help="Gemini calls to leave unspent for live captures on Render "
+                             f"(default {LIVE_CAPTURE_RESERVE}, env LIVE_CAPTURE_RESERVE)")
     parser.add_argument("--local-time-budget", type=int, default=LOCAL_TIME_BUDGET_SECONDS,
                         help="seconds of wall-clock time to spend on LOCAL "
                              f"(Ollama-routed) steps this pass, default {LOCAL_TIME_BUDGET_SECONDS}")
@@ -489,9 +513,13 @@ def main() -> None:
         budget = args.budget
     else:
         budget = gemini_quota.remaining_today(model, limit=DAILY_GEMINI_BUDGET)
+    # The reserve comes off the top even when --budget is given explicitly: it
+    # protects a different process's calls, not this run's plan.
+    reserve = max(0, args.reserve)
+    budget = max(0, budget - reserve)
 
     print(f"daily runner — model {model}, budget {budget} Gemini calls "
-          f"(true remaining today), local time budget {args.local_time_budget}s"
+          f"({reserve} held back for live captures), local time budget {args.local_time_budget}s"
           f"{' (DRY-RUN)' if args.dry_run else ''}\n")
 
     summary = run_day(build_steps(), budget=budget,

@@ -312,7 +312,9 @@ def test_append_log_writes_a_line(tmp_path):
 
 def test_build_steps_declares_the_documented_priority_order():
     names = [s.name for s in dr.build_steps()]
-    assert names == ["named_entities", "recover_placeholders", "enforce_topics",
+    # recover_placeholders leads since 2026-09-23 (caption-titled live captures
+    # are a public defect); see the comment in build_steps.
+    assert names == ["recover_placeholders", "named_entities", "enforce_topics",
                      "suggested_action", "plain_summary", "ingest_resources"]
 
 
