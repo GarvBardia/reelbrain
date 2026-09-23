@@ -17,11 +17,11 @@ export const metadata: Metadata = {
     template: "%s · Mycelium",
   },
   description:
-    "An automation pipeline that turns saved Instagram reels into structured notes: fetched, transcribed and summarized by AI, stored in Notion, and published as a browsable graph and library.",
+    "Mycelium turns scattered saved content into a self-organizing, self-improving knowledge network.",
   openGraph: {
     title: "Mycelium — saved reels, turned into a knowledge base",
     description:
-      "An automation pipeline that turns saved Instagram reels into structured notes: fetched, transcribed and summarized by AI, stored in Notion, and published as a browsable graph and library.",
+      "Mycelium turns scattered saved content into a self-organizing, self-improving knowledge network.",
     type: "website",
   },
 };

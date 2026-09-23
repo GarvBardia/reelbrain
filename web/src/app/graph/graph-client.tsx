@@ -218,7 +218,7 @@ export function GraphClient() {
             nothing.
           </p>
           <p className="pointer-events-none absolute bottom-5 right-6 z-20 hidden text-xs text-slate-400 lg:block">
-            Hover to preview · Click to open · Scroll to zoom · Swipe sideways to rotate
+            Hover to preview · Click to open · Scroll to zoom · Drag or swipe sideways to rotate
           </p>
         </>
       ) : null}

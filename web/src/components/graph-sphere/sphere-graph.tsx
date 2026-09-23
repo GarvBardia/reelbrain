@@ -81,6 +81,32 @@ const MAX_CAMERA_Z = 12;
 const ZOOM_PER_DELTA = 0.006;
 const SPIN_PER_DELTA = 0.003;
 
+/** Where the camera starts. */
+const DEFAULT_CAMERA_Z = 7.2;
+
+/**
+ * Press-and-drag rotation, for mouse users who have no horizontal wheel
+ * axis. It is the same Y-axis spin the trackpad swipe drives, so both input
+ * paths do one thing.
+ *
+ * DRAG_THRESHOLD_PX is what keeps this from fighting click-to-open. A press
+ * only becomes a drag once the pointer has travelled this far from where it
+ * went down; until then it is still a click candidate, so a normal click --
+ * including one with a little hand tremor -- opens the reel. Past it, the
+ * gesture is a drag and the click that follows is swallowed, so dragging
+ * FROM a node rotates the sphere rather than opening that node's modal.
+ *
+ * The gain is not a constant: it is derived so the NEAR FACE of the sphere
+ * tracks the pointer 1:1, like grabbing a globe. A point on the near face is
+ * (camera distance - shell radius) from the camera, so a radian of rotation
+ * moves it  R * (viewportHeight / 2) * cot(fov / 2) / (distance - R)  pixels.
+ * Taking the reciprocal gives radians per pixel, and it follows the window
+ * size and the zoom automatically. (A first version used the sphere's
+ * silhouette radius instead, which ignores that the near face is magnified
+ * by perspective, and measured about 1.5x too fast against real input.)
+ */
+const DRAG_THRESHOLD_PX = 5;
+
 /** Wheel events in DOM_DELTA_LINE mode report lines, not pixels. Firefox
  *  does this for real mouse wheels; without normalising, the same physical
  *  notch would move ~100x less there than in Chrome. */
@@ -250,7 +276,8 @@ export function SphereGraph({ data, onSelectReel, className }: SphereGraphProps)
     scene.background = new THREE.Color(SCENE_BACKGROUND);
 
     const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
-    camera.position.set(0, 0, 7.2);
+    camera.position.set(0, 0, DEFAULT_CAMERA_Z);
+    const fovCotangent = 1 / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -363,18 +390,95 @@ export function SphereGraph({ data, onSelectReel, className }: SphereGraphProps)
     let labelFor = -1;
     let targetZ = camera.position.z;
 
+    // Drag state. `pressing` is a primary-button press inside the view;
+    // `dragging` is that press having travelled past DRAG_THRESHOLD_PX.
+    let pressing = false;
+    let dragging = false;
+    let activePointerId = -1;
+    let pressX = 0;
+    let pressY = 0;
+    let lastX = 0;
+    /** Set when a press turned into a drag, so the click event the browser
+     *  still fires on release does not also open whatever was under it. */
+    let suppressClick = false;
+    let cursor = "";
+
+    const endPress = (pointerId: number) => {
+      if (pointerId !== activePointerId) return;
+      if (dragging) {
+        try {
+          mount.releasePointerCapture(pointerId);
+        } catch {
+          // Already released (e.g. pointercancel); nothing to do.
+        }
+      }
+      pressing = false;
+      dragging = false;
+      activePointerId = -1;
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      // Primary button only: left mouse button, or a touch / pen contact.
+      // A right-click or middle-click must not start a rotation.
+      if (e.button !== 0) return;
+      pressing = true;
+      dragging = false;
+      suppressClick = false;
+      activePointerId = e.pointerId;
+      pressX = lastX = e.clientX;
+      pressY = e.clientY;
+    };
+
     const onPointerMove = (e: PointerEvent) => {
       const rect = mount.getBoundingClientRect();
       pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
       pointerInside = true;
+
+      if (!pressing || e.pointerId !== activePointerId) return;
+      // The button came up somewhere we never heard about (released outside
+      // the view before the drag had captured the pointer). End the press
+      // instead of treating this bare move as a continuing drag.
+      if ((e.buttons & 1) === 0) {
+        endPress(e.pointerId);
+        return;
+      }
+      if (!dragging) {
+        if (Math.hypot(e.clientX - pressX, e.clientY - pressY) < DRAG_THRESHOLD_PX) return;
+        dragging = true;
+        suppressClick = true;
+        // Capture so the drag keeps tracking if the pointer leaves the
+        // canvas. Only taken once it IS a drag: capturing on every press
+        // would redirect the click of an ordinary click too.
+        try {
+          mount.setPointerCapture(e.pointerId);
+        } catch {
+          // Pointer already gone; the buttons guard above will end the press.
+        }
+      }
+      // Total displacement since the press, applied incrementally, so the
+      // sphere catches up with the pointer the moment the threshold is
+      // crossed rather than lagging by a dead zone. Positive dx moves the
+      // near face right, which is a positive rotation about Y.
+      const dx = e.clientX - lastX;
+      lastX = e.clientX;
+      const nearFacePxPerRad =
+        (NODE_SHELL_RADIUS * (viewH / 2) * fovCotangent) /
+        (camera.position.z - NODE_SHELL_RADIUS);
+      subject.rotation.y += dx / nearFacePxPerRad;
     };
+
+    const onPointerUp = (e: PointerEvent) => endPress(e.pointerId);
 
     const onPointerLeave = () => {
       pointerInside = false;
     };
 
     const onClick = () => {
+      if (suppressClick) {
+        suppressClick = false;
+        return;
+      }
       if (hovered < 0) return;
       onSelectRef.current?.(nodes[hovered].shortcode);
     };
@@ -402,7 +506,10 @@ export function SphereGraph({ data, onSelectReel, className }: SphereGraphProps)
       }
     };
 
+    mount.addEventListener("pointerdown", onPointerDown);
     mount.addEventListener("pointermove", onPointerMove);
+    mount.addEventListener("pointerup", onPointerUp);
+    mount.addEventListener("pointercancel", onPointerUp);
     mount.addEventListener("pointerleave", onPointerLeave);
     mount.addEventListener("click", onClick);
     // Non-passive is required for preventDefault to actually take effect on
@@ -419,7 +526,8 @@ export function SphereGraph({ data, onSelectReel, className }: SphereGraphProps)
       // while a node is hovered: otherwise the thing being pointed at
       // drifts out from under the cursor, and clicking becomes a game of
       // leading a moving target.
-      if (hovered < 0) subject.rotation.y += 0.04 * dt;
+      // Also paused while dragging, or the ambient spin would fight the hand.
+      if (hovered < 0 && !dragging) subject.rotation.y += 0.04 * dt;
 
       camera.position.z += (targetZ - camera.position.z) * Math.min(1, ZOOM_CATCHUP * dt);
 
@@ -439,7 +547,9 @@ export function SphereGraph({ data, onSelectReel, className }: SphereGraphProps)
        */
       subject.updateMatrixWorld();
       let hit = -1;
-      if (pointerInside) {
+      // No hit-testing mid-drag: the sphere is turning under the cursor, and
+      // hover labels flickering across nodes sliding past would be noise.
+      if (pointerInside && !dragging) {
         raycaster.setFromCamera(pointer, camera);
         const hits = raycaster.intersectObject(nodeHalo.mesh, false);
         // Sorted near-to-far by three, so [0] is the front-facing node --
@@ -451,7 +561,6 @@ export function SphereGraph({ data, onSelectReel, className }: SphereGraphProps)
 
       if (hit !== hovered) {
         hovered = hit;
-        mount.style.cursor = hovered >= 0 ? "pointer" : "default";
         highlight.visible = hovered >= 0;
         if (hovered >= 0) {
           const node = nodes[hovered];
@@ -461,6 +570,13 @@ export function SphereGraph({ data, onSelectReel, className }: SphereGraphProps)
           // already contain.
           highlight.material.color.copy(node.color).multiplyScalar(0.78);
         }
+      }
+
+      // grab = "this can be dragged", grabbing = it is being, pointer = a reel.
+      const wantCursor = dragging ? "grabbing" : hovered >= 0 ? "pointer" : "grab";
+      if (wantCursor !== cursor) {
+        cursor = wantCursor;
+        mount.style.cursor = wantCursor;
       }
 
       const label = labelRef.current;
@@ -495,7 +611,10 @@ export function SphereGraph({ data, onSelectReel, className }: SphereGraphProps)
       cancelAnimationFrame(frame);
       ro?.disconnect();
       window.removeEventListener("resize", resize);
+      mount.removeEventListener("pointerdown", onPointerDown);
       mount.removeEventListener("pointermove", onPointerMove);
+      mount.removeEventListener("pointerup", onPointerUp);
+      mount.removeEventListener("pointercancel", onPointerUp);
       mount.removeEventListener("pointerleave", onPointerLeave);
       mount.removeEventListener("click", onClick);
       mount.removeEventListener("wheel", onWheel);
@@ -513,7 +632,11 @@ export function SphereGraph({ data, onSelectReel, className }: SphereGraphProps)
 
   return (
     <div className={cn("relative h-full w-full", className)}>
-      <div ref={mountRef} className="h-full w-full" />
+      {/* touch-none: the pointer events above own every gesture in this view
+          (there is nothing to scroll), so the browser must not claim a touch
+          drag for panning. select-none: a drag must never start a text
+          selection. */}
+      <div ref={mountRef} className="h-full w-full touch-none select-none" />
       {/*
         The hover label. Rendered once and moved, rather than mounted and
         unmounted per hover -- see the refs above for why hover never
